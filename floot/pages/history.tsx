@@ -28,7 +28,7 @@ export default function HistoryPage() {
         <div>
           <span className={styles.eyebrow}>Your work, remembered</span>
           <h1 className={styles.h1}>Every run. Ready to revisit.</h1>
-          <p className={styles.lede}>Run history is saved to your account. Exports never include provider keys.</p>
+          <p className={styles.lede}>Run history is saved in this browser, not on a remote account. Exports never include provider keys.</p>
         </div>
         <Button variant="outline" onClick={exportWorkspace} disabled={!runs.length && !notes.length}><Download size={15} />Export workspace</Button>
       </div>

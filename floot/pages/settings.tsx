@@ -1,14 +1,13 @@
 import React, { useState } from "react";
 import { Helmet } from "react-helmet";
 import { toast } from "sonner";
-import { Check, FlaskConical, Globe2, LoaderCircle, Search, ShieldCheck, Trash2, LogOut } from "lucide-react";
+import { Check, FlaskConical, Globe2, LoaderCircle, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../components/Select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/Dialog";
 import { useConnection } from "../helpers/useConnection";
 import { useRuns } from "../helpers/useRuns";
-import { useAuth } from "../helpers/useAuth";
 import { providerCatalog } from "../helpers/providerCatalog";
 import { postModels } from "../endpoints/models_POST.schema";
 import type { Provider } from "../helpers/runTypes";
@@ -17,7 +16,6 @@ import styles from "./settings.module.css";
 export default function SettingsPage() {
   const { connection, setConnection, switchProvider, persist, reset } = useConnection();
   const { clearWorkspace } = useRuns();
-  const { logout } = useAuth();
   const [models, setModels] = useState<string[]>(providerCatalog[connection.provider].models);
   const [checking, setChecking] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -109,24 +107,20 @@ export default function SettingsPage() {
             <span className={styles.icon}><ShieldCheck size={20} strokeWidth={1.75} /></span>
             <h2 className={styles.h2}>Hosted, honestly.</h2>
             <h3 className={styles.h3}>In your tab</h3><p className={styles.help}>The interface, task coordination, exact-prompt cache, and keyword retrieval.</p>
-            <h3 className={styles.h3}>In your account</h3><p className={styles.help}>Notes and run history, scoped to you. Provider keys are never stored.</p>
+            <h3 className={styles.h3}>In this browser</h3><p className={styles.help}>Notes and run history live in IndexedDB on this device. Your browser can evict them; export important work. Provider keys are never stored.</p>
             <h3 className={styles.h3}>On your provider</h3><p className={styles.help}>Model inference. Each stage returns as one complete response; five stages make five calls, up to fifteen with retries.</p>
             <h3 className={styles.h3}>Not included</h3><p className={styles.help}>Shell execution, autonomous code changes, browsing, vector embeddings, and model hosting. Provider usage may cost money.</p>
           </section>
           <section className={`${styles.panel} ${styles.danger}`}>
             <h2 className={styles.h2}>Clear workspace</h2>
-            <p className={styles.help}>Delete all saved notes, run history, and connection settings for this account.</p>
+            <p className={styles.help}>Delete saved notes, run history, and connection settings from this browser.</p>
             <Button variant="destructive" onClick={() => setConfirmClear(true)}><Trash2 size={15} />Clear workspace data</Button>
-          </section>
-          <section className={styles.panel}>
-            <h2 className={styles.h2}>Account</h2>
-            <Button variant="outline" onClick={() => void logout()}><LogOut size={15} />Sign out</Button>
           </section>
         </div>
       </div>
       <Dialog open={confirmClear} onOpenChange={setConfirmClear}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Clear this workspace?</DialogTitle><DialogDescription>This permanently removes notes, run history, and saved connection details from your account. Export anything you want to keep first.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>Clear this workspace?</DialogTitle><DialogDescription>This permanently removes notes, run history, and saved connection details from this browser. Export anything you want to keep first.</DialogDescription></DialogHeader>
           <DialogFooter><Button variant="outline" onClick={() => setConfirmClear(false)}>Cancel</Button><Button variant="destructive" onClick={() => void clearAll()}>Delete workspace data</Button></DialogFooter>
         </DialogContent>
       </Dialog>

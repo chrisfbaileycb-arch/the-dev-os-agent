@@ -1,10 +1,9 @@
 import React, { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Zap, Layers3, Network, Database, Clock3, Settings2, Menu, LogOut, Globe2, ChevronRight } from "lucide-react";
+import { Zap, Layers3, Network, Database, Clock3, Settings2, Menu, Globe2, ChevronRight, HardDrive } from "lucide-react";
 import { Button } from "./Button";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "./Sheet";
 import { ThemeModeSwitch } from "./ThemeModeSwitch";
-import { useAuth } from "../helpers/useAuth";
 import { useConnection } from "../helpers/useConnection";
 import { providerCatalog } from "../helpers/providerCatalog";
 import styles from "./AppShell.module.css";
@@ -20,9 +19,7 @@ const navItems = [
 export const AppShell = ({ children, className }: { children: React.ReactNode; className?: string }) => {
   const location = useLocation();
   const [open, setOpen] = useState(false);
-  const { authState, logout } = useAuth();
   const { connection } = useConnection();
-  const user = authState.type === "authenticated" ? authState.user : null;
   const current = navItems.find((n) => n.to === location.pathname) ?? navItems[0];
   const chip = connection.mode === "demo" ? "Scripted preview" : `${providerCatalog[connection.provider].name} / ${connection.model || "no model"}`;
 
@@ -48,15 +45,15 @@ export const AppShell = ({ children, className }: { children: React.ReactNode; c
         <div className={styles.browserCard}>
           <Globe2 size={17} strokeWidth={1.75} />
           <strong>All you need is a tab.</strong>
-          <p>Your workspace runs in the browser and stores work in your account. No installs, no local server.</p>
+          <p>Your workspace runs in the browser. No installs, no local server, no account.</p>
         </div>
         <div className={styles.profile}>
-          <div className={styles.profileAvatar} aria-hidden="true">{(user?.displayName ?? "?").slice(0, 1).toUpperCase()}</div>
+          <div className={styles.profileAvatar} aria-hidden="true"><HardDrive size={15} strokeWidth={1.75} /></div>
           <div className={styles.profileText}>
-            <strong>{user?.displayName ?? "Signed out"}</strong>
-            <small>{user?.email ?? ""}</small>
+            <strong>Your workspace</strong>
+            <small>Stored in this browser</small>
           </div>
-          <Button variant="ghost" size="icon-sm" className={styles.logout} aria-label="Sign out" onClick={() => void logout()}><LogOut size={15} /></Button>
+          <span className={styles.version}>v0.1</span>
         </div>
       </div>
     </>

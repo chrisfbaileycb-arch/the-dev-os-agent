@@ -20,7 +20,7 @@ export default function KnowledgePage() {
     if (!title.trim() || !content.trim()) { toast.error("Give your note a title and some content."); return; }
     try {
       await save.mutateAsync({ id: crypto.randomUUID(), title: title.trim().slice(0, 120), content: content.slice(0, 50_000) });
-      setTitle(""); setContent(""); toast.success("Note saved to your account.");
+      setTitle(""); setContent(""); toast.success("Note saved in this browser.");
     } catch (e) { toast.error(e instanceof Error ? e.message : "Could not save the note."); }
   }
 
@@ -53,7 +53,7 @@ export default function KnowledgePage() {
           <h2 id="note-form-title" className={styles.h2}>Add a workspace note</h2>
           <label className={styles.field}><span>Title</span><Input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} placeholder="Project requirements, product context" /></label>
           <label className={styles.field}><span>Content</span><Textarea value={content} maxLength={50_000} rows={9} onChange={(e) => setContent(e.target.value)} placeholder="Add useful context for your agents." /></label>
-          <p className={styles.help}>Stored in your account. Matching excerpts are sent to your provider only when you approve a hosted run. Do not add passwords or secrets.</p>
+          <p className={styles.help}>Stored in this browser using IndexedDB. Matching excerpts are sent to your provider only when you approve a hosted run. Do not add passwords or secrets.</p>
           <Button onClick={() => void saveNote()} disabled={save.isPending}>Save note<Plus size={15} /></Button>
         </section>
         <section className={styles.list} aria-label="Saved notes">

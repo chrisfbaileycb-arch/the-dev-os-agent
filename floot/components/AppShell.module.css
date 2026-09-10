@@ -22,6 +22,7 @@
 .profileText small { font-size: 0.7rem; color: var(--sidebar-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .logout { color: var(--sidebar-muted); }
 .logout:hover { color: var(--sidebar-foreground); }
+.version { font-family: var(--font-family-monospace); font-size: 0.68rem; color: var(--sidebar-muted); border: 1px solid hsla(0, 0%, 100%, 0.12); border-radius: var(--radius-sm); padding: 0.1rem 0.35rem; }
 .main { display: flex; flex-direction: column; min-width: 0; }
 .topbar { display: flex; align-items: center; gap: var(--spacing-3); padding: var(--spacing-3) var(--spacing-6); border-bottom: 1px solid var(--border); background: var(--background); position: sticky; top: 0; z-index: 5; }
 .menuButton { display: none; }

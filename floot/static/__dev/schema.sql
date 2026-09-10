@@ -28,3 +28,11 @@ CREATE TABLE runs (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX runs_user_started_idx ON runs(user_id, started_at DESC);
+
+-- Anonymous proxy rate limiting (60 requests per minute per client address).
+CREATE TABLE rate_limits (
+  key text PRIMARY KEY,
+  window_start timestamptz NOT NULL,
+  count integer NOT NULL DEFAULT 0
+);
+-- notes and runs tables above are unused after the switch to browser-local storage.
