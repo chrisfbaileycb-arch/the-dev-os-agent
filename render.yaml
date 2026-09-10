@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: freetoken-web
+    runtime: node
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/providers
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: APP_ORIGIN
+        sync: false

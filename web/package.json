@@ -1,0 +1,29 @@
+{
+  "name": "freetoken-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "node server/index.mjs",
+    "test": "vitest run",
+    "start": "node server/index.mjs",
+    "test:server": "node --test tests/proxy.test.mjs"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "lucide-react": "^0.468.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.6"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

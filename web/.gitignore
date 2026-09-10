@@ -1,0 +1,10 @@
+node_modules/
+dist/
+playwright-report/
+test-results/
+.env*
+!.env.example
+
+# Override the upstream Python repository lib/ ignore for browser sources.
+!src/lib/
+!src/lib/**
