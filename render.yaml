@@ -1,13 +1,20 @@
 services:
   - type: web
-    name: freetoken-web
-    runtime: node
+    name: hey-buddy-web
+    runtime: docker
     rootDir: web
-    buildCommand: npm ci && npm run build
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /api/providers
+    disk:
+      name: workspace-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
-      - key: NODE_VERSION
-        value: 22
       - key: APP_ORIGIN
+        sync: false
+      - key: DATA_DIR
+        value: /data
+      - key: CREDIT_MONTHLY_POOL
+        value: "100000"
+      - key: BROWSE_ALLOWED_HOSTS
         sync: false

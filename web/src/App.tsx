@@ -1,110 +1,210 @@
-import { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, ArrowRight, Boxes, Check, ChevronRight, CircleHelp, Clock3, Database, Download, FileText, FlaskConical, Globe2, Layers3, LoaderCircle, MonitorDown, Network, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, Workflow as WorkflowIcon, X, Zap } from 'lucide-react';
-import { roles } from './lib/orchestrator';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { CircleAlert, Download, Plus, Trash2, Wrench, X } from 'lucide-react';
+import Rail, { type Page } from './ui/Rail';
+import Dock, { type Attached, type RunMode } from './ui/Dock';
+import RunCard from './ui/RunCard';
+import RosterDrawer, { RosterList } from './ui/Roster';
+import KnowledgeHub from './ui/Knowledge';
+import Settings from './ui/Settings';
+import StatusBar, { type Stats } from './ui/StatusBar';
+import { iconFor } from './ui/icons';
+import { chatTurn } from './lib/chat';
+import { estimateTokens, findModel, tierFor, DEFAULT_MONTHLY_POOL } from './lib/catalog';
+import { retrieve } from './lib/memory';
 import { listModels, validateConnection } from './lib/provider';
-import { storage, exportRun } from './lib/storage';
-import ProviderControls from './ProviderControls';
-import { initialProvider, persistConnection, clearProviderStorage } from './lib/providers';
-import { isInstalled, promptInstall, useInstallAvailable, useOnline } from './pwa';
-import type { Connection, Knowledge, Run, Workflow, WorkerEvent } from './lib/types';
+import { clearProviderStorage, forgetKeys, initialProvider, persistConnection } from './lib/providers';
+import { defaultPersonaId, personaById, workflows } from './lib/roster';
+import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, storage, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
+import { useInstallAvailable, useOnline } from './pwa';
+import type { Connection, Knowledge, Run, WorkerEvent } from './lib/types';
 
-type Page = 'workspace' | 'agents' | 'memory' | 'history' | 'settings';
-const initialConnection: Connection = { mode: 'demo', endpoint: '', model: '', token: '', maxTokens: 1024 };
-const templates: { workflow: Workflow; title: string; label: string; description: string; goal: string }[] = [
-  { workflow: 'build', title: 'Build something great', label: 'BUILD', description: 'Turn an idea into a reviewed solution.', goal: 'Design a browser-only personal knowledge assistant. Include architecture, an implementation outline, privacy safeguards, and acceptance criteria.' },
-  { workflow: 'research', title: 'Go beyond the first answer', label: 'RESEARCH', description: 'Explore a question from multiple angles.', goal: 'Compare lexical search and vector search for a small browser-based knowledge workspace. Explain tradeoffs, uncertainty, and a recommended approach.' },
-  { workflow: 'review', title: 'Get a second set of eyes', label: 'REVIEW', description: 'Find the gaps. Strengthen your approach.', goal: 'Review the workspace notes for architectural risks, security gaps, and unclear requirements. Prioritize actionable recommendations and state what cannot be verified.' },
-];
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
-function download(name: string, body: string, type = 'text/markdown') { const url = URL.createObjectURL(new Blob([body], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+const now = () => new Date().toISOString();
+const initialConnection: Connection = { mode: 'demo', endpoint: '', model: '', token: '', maxTokens: 1024, inference: 'byok' };
+type Recognition = { lang: string; interimResults: boolean; continuous: boolean; start(): void; stop(): void; onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
+const recognitionCtor = () => (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => Recognition }).webkitSpeechRecognition;
+const starters: { text: string; persona: string; mode: RunMode }[] = [
+  { text: 'Plan this week for a two-person diner: staffing, ordering, one marketing push. Keep it to a checklist.', persona: 'operator', mode: 'chat' },
+  { text: 'Here are last month\'s totals: sales 18,420, card fees 512, payroll 7,900, rent 2,400, supplies 4,100. What does the month look like and what should I double check?', persona: 'auditor', mode: 'chat' },
+  { text: 'Draft two replies to a 2-star review that says the wait was long and the coffee was cold. Warm, honest, no excuses.', persona: 'reputation', mode: 'chat' },
+  { text: 'Audit the SEO tags on https://example.com and tell me what is missing.', persona: 'browser', mode: 'chat' },
+];
+/** Connection as sent with a request: platform credits use the deployment token, BYOK uses the user's key. */
+const requestConnection = (c: Connection): Connection => c.inference === 'credits' ? { ...c, token: '' } : { ...c, serverAccessToken: '' };
+async function readTextFile(file: File): Promise<Attached> {
+  if (!/\.(txt|md|csv|json|html)$/i.test(file.name) || file.size > 200_000) throw new Error(`${file.name}: attach text, Markdown, CSV, JSON, or HTML files under 200 KB.`);
+  return { name: file.name.slice(0, 80), content: (await file.text()).slice(0, 60_000) };
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>('workspace');
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('hb-rail') === 'collapsed'; } catch { return false; } });
   const canInstall = useInstallAvailable(); const online = useOnline();
   const [connection, setConnection] = useState<Connection>(initialProvider);
-  const [goal, setGoal] = useState(''); const [workflow, setWorkflow] = useState<Workflow>('build');
-  const [run, setRun] = useState<Run | null>(null); const [history, setHistory] = useState<Run[]>([]);
-  const [knowledge, setKnowledge] = useState<Knowledge[]>([]); const [search, setSearch] = useState('');
-  const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false);
   const [models, setModels] = useState<string[]>([]); const [checking, setChecking] = useState(false);
-  const [noteTitle, setNoteTitle] = useState(''); const [noteContent, setNoteContent] = useState('');
-  const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
-  const [selectedStep, setSelectedStep] = useState<string | null>(null);
-  const worker = useRef<Worker | null>(null); const fileInput = useRef<HTMLInputElement>(null);
-  const activeRun = useRef<Run | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]); const sessionsRef = useRef<Session[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]); const runsRef = useRef<Run[]>([]);
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]); const ledgerRef = useRef<LedgerEntry[]>([]);
+  const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
+  const [balance, setBalance] = useState<Balance>(() => computeBalance([], DEFAULT_MONTHLY_POOL, 'local'));
+  const [serverReachable, setServerReachable] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [personaId, setPersonaId] = useState(defaultPersonaId);
+  const [draft, setDraft] = useState(''); const [mode, setMode] = useState<RunMode>('chat'); const [attachments, setAttachments] = useState<Attached[]>([]);
+  const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false); const [notice, setNotice] = useState('');
+  const [rosterOpen, setRosterOpen] = useState(false); const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
+  const [stats, setStats] = useState<Stats | null>(null); const [listening, setListening] = useState(false);
+  const abortRef = useRef<AbortController | null>(null); const worker = useRef<Worker | null>(null); const recognition = useRef<Recognition | null>(null);
+  const approvedRuns = useRef(false); const endRef = useRef<HTMLDivElement>(null);
+
+  const active = sessions.find(s => s.id === activeId) ?? null;
+  const persona = personaById(active?.persona ?? personaId);
+  const modelLabel = connection.mode === 'demo' ? 'Scripted preview' : (findModel(connection.model)?.label ?? connection.model ?? 'No model');
+  const tierLabel = connection.mode === 'demo' ? 'no model' : tierFor(connection.model || '');
+  const payLabel = connection.mode === 'demo' ? 'free' : connection.inference === 'credits' ? 'platform credits' : 'your key';
+  const tokens = useMemo(() => ({ draft: estimateTokens(draft), context: attachments.reduce((n, a) => n + estimateTokens(a.content), 0) + retrieve(draft, knowledge).reduce((n, d) => n + estimateTokens(d.content.slice(0, 6000)), 0) }), [draft, attachments, knowledge]);
+
   useEffect(() => {
-    let alive = true;
-    Promise.all([storage.runs(), storage.knowledge()]).then(async ([runs, docs]) => {
-      const fixed = runs.map(r => r.status === 'running' ? { ...r, status: 'interrupted' as const, steps: r.steps.map(s => ['pending', 'queued', 'assigned', 'running'].includes(s.status) ? { ...s, status: 'cancelled' } : s) } : r);
-      await Promise.all(fixed.filter(r => r.status === 'interrupted').map(storage.saveRun));
-      if (alive) { setHistory(fixed.sort((a, b) => b.startedAt.localeCompare(a.startedAt))); setKnowledge(docs); }
-    }).catch(e => { if (alive) setNotice(errorText(e)); }).finally(() => { if (alive) setReady(true); });
-    return () => { alive = false; worker.current?.terminate(); };
+    const controller = new AbortController();
+    loadWorkspace(controller.signal).then(ws => { if (controller.signal.aborted) return; commitSessions(ws.sessions); runsRef.current = ws.runs; setRuns(ws.runs); ledgerRef.current = ws.ledger; setLedger(ws.ledger); setKnowledge(ws.knowledge); setBalance(ws.balance); setServerReachable(ws.serverReachable); setActiveId(ws.sessions[0]?.id ?? null); if (ws.sessions[0]) setPersonaId(ws.sessions[0].persona); })
+      .catch(e => { if (!controller.signal.aborted) setNotice(errorText(e)); }).finally(() => { if (!controller.signal.aborted) setReady(true); });
+    return () => { controller.abort(); worker.current?.terminate(); };
   }, []);
   useEffect(() => { if (!busy) return; const onLeave = (e: BeforeUnloadEvent) => { e.preventDefault(); }; window.addEventListener('beforeunload', onLeave); return () => window.removeEventListener('beforeunload', onLeave); }, [busy]);
-  function updateRun(next: Run) { activeRun.current = next; setRun(next); }
-  function failActive(message: string) {
-    worker.current?.terminate(); worker.current = null; setBusy(false); setNotice(message);
-    if (activeRun.current) { const failed: Run = { ...activeRun.current, status: 'failed', completedAt: new Date().toISOString(), steps: activeRun.current.steps.map(s => ['running', 'assigned', 'queued', 'pending'].includes(s.status) ? { ...s, status: 'cancelled' } : s) }; updateRun(failed); setHistory(h => [failed, ...h.filter(r => r.id !== failed.id)]); void storage.saveRun(failed).catch(e => setNotice(errorText(e))); }
+  useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [active?.messages, runs]);
+
+  function commitSessions(next: Session[]) { sessionsRef.current = next; setSessions(next); }
+  function patchSession(id: string, fn: (s: Session) => Session, persist = false) {
+    const next = sessionsRef.current.map(s => s.id === id ? { ...fn(s), updatedAt: now() } : s); commitSessions(next);
+    if (persist) { const s = next.find(x => x.id === id); if (s) void persistSession(s).catch(e => setNotice(errorText(e))); }
   }
-  function startRun() {
-    setConfirm(null); if (busy) return;
-    try { validateConnection(connection); if (!goal.trim() || goal.length > 12000) throw new Error('Enter a goal between 1 and 12,000 characters.'); } catch (e) { setNotice(errorText(e)); return; }
-    setNotice(''); setBusy(true); setSelectedStep(null); setPage('workspace');
-    const id = crypto.randomUUID();
-    updateRun({ id, goal: goal.trim(), workflow, mode: connection.mode, model: connection.mode === 'demo' ? 'Scripted preview · no model' : connection.model, status: 'running', startedAt: new Date().toISOString(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [] });
-    if (activeRun.current) void storage.saveRun(activeRun.current).catch(e => setNotice(errorText(e)));
+  function patchMessage(sessionId: string, messageId: string, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>), persist = false) {
+    patchSession(sessionId, s => ({ ...s, messages: s.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === 'function' ? patch(m) : patch) } : m) }), persist);
+  }
+  function newSession(): Session { const s: Session = { id: crypto.randomUUID(), title: 'New session', persona: persona.id, createdAt: now(), updatedAt: now(), messages: [] }; commitSessions([s, ...sessionsRef.current]); setActiveId(s.id); setPage('workspace'); return s; }
+  function ensureSession(): Session { return active ?? newSession(); }
+  async function deleteSession(id: string) { try { await storage.removeSession(id); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
+  function choosePersona(id: string) { setPersonaId(id); if (active) patchSession(active.id, s => ({ ...s, persona: id }), true); }
+  function updateRun(run: Run) { const next = runsRef.current.some(r => r.id === run.id) ? runsRef.current.map(r => r.id === run.id ? run : r) : [run, ...runsRef.current]; runsRef.current = next; setRuns(next); }
+  async function charge(sessionId: string, count: number) {
+    try { const entry = await recordUsage({ sessionId, model: connection.mode === 'demo' ? 'scripted-preview' : connection.model, mode: connection.mode === 'demo' ? 'demo' : (connection.inference ?? 'byok'), tokens: count }); const next = [entry, ...ledgerRef.current]; ledgerRef.current = next; setLedger(next); setBalance(b => computeBalance(next, b.pool, b.source)); }
+    catch (e) { setNotice(errorText(e)); }
+  }
+  function preflight(): string | null {
+    if (connection.mode === 'demo') return null;
+    try { validateConnection(connection); } catch (e) { return errorText(e); }
+    if (!online) return 'You are offline. Hosted models need a connection; the scripted preview still works.';
+    if (connection.inference === 'credits') { if (!connection.serverAccessToken) return 'Platform credits need the deployment access token. Add it in Settings, or switch to your own key.'; if (balance.remaining <= 0) return `Platform credits for ${balance.month} are used up. Switch to your own key or wait for the monthly reset.`; }
+    else if (!connection.token && connection.provider !== 'custom') return 'Add your provider key in Settings, or switch to platform credits.';
+    return null;
+  }
+  async function addFiles(files: File[]) {
+    const added: Attached[] = [];
+    for (const f of files.slice(0, 5)) { try { added.push(await readTextFile(f)); } catch (e) { setNotice(errorText(e)); } }
+    setAttachments(a => [...a.filter(x => !added.some(n => n.name === x.name)), ...added].slice(0, 5));
+  }
+  function toggleVoice() {
+    if (listening) { recognition.current?.stop(); return; }
+    const Ctor = recognitionCtor(); if (!Ctor) return;
+    const r = new Ctor(); r.lang = navigator.language || 'en-US'; r.interimResults = false; r.continuous = true;
+    r.onresult = e => { let text = ''; for (let i = e.resultIndex; i < e.results.length; i++) text += e.results[i][0].transcript; setDraft(d => `${d}${d && !d.endsWith(' ') ? ' ' : ''}${text.trim()}`); };
+    r.onend = () => { setListening(false); recognition.current = null; }; r.onerror = () => { setListening(false); recognition.current = null; setNotice('Voice input stopped. Check the microphone permission and try again.'); };
+    recognition.current = r; try { r.start(); setListening(true); } catch { setNotice('Voice input could not start in this browser.'); }
+  }
+  function send() {
+    const text = draft.trim(); if (!text || busy || !ready) return;
+    const problem = preflight(); if (problem) { setNotice(problem); return; }
+    if (mode !== 'chat' && connection.mode === 'remote' && !approvedRuns.current) { setConfirm('run'); return; }
+    const session = ensureSession(); const files = attachments;
+    const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, at: now(), attachments: files.map(a => ({ name: a.name, chars: a.content.length })) };
+    const title = session.messages.length ? session.title : text.replace(/\s+/g, ' ').slice(0, 60);
+    setDraft(''); setAttachments([]); setNotice(''); setBusy(true); setPage('workspace');
+    if (mode === 'chat') void runChat(session, user, text, files, title); else startWorkflow(session, user, text, files, title, mode);
+  }
+  async function runChat(session: Session, user: ChatMessage, text: string, files: Attached[], title: string) {
+    const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: persona.name, model: modelLabel };
+    patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
+    const controller = new AbortController(); abortRef.current = controller; const traces: ChatMessage['tools'] = [];
+    try {
+      const result = await chatTurn({ connection: requestConnection(connection), personaId: persona.id, history: session.messages, input: text, attachments: files, knowledge, signal: controller.signal, onDelta: t => patchMessage(session.id, reply.id, { content: t }), onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); } });
+      patchMessage(session.id, reply.id, { content: result.text, tokens: result.tokens, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools }, true);
+      setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens: result.tokens });
+      await charge(session.id, result.tokens);
+    } catch (e) {
+      const stopped = controller.signal.aborted;
+      patchMessage(session.id, reply.id, m => stopped ? { content: `${m.content}${m.content ? '\n\n' : ''}(stopped)` } : { error: errorText(e) }, true);
+      if (!stopped) setNotice(errorText(e));
+    } finally { abortRef.current = null; setBusy(false); }
+  }
+  function startWorkflow(session: Session, user: ChatMessage, text: string, files: Attached[], title: string, workflow: Exclude<RunMode, 'chat'>) {
+    const runId = crypto.randomUUID();
+    const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: `${workflows[workflow].label} · led by ${persona.name}`, model: modelLabel, runId };
+    patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
+    updateRun({ id: runId, goal: text, workflow, mode: connection.mode, model: connection.mode === 'demo' ? 'Scripted preview · no model' : connection.model, status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id });
+    const fail = (message: string) => { worker.current?.terminate(); worker.current = null; setBusy(false); setNotice(message); const current = runsRef.current.find(r => r.id === runId); if (current) { const failed: Run = { ...current, status: 'failed', completedAt: now(), steps: current.steps.map(s => ['running', 'assigned', 'queued', 'pending'].includes(s.status) ? { ...s, status: 'cancelled' } : s) }; updateRun(failed); void persistRun(failed).catch(e => setNotice(errorText(e))); } };
     try {
       worker.current?.terminate(); worker.current = new Worker(new URL('./workers/swarm.worker.ts', import.meta.url), { type: 'module' });
-      worker.current.onerror = () => failActive('The browser worker stopped unexpectedly. Please retry.');
+      worker.current.onerror = () => fail('The browser worker stopped unexpectedly. Please retry.');
       worker.current.onmessage = (event: MessageEvent<WorkerEvent>) => {
-        if (event.data.type === 'error') { failActive(event.data.message); return; }
+        if (event.data.type === 'error') { fail(event.data.message); return; }
         updateRun(event.data.run);
-        if (event.data.type === 'done' || event.data.run.steps.every(s => s.status !== 'running')) void storage.saveRun(event.data.run).catch(e => setNotice(errorText(e)));
-        if (event.data.type === 'done') { const done = event.data.run; if (done.status === 'failed') setNotice(done.steps.find(s => s.error)?.error || 'Provider run failed. Check your key and model.'); setBusy(false); setHistory(h => [done, ...h.filter(r => r.id !== done.id)]); worker.current?.terminate(); worker.current = null; }
+        if (event.data.type === 'done') { const done = event.data.run; void persistRun(done).catch(e => setNotice(errorText(e))); if (done.status === 'failed') setNotice(done.steps.find(s => s.error)?.error || 'The run failed. Check your model and key in Settings.'); setBusy(false); worker.current?.terminate(); worker.current = null; setStats(s => ({ latencyMs: s?.latencyMs ?? 0, tokensPerSecond: s?.tokensPerSecond ?? 0, tokens: done.tokens })); void charge(session.id, done.tokens); patchMessage(session.id, reply.id, { tokens: done.tokens }, true); }
       };
-      worker.current.postMessage({ type: 'start', runId: id, goal: goal.trim(), workflow, connection, knowledge });
-    } catch (e) { failActive(errorText(e)); }
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, attachments: files });
+    } catch (e) { fail(errorText(e)); }
   }
-  function requestRun() { if (connection.mode === 'remote') { try { validateConnection(connection); if (!goal.trim()) throw new Error('Enter a goal first.'); setConfirm('run'); } catch (e) { setNotice(errorText(e)); } } else startRun(); }
-  async function saveNote() {
-    if (!noteTitle.trim() || !noteContent.trim()) { setNotice('Give your note a title and some content.'); return; }
-    if (knowledge.length >= 100) { setNotice('Workspace limit: 100 notes. Remove an old note first.'); return; }
-    const doc = { id: crypto.randomUUID(), title: noteTitle.trim().slice(0, 120), content: noteContent.slice(0, 50000), createdAt: new Date().toISOString() };
-    try { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); setNoteTitle(''); setNoteContent(''); setNotice('Note saved in this browser.'); } catch (e) { setNotice(errorText(e)); }
-  }
-  async function importText(file?: File) {
-    if (!file) return; if (!/\.(txt|md)$/i.test(file.name) || file.size > 100000) { setNotice('Choose a Markdown or text file smaller than 100 KB.'); return; }
-    try { const content = await file.text(); if (content.length > 50000) throw new Error('Notes are limited to 50,000 characters.'); setNoteTitle(file.name); setNoteContent(content); setNotice('File loaded into the editor. Review it, then save the note.'); } catch (e) { setNotice(errorText(e)); }
-  }
-  async function discover() { setChecking(true); setNotice(''); try { const ids = await listModels(connection, new AbortController().signal); setModels(ids); if (ids.length) setConnection(c => ({ ...c, model: ids.includes(c.model) ? c.model : ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
-  function saveSettings() { try { if (connection.mode === 'remote') validateConnection(connection); persistConnection(connection); setNotice(connection.saveKey ? 'Connection saved, including your key in unencrypted browser storage.' : 'Connection saved. Key remains in memory only.'); } catch (e) { setNotice(errorText(e)); } }
-  async function clearWorkspace() { setConfirm(null); try { await storage.clearRuns(); await storage.clearKnowledge(); localStorage.removeItem('ft-web-settings'); clearProviderStorage(); setHistory([]); setKnowledge([]); setRun(null); activeRun.current = null; setConnection(initialConnection); setNotice('Workspace data and connection details cleared.'); } catch (e) { setNotice(errorText(e)); } }
-  const completed = run?.steps.filter(s => s.status === 'completed').length ?? 0;
-  const displayStep = run?.steps.find(s => s.id === selectedStep) ?? [...(run?.steps ?? [])].reverse().find(s => s.output || s.error);
-  const nav = [{ id: 'workspace' as const, label: 'Workspace', icon: Layers3 }, { id: 'agents' as const, label: 'Agent team', icon: Network }, { id: 'memory' as const, label: 'Knowledge', icon: Database }, { id: 'history' as const, label: 'Run history', icon: Clock3 }];
-  return <div className="app-shell">
-    <aside className="sidebar"><a className="brand" href="#" onClick={e => { e.preventDefault(); setPage('workspace'); }} aria-label="FreeToken home"><div className="brand-mark"><Zap size={21} fill="currentColor" /></div><span>FreeToken<span className="brand-web">WEB</span></span></a>
-      <div className="workspace-switch"><div className="workspace-avatar">P</div><div><strong>Personal workspace</strong><small>Browser edition</small></div><ChevronRight size={15}/></div>
-      <div className="nav-label">WORKSPACE</div><nav>{nav.map(n => <button key={n.id} className={page === n.id ? 'nav-item active' : 'nav-item'} onClick={() => setPage(n.id)}><n.icon size={18}/>{n.label}{n.id === 'memory' && knowledge.length > 0 && <span className="nav-count">{knowledge.length}</span>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="browser-card"><Globe2 size={19}/><strong>All you need is a tab.</strong><p>Your workspace runs in the browser. No local server, no account. Installable from Settings.</p><span><span className="live-dot"/> Browser-native orchestration</span></div><button className={page === 'settings' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('settings')}><Settings2 size={18}/>Settings</button><a className="nav-item" href="https://github.com/chrisfbaileycb-arch/FreeToken" target="_blank" rel="noreferrer"><CircleHelp size={18}/>Source & documentation<ArrowUpRight size={14}/></a><div className="profile"><div className="profile-avatar">Y</div><div><strong>Your workspace</strong><small>Stored in this browser</small></div><span className="version">v0.1</span></div></div>
-    </aside>
-    <div className="main-shell"><header className="topbar"><div className="breadcrumb">Personal workspace <ChevronRight size={14}/><span>{page === 'workspace' ? 'Overview' : page === 'memory' ? 'Knowledge' : page === 'agents' ? 'Agent team' : page === 'history' ? 'Run history' : 'Settings'}</span></div><div className="header-right"><ProviderControls connection={connection} setConnection={setConnection} busy={busy} notify={setNotice}/><span className="runtime-badge"><span className="live-dot"/>{connection.mode === 'demo' ? 'Demo mode' : 'Hosted inference'}</span><button className="icon-button" aria-label="Open settings" onClick={() => setPage('settings')}><Settings2 size={18}/></button></div></header>
-      <main>{!online && <div className="notice" role="status"><span>You are offline. The scripted preview still works; hosted provider runs need a connection.</span></div>}{notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss notice" onClick={() => setNotice('')}><X size={16}/></button></div>}
-      {page === 'workspace' && <>
-        <div className="page-heading"><div><div className="eyebrow"><span className="mini-line"/> FREETOKEN × RUFLO</div><h1>Big ideas. A whole team behind you.</h1><p>One goal. Specialized agents. A more thoughtful result.</p></div><span className="edition-badge"><Globe2 size={15}/> Browser edition</span></div>
-        <section className="composer"><div className="composer-heading"><div className="spark-box"><Sparkles size={19}/></div><div><h2>What would you like to accomplish?</h2><p>Give your team a goal. They'll plan, explore, review, and synthesize.</p></div></div><label className="sr-only" htmlFor="goal">Your goal</label><textarea id="goal" value={goal} maxLength={12000} disabled={busy} onChange={e => setGoal(e.target.value)} placeholder="Describe a problem, explore an idea, or plan your next project…"/><div className="composer-footer"><div className="composer-options"><label className="select-label"><WorkflowIcon size={15}/><select aria-label="Workflow" value={workflow} disabled={busy} onChange={e => setWorkflow(e.target.value as Workflow)}><option value="build">Build workflow</option><option value="research">Research workflow</option><option value="review">Review workflow</option></select></label><span className="model-label"><span className="live-dot"/>{connection.mode === 'demo' ? 'Scripted preview' : connection.model || 'Select a model'}</span></div>{busy ? <button className="button danger" onClick={() => worker.current?.postMessage({ type: 'cancel' })}><Square size={14}/>Stop run</button> : <button className="button primary" disabled={!goal.trim() || !ready} onClick={requestRun}>Launch team<ArrowRight size={16}/></button>}</div><div className="composer-footnote"><ShieldCheck size={13}/>{connection.mode === 'demo' ? 'Demo uses scripted outputs, not AI. Connect a hosted model for real results.' : 'Your goal and relevant notes pass through /api/chat to your selected provider.'}</div></section>
-        <section className="stat-grid"><div className="stat-card"><div className="stat-icon"><Network size={19}/></div><div><span>Specialized agents</span><strong>5 <small>working as one</small></strong></div></div><div className="stat-card"><div className="stat-icon"><WorkflowIcon size={19}/></div><div><span>Orchestration</span><strong>Ruflo <small>browser-adapted core</small></strong></div></div><div className="stat-card"><div className="stat-icon"><Database size={19}/></div><div><span>Workspace memory</span><strong>{knowledge.length} <small>saved note{knowledge.length === 1 ? '' : 's'}</small></strong></div></div></section>
-        {run ? <section className="run-panel"><div className="section-heading"><div><h2>{run.status === 'running' ? 'Your team is on it' : run.status === 'completed' ? 'Your run is complete' : `Run ${run.status}`}</h2><p>{completed} of {run.steps.length || 5} stages completed · {run.mode === 'demo' ? 'Scripted demo — no AI inference' : run.model}</p></div><div className="row-actions"><span className={`status ${run.status}`}>{run.status}</span><button className="button secondary small" onClick={() => download('freetoken-run.md', exportRun(run))}><Download size={14}/>Export</button></div></div><div className="pipeline">{run.steps.map((step, i) => <button key={step.id} className={`pipeline-step ${step.status} ${displayStep?.id === step.id ? 'selected' : ''}`} onClick={() => setSelectedStep(step.id)}><span className="step-number">{step.status === 'completed' ? <Check size={15}/> : step.status === 'running' ? <LoaderCircle size={15} className="spin"/> : i + 1}</span><strong>{step.agent}</strong><small>{step.status}</small></button>)}</div><div className="output-panel" aria-live="polite"><div className="output-heading"><FileText size={17}/><strong>{displayStep ? displayStep.title : 'Waiting for the first stage…'}</strong></div><pre>{displayStep?.output ?? displayStep?.error ?? 'The browser worker is coordinating your team. Outputs appear here as each stage finishes.'}</pre></div><div className="run-footer"><span>{run.calls} provider requests</span><span>{run.tokens.toLocaleString()} reported tokens</span><span>{run.contextTitles.length} retrieved notes</span><span>{run.cacheHits} exact-cache hits</span></div>{run.status === 'failed' && <p className="help-text">The run did not complete. Open the failed stage for details, check Settings, and launch a new run.</p>}</section> : <><div className="section-heading starter-heading"><div><h2>A little inspiration to get started</h2><p>Pick a starting point. Make it your own.</p></div><span className="subtle-tag">3 workflows</span></div><section className="template-grid">{templates.map((t, i) => <button className="template-card" key={t.workflow} onClick={() => { setWorkflow(t.workflow); setGoal(t.goal); document.getElementById('goal')?.focus(); }}><div className={`template-icon tone-${i}`}>{i === 0 ? <Boxes size={21}/> : i === 1 ? <Search size={21}/> : <ShieldCheck size={21}/>}</div><span className="template-label">{t.label}</span><h3>{t.title}</h3><p>{t.description}</p><div className="template-link">Try this workflow<ArrowUpRight size={16}/></div></button>)}</section></>}
-        <section className="architecture-strip"><div className="architecture-copy"><span className="eyebrow">A SMARTER WAY TO WORK</span><h2>Different perspectives.<br/>One shared goal.</h2><p>A planner sets direction. Specialists explore in parallel. A reviewer challenges the work before a final synthesis.</p><button className="text-button" onClick={() => setPage('agents')}>Meet your team <ArrowRight size={15}/></button></div><div className="flow-diagram" aria-label="Planner to researcher and architect to reviewer to synthesizer"><div className="flow-node"><Layers3 size={18}/><span>Plan</span></div><span className="flow-line"/><div className="flow-stack"><div className="flow-node"><Search size={16}/><span>Research</span></div><div className="flow-node"><Boxes size={16}/><span>Design</span></div></div><span className="flow-line"/><div className="flow-node"><ShieldCheck size={18}/><span>Review</span></div><span className="flow-line"/><div className="flow-node final"><Sparkles size={18}/><span>Synthesize</span></div></div></section>
-        <footer className="page-footer"><span><span className="live-dot"/>No desktop app. No local engine. Just your browser.</span><span>FreeToken Web · Ruflo-derived orchestration</span></footer>
-      </>}
-      {page === 'agents' && <><div className="page-heading"><div><div className="eyebrow">YOUR COLLABORATORS</div><h1>A small team. A wider perspective.</h1><p>Five prompt-based specialists, coordinated by browser-adapted Ruflo entities.</p></div></div><div className="info-banner"><Network size={20}/><p>Runs use a dependency graph with up to two parallel stages, capability-based agent assignment, cancellation, and bounded retries. Agents generate text; they do not execute code or control external websites.</p></div><div className="agent-grid">{roles.map((a, i) => <article className="agent-card" key={a.name}><div className="agent-avatar">{a.name.slice(0, 1)}</div><span className="agent-number">0{i + 1}</span><h2>{a.name}</h2><p>{a.instruction}</p><div className="capabilities">{a.capabilities.map(c => <span key={c}>{c}</span>)}</div></article>)}</div><div className="info-banner muted"><FileText size={20}/><p>What is reused: Ruflo's Agent and Task lifecycle entities, safe JSON parser, and an adapted capability-matching algorithm. This is not the full Ruflo CLI, MCP server, federation layer, AgentDB, or self-learning runtime.</p></div></>}
-      {page === 'memory' && <><div className="page-heading"><div><div className="eyebrow">CONTEXT THAT STAYS WITH YOU</div><h1>Knowledge for your team.</h1><p>Save notes. Relevant passages are retrieved with keyword matching.</p></div><button className="button secondary" onClick={() => fileInput.current?.click()}><Plus size={16}/>Import text</button><input className="sr-only" type="file" accept=".txt,.md" ref={fileInput} onChange={e => { void importText(e.target.files?.[0]); e.target.value = ''; }}/></div><div className="knowledge-layout"><section className="panel"><h2>Add a workspace note</h2><label>Title<input value={noteTitle} maxLength={120} onChange={e => setNoteTitle(e.target.value)} placeholder="Project requirements, product context…"/></label><label>Content<textarea value={noteContent} maxLength={50000} onChange={e => setNoteContent(e.target.value)} placeholder="Add useful context for your agents…" rows={9}/></label><p className="help-text">Stored in this browser using IndexedDB. Matching excerpts are sent to your provider only when you approve a hosted run. Do not add passwords or secrets.</p><button className="button primary" onClick={() => void saveNote()} disabled={busy}>Save note<Plus size={16}/></button></section><section><div className="search-field"><Search size={17}/><input aria-label="Search knowledge" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search your notes…"/></div>{knowledge.filter(d => `${d.title} ${d.content}`.toLowerCase().includes(search.toLowerCase())).map(d => <article className="note-card" key={d.id}><div className="section-heading"><h3>{d.title}</h3><button className="icon-button" disabled={busy} aria-label={`Delete ${d.title}`} onClick={async () => { try { await storage.removeKnowledge(d.id); setKnowledge(k => k.filter(x => x.id !== d.id)); } catch (e) { setNotice(errorText(e)); } }}><Trash2 size={16}/></button></div><p>{d.content.slice(0, 260)}{d.content.length > 260 ? '…' : ''}</p><small>{d.content.length.toLocaleString()} characters · {new Date(d.createdAt).toLocaleDateString()}</small></article>)}{!knowledge.length && <div className="empty-state"><Database size={30}/><h3>A little context goes a long way.</h3><p>Your saved notes will appear here.</p></div>}</section></div></>}
-      {page === 'history' && <><div className="page-heading"><div><div className="eyebrow">YOUR WORK, REMEMBERED</div><h1>Every run. Ready to revisit.</h1><p>Run history is saved in this browser, not on a remote account.</p></div><button className="button secondary" onClick={() => download('freetoken-workspace.json', JSON.stringify({ version: 1, runs: history, knowledge }, null, 2), 'application/json')}><Download size={16}/>Export workspace</button></div>{!history.length ? <div className="empty-state"><Clock3 size={32}/><h3>Your first run is the beginning.</h3><p>Launch a workflow to start building your history.</p><button className="button primary" onClick={() => setPage('workspace')}>Go to workspace<ArrowRight size={16}/></button></div> : <div className="history-list">{history.map(r => <button className="history-item" key={r.id} disabled={busy} onClick={() => { setRun(r); setSelectedStep(null); setPage('workspace'); }}><div className="history-icon"><WorkflowIcon size={19}/></div><div className="history-text"><h3>{r.goal}</h3><p>{r.workflow} · {r.mode === 'demo' ? 'Scripted demo' : r.model} · {new Date(r.startedAt).toLocaleString()}</p></div><span className={`status ${r.status}`}>{r.status}</span><ChevronRight size={18}/></button>)}</div>}</>}
-      {page === 'settings' && <><div className="page-heading"><div><div className="eyebrow">MAKE IT YOURS</div><h1>Your browser. Your model provider.</h1><p>No local runtime or software installation required.</p></div></div><div className="settings-layout"><section className="panel"><h2>Inference connection</h2><p className="help-text">Start with a scripted preview, or connect a hosted FreeToken / OpenAI-compatible API.</p><div className="mode-picker"><button disabled={busy} className={connection.mode === 'demo' ? 'selected' : ''} onClick={() => setConnection(c => ({ ...c, mode: 'demo' }))}><FlaskConical size={20}/><strong>Demo</strong><small>Scripted. No AI or network calls.</small></button><button disabled={busy} className={connection.mode === 'remote' ? 'selected' : ''} onClick={() => setConnection(c => ({ ...c, mode: 'remote' }))}><Globe2 size={20}/><strong>Hosted API</strong><small>Real inference on your provider.</small></button></div><label>Hosted API base URL<input type="url" disabled={busy || (Boolean(connection.provider) && connection.provider !== 'custom')} value={connection.endpoint} placeholder="https://your-provider.example/v1" onChange={e => { setModels([]); setConnection(c => ({ ...c, endpoint: e.target.value })); }}/></label><p className="help-text">Requests use the same-origin server proxy; provider CORS is not required. Configure custom origins and Ollama bridges on the server.</p><label>Short-lived access token <span className="optional">(optional)</span><input type="password" autoComplete="off" spellCheck={false} disabled={busy} value={connection.token} onChange={e => setConnection(c => ({ ...c, token: e.target.value }))} placeholder="Your provider key"/></label><p className="help-text">Prefer a restricted, short-lived token from your own gateway. Never embed a long-lived provider secret in a public web app. The token passes through this deployment’s proxy to the selected provider and is not included in exports. Optional key storage is available in the provider drawer.</p><div className="form-row"><label>Model ID<input disabled={busy} list="models" value={connection.model} onChange={e => setConnection(c => ({ ...c, model: e.target.value }))} placeholder="Model served by your provider"/><datalist id="models">{models.map(m => <option key={m} value={m}/>)}</datalist></label><button className="button secondary" disabled={busy || checking || !connection.endpoint} onClick={() => void discover()}>{checking ? <LoaderCircle className="spin" size={16}/> : <Search size={16}/>}Discover</button></div><label>Maximum output tokens per request<select disabled={busy} value={connection.maxTokens} onChange={e => setConnection(c => ({ ...c, maxTokens: Number(e.target.value) }))}><option value={512}>512 tokens</option><option value={1024}>1,024 tokens</option><option value={2048}>2,048 tokens</option><option value={4096}>4,096 tokens</option></select></label><button className="button primary" disabled={busy} onClick={saveSettings}>Save connection<Check size={16}/></button></section><div><section className="panel architecture-notes"><div className="stat-icon"><ShieldCheck size={22}/></div><h2>Browser-only, honestly.</h2><h3>In your tab</h3><p>The interface, task coordination, exact-prompt cache, keyword retrieval, and workspace storage.</p><h3>On your hosted provider</h3><p>Model inference. FreeToken's Python/CUDA kernels cannot execute in a web browser. This app calls its OpenAI-compatible HTTP interface through the hosted proxy.</p><h3>No hidden local dependencies</h3><p>No desktop installation is needed for hosted providers. An optional Ollama bridge must be configured by the deployment administrator. Closing the tab stops active workflows. Browser storage can be cleared by your browser; export important work.</p><h3>Not included</h3><p>Shell execution, autonomous code changes, external browser control, full Ruflo MCP tools, vector embeddings, and model hosting. Provider usage may cost money.</p></section><section className="panel"><div className="stat-icon"><MonitorDown size={22}/></div><h2>Install on this device</h2><p className="help-text">On a Chromebook, or in Chrome on Windows, Mac, or Linux, this workspace can live on your shelf or dock and open in its own window. Once installed, it opens offline and the scripted preview keeps working; hosted provider runs still need a connection.</p>{isInstalled() ? <p className="help-text">Installed. You are using the app window now.</p> : canInstall ? <button className="button secondary" onClick={() => void promptInstall()}><MonitorDown size={16}/>Install app</button> : <p className="help-text">Your browser has not offered to install yet. In Chrome, use the install icon at the right end of the address bar, or choose Install from the browser menu.</p>}</section><section className="panel danger-panel"><h2>Clear workspace</h2><p className="help-text">Delete saved notes, run history, and connection settings from this browser.</p><button className="button danger" disabled={busy} onClick={() => setConfirm('clear')}><Trash2 size={15}/>Clear browser data</button></section></div></div></>}
-      </main>
+  function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
+  async function discover() { setChecking(true); try { const ids = await listModels(requestConnection(connection), new AbortController().signal); setModels(ids); if (ids.length && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
+  function saveSettings() { try { if (connection.mode === 'remote') validateConnection(connection); persistConnection(connection); setNotice(connection.saveKey && connection.inference !== 'credits' ? 'Connection saved, including your key in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.'); } catch (e) { setNotice(errorText(e)); } }
+  function forget() { try { forgetKeys(); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
+  async function clearAll() { setConfirm(null); try { await clearWorkspaceData(); localStorage.removeItem('hb-rail'); clearProviderStorage(); commitSessions([]); runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null); setBalance(b => computeBalance([], b.pool, b.source)); setConnection(initialConnection); setNotice('Workspace cleared here and on the server.'); } catch (e) { setNotice(errorText(e)); } }
+  function toggleRail() { setCollapsed(c => { try { localStorage.setItem('hb-rail', c ? 'expanded' : 'collapsed'); } catch { /* storage unavailable */ } return !c; }); }
+  function download(name: string, body: string) { const url = URL.createObjectURL(new Blob([body], { type: 'text/markdown' })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+
+  const PersonaIcon = iconFor(persona.icon);
+  return <div className={collapsed ? 'app rail-collapsed' : 'app'}>
+    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} />
+    <div className="main">
+      {(!online || notice) && <div className="notices">{!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. The scripted preview still works; hosted models need a connection.</span></div>}{notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}</div>}
+      <div className="content">
+        {page === 'workspace' && <div className="workspace">
+          <aside className="sessions"><div className="sessions-head"><strong>Sessions</strong><button className="icon-button" aria-label="New session" title="New session" disabled={busy} onClick={newSession}><Plus size={14} /></button></div>
+            {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => { setActiveId(s.id); setPersonaId(s.persona); }}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
+            {!sessions.length && <p className="help">No sessions yet. Your first message starts one.</p>}
+          </aside>
+          <section className="canvas">
+            <header className="canvas-head">
+              <select className="session-select" aria-label="Session" value={activeId ?? ''} disabled={busy} onChange={e => { if (e.target.value === '__new') newSession(); else { setActiveId(e.target.value); const s = sessionsRef.current.find(x => x.id === e.target.value); if (s) setPersonaId(s.persona); } }}><option value="__new">New session</option>{sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select>
+              <span className="canvas-title"><PersonaIcon size={14} strokeWidth={1.75} />{active ? active.title : 'New session'}<small>{persona.name}</small></span>
+              {active && <span className="row gap"><button className="icon-button" title="Export session" aria-label="Export session" onClick={() => download('heybuddy-session.md', exportSession(active))}><Download size={14} /></button><button className="icon-button" title="Delete session" aria-label="Delete session" disabled={busy} onClick={() => void deleteSession(active.id)}><Trash2 size={14} /></button></span>}
+            </header>
+            <div className="messages">
+              {!active?.messages.length && <div className="starter"><h1>Your AI crew. Always in your corner.</h1><p>Pick an agent, say what you need, and drop in a file if it helps. Nothing leaves this device until you send a message, and only to the model you chose.</p><div className="starter-grid">{starters.map(s => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={s.persona} className="starter-card" onClick={() => { choosePersona(s.persona); setMode(s.mode); setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div></div>}
+              {active?.messages.map(m => {
+                if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}</div><pre className="msg-body">{m.content}</pre></article>;
+                const run = m.runId ? runs.find(r => r.id === m.runId) : undefined;
+                return <article key={m.id} className="msg agent"><div className="msg-meta"><strong>{m.persona ?? 'Agent'}</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.model && <em>{m.model}</em>}{m.tokens ? <em>{m.tokens.toLocaleString()} tok</em> : null}{m.latencyMs ? <em>{m.latencyMs} ms</em> : null}</div>
+                  {run ? <RunCard run={run} /> : <pre className="msg-body">{m.content || (busy && !m.error ? 'Working…' : '')}</pre>}
+                  {m.tools?.map((t, i) => <div key={i} className={t.ok ? 'tool-trace' : 'tool-trace failed'}><Wrench size={11} /><code>{t.tool} {t.args.url}</code><span>{t.summary}</span></div>)}
+                  {m.error && <p className="msg-error"><CircleAlert size={12} />{m.error}</p>}
+                </article>;
+              })}
+              <div ref={endRef} />
+            </div>
+            <Dock draft={draft} setDraft={setDraft} mode={mode} setMode={setMode} persona={persona} openRoster={() => setRosterOpen(true)} attachments={attachments} addFiles={f => void addFiles(f)} removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))} busy={busy} ready={ready} send={send} stop={stop} listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice} tokens={tokens} />
+          </section>
+        </div>}
+        {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>Business agents lead a chat and set the focus for a workflow. Work skills run the stages. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} /></div>}
+        {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
+        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} models={models} checking={checking} discover={() => void discover()} save={saveSettings} forget={forget} balance={balance} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
+      </div>
+      <StatusBar model={modelLabel} tier={tierLabel} mode={payLabel} stats={stats} balance={balance} busy={busy} online={online} synced={serverReachable} />
     </div>
-    {confirm && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><div className="modal-icon">{confirm === 'run' ? <Globe2 size={25}/> : <Trash2 size={25}/>}</div><h2 id="confirm-title">{confirm === 'run' ? 'Send this run to your provider?' : 'Clear this workspace?'}</h2>{confirm === 'run' ? <><p>Your goal, matching note excerpts, and intermediate agent outputs will pass through this app’s server proxy to:</p><code>{connection.endpoint}</code><p>Five stages use up to 10 API requests including retries, each capped at {connection.maxTokens.toLocaleString()} output tokens. Provider charges may apply. Agents cannot execute generated code.</p></> : <p>This permanently removes notes, run history, and saved connection details from this browser. Export anything you want to keep first.</p>}<div className="modal-actions"><button className="button secondary" autoFocus onClick={() => setConfirm(null)}>Cancel</button><button className={`button ${confirm === 'run' ? 'primary' : 'danger'}`} onClick={() => confirm === 'run' ? startRun() : void clearWorkspace()}>{confirm === 'run' ? 'Approve & launch' : 'Delete workspace'}</button></div></section></div>}
+    <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} />
+    {confirm && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">{confirm === 'run' ? 'Send workflows to your provider?' : 'Clear this workspace?'}</h2>
+      {confirm === 'run' ? <p>A workflow makes five requests, up to ten with retries, each capped at {connection.maxTokens.toLocaleString()} output tokens, through this app's proxy to {connection.provider === 'custom' ? connection.endpoint : connection.provider}. {connection.inference === 'credits' ? 'Credits are drawn from the monthly allowance.' : 'Your provider bills your key.'} Chat messages do not ask again this session.</p> : <p>This removes sessions, runs, the ledger, notes, and saved connection details from this browser and from the server copy. Export anything you want to keep first.</p>}
+      <div className="row gap end"><button className="button small" autoFocus onClick={() => setConfirm(null)}>Cancel</button><button className={confirm === 'run' ? 'button primary small' : 'button danger small'} onClick={() => { if (confirm === 'run') { approvedRuns.current = true; setConfirm(null); send(); } else void clearAll(); }}>{confirm === 'run' ? 'Approve and run' : 'Delete everything'}</button></div>
+    </section></div>}
   </div>;
 }

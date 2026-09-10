@@ -1,0 +1,78 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CREDIT_WEIGHTS, creditsFor, estimateTokens, tierFor, weightFor } from '../src/lib/catalog';
+import { computeBalance, makeEntry, merge, type LedgerEntry, type Session } from '../src/lib/store';
+import { SAFETY_BASELINE, composePrompt, personaById, personas, skills } from '../src/lib/roster';
+import { parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
+import { chatTurn } from '../src/lib/chat';
+import { defaultConnection } from '../src/lib/providers';
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('catalog and credit weights', () => {
+  it('maps catalog models and guesses unknown ones conservatively', () => {
+    expect(weightFor('groq/llama-3.1-8b-instant')).toBe(CREDIT_WEIGHTS.fast); expect(weightFor('llama-3.3-70b-versatile')).toBe(CREDIT_WEIGHTS.fast);
+    expect(weightFor('deepseek/deepseek-r1')).toBe(CREDIT_WEIGHTS.reasoning); expect(weightFor('anthropic/claude-3.5-haiku')).toBe(CREDIT_WEIGHTS.standard);
+    expect(weightFor('vendor/mystery-model')).toBe(CREDIT_WEIGHTS.standard); expect(weightFor('vendor/tiny-3b')).toBe(CREDIT_WEIGHTS.fast); expect(weightFor('vendor/o3-pro')).toBe(CREDIT_WEIGHTS.reasoning);
+    expect(tierFor('groq/llama-3.3-70b-versatile')).toBe('free'); expect(tierFor('openai/gpt-4o')).toBe('pro'); expect(tierFor('vendor/mystery-model')).toBe('pro');
+  });
+  it('charges credits only in platform mode', () => {
+    expect(creditsFor('groq/llama-3.1-8b-instant', 2000, 'credits')).toBe(1); expect(creditsFor('deepseek/deepseek-r1', 1000, 'credits')).toBe(15);
+    expect(creditsFor('deepseek/deepseek-r1', 1000, 'byok')).toBe(0); expect(creditsFor('deepseek/deepseek-r1', 1000, 'demo')).toBe(0); expect(creditsFor('deepseek/deepseek-r1', 0, 'credits')).toBe(0);
+    expect(creditsFor('groq/llama-3.1-8b-instant', 1, 'credits')).toBe(0.01); expect(estimateTokens('abcdefgh')).toBe(2);
+  });
+});
+
+describe('ledger and workspace merge', () => {
+  const month = new Date().toISOString().slice(0, 7);
+  const entry = (over: Partial<LedgerEntry>): LedgerEntry => ({ id: crypto.randomUUID(), at: `${month}-05T10:00:00.000Z`, sessionId: 's', model: 'groq/llama-3.1-8b-instant', tier: 'free', mode: 'credits', tokens: 2000, credits: 1, ...over });
+  it('computes the monthly balance from platform-mode entries only', () => {
+    const balance = computeBalance([entry({}), entry({ mode: 'byok', credits: 0 }), entry({ credits: 2.5 }), entry({ at: '2000-01-01T00:00:00.000Z', credits: 99 })], 100, 'local');
+    expect(balance).toEqual({ pool: 100, used: 3.5, remaining: 96.5, month, source: 'local' });
+    expect(computeBalance([entry({ credits: 500 })], 100).remaining).toBe(0);
+  });
+  it('builds entries with the tier and credit weight of the model', () => {
+    const e = makeEntry({ sessionId: 's', model: 'openai/gpt-4o', mode: 'credits', tokens: 1000 }); expect(e.tier).toBe('pro'); expect(e.credits).toBe(15);
+    expect(makeEntry({ sessionId: 's', model: 'openai/gpt-4o', mode: 'byok', tokens: 1000 }).credits).toBe(0);
+  });
+  it('merges by newest session and unions runs and ledger, reporting what to push', () => {
+    const s = (id: string, updatedAt: string, title: string): Session => ({ id, title, persona: 'operator', createdAt: updatedAt, updatedAt, messages: [] });
+    const local = { sessions: [s('a', '2026-09-10T02:00:00.000Z', 'local newer'), s('c', '2026-09-10T01:00:00.000Z', 'local only')], runs: [], ledger: [entry({ id: 'l1' })] };
+    const server = { sessions: [s('a', '2026-09-10T01:00:00.000Z', 'server older'), s('b', '2026-09-10T01:00:00.000Z', 'server only')], runs: [], ledger: [entry({ id: 'l1' }), entry({ id: 'l2' })], pool: 100 };
+    const merged = merge(local, server);
+    expect(merged.sessions.map(x => x.title).sort()).toEqual(['local newer', 'local only', 'server only']); expect(merged.ledger).toHaveLength(2);
+    expect(merged.toPush.sessions.map(x => x.id)).toEqual(['a', 'c']); expect(merged.toPush.ledger).toHaveLength(0);
+    expect(merge(local, null).toPush.sessions).toHaveLength(0);
+  });
+});
+
+describe('roster', () => {
+  it('puts the safety baseline first in every prompt and keeps five stage skills', () => {
+    for (const p of personas) expect(composePrompt(p).startsWith(SAFETY_BASELINE)).toBe(true);
+    expect(skills.map(s => s.role)).toEqual(['planner', 'researcher', 'core-architect', 'reviewer', 'queen-coordinator']);
+    expect(composePrompt(personaById('reviewer'), personaById('auditor'))).toContain('started by the Financial Auditor');
+    expect(personaById('nope').id).toBe('operator'); expect(personaById('browser').tools).toEqual(['inspect_page']);
+  });
+  it('parses only the documented tool call shape', () => {
+    expect(parseToolCall('TOOL {"tool":"inspect_page","url":"https://a.example"}\n')).toEqual({ tool: 'inspect_page', args: { url: 'https://a.example' } });
+    expect(parseToolCall('Sure. TOOL {"tool":"inspect_page","url":"x"}')).toBeNull(); expect(parseToolCall('TOOL {"tool":"delete_everything"}')).toBeNull(); expect(parseToolCall('TOOL not json')).toBeNull();
+    expect(toolProtocol(['inspect_page'])).toContain('inspect_page');
+    expect(summarizeReport({ url: 'u', status: 200, title: 't', description: 'd', canonical: '', robots: '', lang: 'en', h1: ['H'], headingCount: 1, og: { 'og:title': 'x' }, wordCount: 3, text: 'a b c', links: [{ href: 'h', text: '' }], elapsedMs: 5 })).toContain('(no text) -> h');
+  });
+});
+
+describe('chat turn', () => {
+  const sse = (text: string) => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }], usage: { total_tokens: 40 } })}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
+  it('runs the tool loop for the Browser Agent and records the trace', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push(url); if (url === '/api/browse') return new Response(JSON.stringify({ url: 'https://shop.example', status: 200, title: 'Shop', description: '', canonical: '', robots: '', lang: '', h1: [], headingCount: 0, og: {}, wordCount: 2, text: 'hello world', links: [], elapsedMs: 1 }), { headers: { 'Content-Type': 'application/json' } }); const body = JSON.parse(String(init.body)); return body.messages[1].content.includes('TOOL RESULT') ? sse('The page title is Shop.') : sse('TOOL {"tool":"inspect_page","url":"https://shop.example"}'); }));
+    const deltas: string[] = []; const traces: string[] = [];
+    const result = await chatTurn({ connection: { ...defaultConnection('groq'), token: 'k' }, personaId: 'browser', history: [], input: 'Check https://shop.example', attachments: [], knowledge: [], signal: new AbortController().signal, onDelta: t => deltas.push(t), onTool: t => traces.push(t.summary) });
+    expect(result.text).toBe('The page title is Shop.'); expect(result.tools).toHaveLength(1); expect(result.tools[0].ok).toBe(true); expect(traces[0]).toContain('Shop'); expect(result.tokens).toBe(80);
+    expect(calls).toEqual(['/api/chat', '/api/browse', '/api/chat']); expect(deltas.some(d => d.startsWith('TOOL'))).toBe(false);
+  });
+  it('stays scripted in preview mode and never calls the network', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    const result = await chatTurn({ connection: { mode: 'demo', endpoint: '', model: '', token: '', maxTokens: 512 }, personaId: 'auditor', history: [], input: 'Reconcile March', attachments: [], knowledge: [{ id: 'n', title: 'March ledger', content: 'March totals reconcile to the bank', createdAt: '' }], signal: new AbortController().signal });
+    expect(result.text).toContain('SCRIPTED PREVIEW'); expect(result.text).toContain('Financial Auditor'); expect(result.contextTitles).toEqual(['March ledger']); expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

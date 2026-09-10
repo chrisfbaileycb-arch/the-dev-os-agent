@@ -81,7 +81,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       const apiKey = keyFor(body, env);
       if (!apiKey && body.provider !== 'custom' && !(path === '/api/models' && body.provider === 'openrouter')) throw new HttpError(401, 'Add your provider API key. Public visitors cannot use server credits.');
       const headers = { 'Content-Type': 'application/json', Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) };
-      if (body.provider === 'openrouter') { headers['HTTP-Referer'] = env.APP_ORIGIN || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'FreeToken Web'; }
+      if (body.provider === 'openrouter') { headers['HTTP-Referer'] = env.APP_ORIGIN || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
       let payload; let suffix;
       if (path === '/api/chat') {
         if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || typeof m.content !== 'string' || m.content.length > 150_000)) throw new HttpError(400, 'messages must contain standard role/content text pairs.');
