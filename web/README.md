@@ -15,6 +15,12 @@ A browser-based multi-agent workspace with hosted inference and a unified stream
 
 **Boundaries:** The Python/CUDA FreeToken engine does not run in the browser. Serve it on hosted GPU infrastructure and configure its `/v1` endpoint as a custom provider. This app includes a portable subset of Ruflo, not the complete CLI/MCP/federation/AgentDB/self-learning runtime. Agents generate text; they do not run shell commands, edit remote repositories or browse websites. Demo mode is explicitly scripted, not AI inference.
 
+## Install as an app (Chrome OS and desktop Chrome)
+
+`public/manifest.webmanifest` plus the icon set in `public/icons/` make the deployed site installable: on a Chromebook, or in Chrome on Windows, Mac, or Linux, the address-bar install icon adds it to the shelf or dock, and Settings shows an **Install app** button whenever the browser offers the prompt (`src/pwa.ts` captures `beforeinstallprompt`). The manifest uses relative `start_url`, `scope`, and `id`, matching Vite's `base: './'`, so it works at the origin root or under a path prefix.
+
+The build also emits `dist/sw.js`, a shell worker generated from `pwa/service-worker.js` by `pwa/build-worker.mjs`. It precaches `index.html`, the manifest, the icons, and every hashed script and stylesheet from the real bundle, so an installed app opens offline and the scripted preview still runs. It never intercepts `/api/*`, other origins, or non-GET requests; navigations are network first and fall back to the cached shell; hashed assets are cache first. The cache name hashes the template and the precache list, so each deploy purges the previous shell on activation. The worker registers only in production builds, and the server sends `Cache-Control: no-cache` for `index.html`, `sw.js`, and the manifest and `immutable` for hashed assets. The app shows an offline notice while `navigator.onLine` is false.
+
 ## Deploy (cloud server, not the visitor's device)
 
 Requires Node 22+. From this `web/` directory, a deployment service runs:
@@ -100,7 +106,7 @@ npm run test:server
 npm run build
 ```
 
-Tests use mocked upstream providers, not paid API calls. Coverage includes routing, attribution, native Cohere events, SSE parsing, partial/truncated responses, error handling, key precedence, server-credit authorization, SSRF restrictions, graph execution, retries and cancellation. Chromium checks also covered provider switching, opt-in key persistence/reload/removal, missing-key failure recovery and a 390-pixel responsive viewport. Real paid provider inference has **not** been tested without user credentials.
+Tests use mocked upstream providers, not paid API calls. `tests/pwa.test.ts` boots the generated shell worker against a fake cache and checks precaching, API bypass, cache-first assets, and the offline navigation fallback. Coverage also includes routing, attribution, native Cohere events, SSE parsing, partial/truncated responses, error handling, key precedence, server-credit authorization, SSRF restrictions, graph execution, retries and cancellation. Chromium checks also covered provider switching, opt-in key persistence/reload/removal, missing-key failure recovery and a 390-pixel responsive viewport. Real paid provider inference has **not** been tested without user credentials.
 
 ## Source and licenses
 

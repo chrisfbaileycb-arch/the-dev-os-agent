@@ -1,12 +1,13 @@
 import React, { useState } from "react";
 import { Helmet } from "react-helmet";
 import { toast } from "sonner";
-import { Check, FlaskConical, Globe2, LoaderCircle, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { Check, FlaskConical, Globe2, LoaderCircle, MonitorDown, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../components/Select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/Dialog";
 import { useConnection } from "../helpers/useConnection";
+import { useInstallPrompt } from "../helpers/useInstallPrompt";
 import { useRuns } from "../helpers/useRuns";
 import { providerCatalog } from "../helpers/providerCatalog";
 import { postModels } from "../endpoints/models_POST.schema";
@@ -16,6 +17,7 @@ import styles from "./settings.module.css";
 export default function SettingsPage() {
   const { connection, setConnection, switchProvider, persist, reset } = useConnection();
   const { clearWorkspace } = useRuns();
+  const { canInstall, installed, install } = useInstallPrompt();
   const [models, setModels] = useState<string[]>(providerCatalog[connection.provider].models);
   const [checking, setChecking] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -110,6 +112,16 @@ export default function SettingsPage() {
             <h3 className={styles.h3}>In this browser</h3><p className={styles.help}>Notes and run history live in IndexedDB on this device. Your browser can evict them; export important work. Provider keys are never stored.</p>
             <h3 className={styles.h3}>On your provider</h3><p className={styles.help}>Model inference. Each stage returns as one complete response; five stages make five calls, up to fifteen with retries.</p>
             <h3 className={styles.h3}>Not included</h3><p className={styles.help}>Shell execution, autonomous code changes, browsing, vector embeddings, and model hosting. Provider usage may cost money.</p>
+          </section>
+          <section className={styles.panel}>
+            <span className={styles.icon}><MonitorDown size={20} strokeWidth={1.75} /></span>
+            <h2 className={styles.h2}>Install on this device</h2>
+            <p className={styles.help}>On a Chromebook, or in Chrome on Windows, Mac, or Linux, this workspace can live on your shelf or dock and open in its own window. Nothing else to download; a connection is still needed.</p>
+            {installed
+              ? <p className={styles.help}>Installed. You are using the app window now.</p>
+              : canInstall
+                ? <Button variant="outline" onClick={() => void install()}><MonitorDown size={15} />Install app</Button>
+                : <p className={styles.help}>Your browser has not offered to install yet. In Chrome, use the install icon at the right end of the address bar, or choose Install from the browser menu.</p>}
           </section>
           <section className={`${styles.panel} ${styles.danger}`}>
             <h2 className={styles.h2}>Clear workspace</h2>
