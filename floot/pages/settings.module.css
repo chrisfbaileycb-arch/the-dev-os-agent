@@ -1,0 +1,23 @@
+.pageHeading { display: flex; flex-direction: column; gap: 0.25rem; }
+.eyebrow { font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted-foreground); font-weight: 500; }
+.h1 { margin: 0; font-family: var(--font-family-display); font-size: clamp(1.75rem, 3.5vw, 2.5rem); line-height: 1.05; letter-spacing: -0.02em; font-weight: 600; }
+.h2 { margin: 0; font-family: var(--font-family-display); font-size: 1.15rem; font-weight: 600; }
+.h3 { margin: var(--spacing-2) 0 0; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
+.lede { margin: 0; font-size: 0.95rem; color: var(--muted-foreground); }
+.layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: var(--spacing-4); align-items: start; }
+.column { display: flex; flex-direction: column; gap: var(--spacing-4); }
+.panel { display: flex; flex-direction: column; gap: var(--spacing-3); padding: var(--spacing-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+.danger { border-color: var(--error); }
+.help { margin: 0; font-size: 0.78rem; color: var(--muted-foreground); line-height: 1.5; }
+.field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; font-weight: 500; }
+.grow { flex: 1; }
+.row { display: flex; align-items: flex-end; gap: var(--spacing-2); }
+.modePicker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-2); }
+.mode { display: flex; flex-direction: column; align-items: flex-start; gap: 0.2rem; padding: var(--spacing-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--foreground); text-align: left; cursor: pointer; font-family: inherit; }
+.mode:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.mode small { font-size: 0.72rem; color: var(--muted-foreground); }
+.modeSelected { border-color: var(--accent); background: var(--accent-soft); }
+.icon { display: inline-flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } .modePicker { grid-template-columns: minmax(0, 1fr); } .row { flex-direction: column; align-items: stretch; } }

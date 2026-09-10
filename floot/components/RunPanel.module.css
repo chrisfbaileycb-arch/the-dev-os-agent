@@ -1,0 +1,29 @@
+.panel { display: flex; flex-direction: column; gap: var(--spacing-4); padding: var(--spacing-4); background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--spacing-3); flex-wrap: wrap; }
+.title { margin: 0; font-family: var(--font-family-display); font-size: 1.35rem; font-weight: 600; letter-spacing: -0.01em; }
+.subtitle { margin: 0.2rem 0 0; font-size: 0.85rem; color: var(--muted-foreground); }
+.num { font-family: var(--font-family-monospace); font-variant-numeric: tabular-nums; color: var(--foreground); }
+.actions { display: flex; align-items: center; gap: var(--spacing-2); }
+.rail { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--spacing-2); }
+.railItem { min-width: 0; }
+.step { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 0.2rem; padding: var(--spacing-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--foreground); text-align: left; cursor: pointer; font-family: inherit; transition: border-color var(--animation-duration-fast), background var(--animation-duration-fast); }
+.step:hover { border-color: var(--border-strong); }
+.step:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.stepSelected { border-color: var(--foreground); background: var(--card); }
+.step_running { border-color: var(--accent); background: var(--accent-soft); }
+.step_completed .stepNumber { background: var(--success); color: var(--success-foreground); }
+.step_failed .stepNumber { background: var(--error); color: var(--error-foreground); }
+.step_cancelled { opacity: 0.6; }
+.step_running .stepNumber { background: var(--accent); color: var(--accent-foreground); }
+.stepNumber { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border-radius: var(--radius); background: var(--muted); color: var(--muted-foreground); font-family: var(--font-family-monospace); font-size: 0.75rem; font-weight: 500; }
+.stepAgent { font-weight: 600; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.stepStatus { font-size: 0.72rem; color: var(--muted-foreground); }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.output { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.outputHeading { display: flex; align-items: center; gap: var(--spacing-2); padding: var(--spacing-2) var(--spacing-3); border-bottom: 1px solid var(--border); background: var(--surface); font-size: 0.85rem; }
+.pre { margin: 0; padding: var(--spacing-3); max-height: 28rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-family-monospace); font-size: 0.8rem; line-height: 1.55; background: var(--card); color: var(--foreground); }
+.footer { display: flex; flex-wrap: wrap; gap: var(--spacing-4); font-size: 0.78rem; color: var(--muted-foreground); padding-top: var(--spacing-2); border-top: 1px solid var(--border); }
+.help { margin: 0; font-size: 0.82rem; color: var(--error); }
+@media (max-width: 900px) { .rail { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .rail { grid-template-columns: minmax(0, 1fr); } .pre { max-height: 20rem; } }

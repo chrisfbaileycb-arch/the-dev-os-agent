@@ -1,0 +1,16 @@
+.pageHeading { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--spacing-3); flex-wrap: wrap; }
+.eyebrow { font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted-foreground); font-weight: 500; }
+.h1 { margin: 0.25rem 0 0; font-family: var(--font-family-display); font-size: clamp(1.75rem, 3.5vw, 2.5rem); line-height: 1.05; letter-spacing: -0.02em; font-weight: 600; }
+.h2 { margin: 0; font-family: var(--font-family-display); font-size: 1.25rem; font-weight: 600; }
+.lede { margin: 0.3rem 0 0; font-size: 0.95rem; color: var(--muted-foreground); }
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--spacing-2); }
+.skeleton { height: 4.25rem; border-radius: var(--radius-md); }
+.item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--spacing-3); padding: var(--spacing-3) var(--spacing-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); color: var(--foreground); text-decoration: none; transition: border-color var(--animation-duration-fast); }
+.item:hover { border-color: var(--border-strong); }
+.item:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.icon { display: inline-flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+.text { display: flex; flex-direction: column; min-width: 0; gap: 0.15rem; }
+.goal { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta { font-size: 0.75rem; color: var(--muted-foreground); font-family: var(--font-family-monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--spacing-3); padding: var(--spacing-16) var(--spacing-4); border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); color: var(--muted-foreground); min-height: 50vh; justify-content: center; }
+@media (max-width: 600px) { .item { grid-template-columns: minmax(0, 1fr) auto; } .icon { display: none; } .item svg:last-child { display: none; } }
