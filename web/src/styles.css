@@ -70,6 +70,11 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .chip-button, .chip-select { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 8px; font-size: 12px; background: var(--panel); position: relative; } .chip-button:hover { border-color: var(--accent); }
 .chip-select select { appearance: none; border: 0; background: transparent; padding-right: 14px; font-size: 12px; } .chip-select svg { position: absolute; right: 7px; pointer-events: none; }
 
+.photo-chip img { border-radius: 4px; object-fit: cover; }
+.chip-button.live { border-color: var(--accent); color: var(--accent-ink); } .chip-button em { font-style: normal; font-size: 10.5px; background: var(--accent); color: #fff; border-radius: 9px; padding: 0 5px; }
+.msg-photos { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; } .msg-photos img { max-height: 120px; max-width: 160px; border-radius: 6px; border: 1px solid var(--line); object-fit: cover; }
+.mcp-row .panel-head strong { font-weight: 600; } .mcp-row .panel-head small { color: var(--muted); }
+
 /* Status bar */
 .statusbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 26px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--panel); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
 .status-model { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink); } .status-model small { color: var(--muted); }

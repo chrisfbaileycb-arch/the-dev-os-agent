@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { createProxy, resolveTarget, normalizeModel, keyFor, publicAddress } from '../server/proxy.mjs';
+import { createProxy, resolveTarget, normalizeModel, keyFor, publicAddress, validContent } from '../server/proxy.mjs';
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
 async function withProxy(options, fn) { const handler = createProxy(options); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
 function stream(text, status = 200, type = 'text/event-stream') { const s = Readable.from([Buffer.from(text)]); s.statusCode = status; s.headers = { 'content-type': type }; return s; }
@@ -19,3 +19,13 @@ test('model discovery uses GET upstream and normalizes catalog', async () => { a
 test('validates messages and denies cross-origin browser requests', async () => { await withProxy({env:{},transport:async()=>{throw Error('must not call');}},async url=>{assert.equal((await post(url,{...base,messages:[{role:'admin',content:'x'}]})).status,400);assert.equal((await post(url,base,'/api/chat',{Origin:'https://evil.example'})).status,403);assert.equal((await post(url,{...base,max_tokens:99999})).status,400);}); });
 test('does not follow upstream redirects', async()=>{await withProxy({env:{},transport:async()=>stream('',302)},async url=>{assert.equal((await post(url,base)).status,502);});});
 test('rejects non-streaming upstream responses', async()=>{await withProxy({env:{},transport:async()=>stream('{}',200,'application/json')},async url=>{assert.equal((await post(url,base)).status,502);});});
+test('accepts text and bounded image parts, and refuses images for native Cohere', async () => {
+  const image = 'data:image/jpeg;base64,' + 'A'.repeat(400);
+  assert.equal(validContent('hello'), true); assert.equal(validContent([{ type: 'text', text: 'hi' }, { type: 'image_url', image_url: { url: image } }]), true);
+  assert.equal(validContent([{ type: 'image_url', image_url: { url: 'javascript:alert(1)' } }]), false); assert.equal(validContent([{ type: 'file', data: 'x' }]), false);
+  assert.equal(validContent(Array.from({ length: 6 }, () => ({ type: 'image_url', image_url: { url: image } }))), false);
+  await withProxy({ env:{}, transport:async (url, options) => { assert.ok(Array.isArray(JSON.parse(options.body).messages[0].content)); return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await post(url, { ...base, messages: [{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image_url', image_url: { url: image } }] }] })).status, 200);
+    assert.equal((await post(url, { ...base, provider: 'cohere', model: 'command-a-03-2025', messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: image } }] }] })).status, 400);
+  });
+});

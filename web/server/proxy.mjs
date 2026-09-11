@@ -40,6 +40,19 @@ export function keyFor(body, env = process.env) {
   if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
   return env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]] || '';
 }
+// Text content, or OpenAI-style parts: text plus up to five bounded data-URL or https images.
+export function validContent(content) {
+  if (typeof content === 'string') return content.length <= 150_000;
+  if (!Array.isArray(content) || !content.length || content.length > 8) return false;
+  let images = 0;
+  for (const part of content) {
+    if (!part || typeof part !== 'object') return false;
+    if (part.type === 'text') { if (typeof part.text !== 'string' || part.text.length > 150_000) return false; continue; }
+    if (part.type === 'image_url') { const url = part.image_url?.url; if (typeof url !== 'string' || !(/^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(url) && url.length <= 3_000_000) && !(/^https:\/\//.test(url) && url.length <= 2000)) return false; if (++images > 5) return false; continue; }
+    return false;
+  }
+  return true;
+}
 export function errorMessage(status) {
   return status === 401 || status === 403 ? 'Invalid API key or insufficient provider permissions.' : status === 429 ? 'Provider rate limit reached. Wait and retry.' : status === 404 ? 'Provider endpoint or model was not found.' : status >= 500 ? 'Provider is temporarily unavailable.' : 'Provider rejected the request. Check the model and request settings.';
 }
@@ -51,9 +64,9 @@ export function upstream(url, { method = 'POST', headers, body, signal, address 
     request.on('error', reject); if (body) request.write(body); request.end();
   });
 }
-async function readBody(req) {
+async function readBody(req, limit = 256_000) {
   let size = 0; const chunks = [];
-  for await (const chunk of req) { size += chunk.length; if (size > 256_000) throw new HttpError(413, 'Request is too large.'); chunks.push(chunk); }
+  for await (const chunk of req) { size += chunk.length; if (size > limit) throw new HttpError(413, 'Request is too large.'); chunks.push(chunk); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'Invalid JSON body.'); }
 }
 function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(data)); }
@@ -75,7 +88,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       for (const [k,v] of windows) if (now - v.start > 60_000) windows.delete(k);
       const window = windows.get(ip) || { start: now, count: 0 }; window.count++; windows.set(ip, window);
       if (window.count > 60) throw new HttpError(429, 'Proxy request limit reached. Wait one minute.');
-      const body = await readBody(req);
+      const body = await readBody(req, path === '/api/chat' ? 12_000_000 : 256_000);
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Expected an object.');
       const target = await resolveTarget(body.provider, body.baseUrl, env, resolve);
       const apiKey = keyFor(body, env);
@@ -84,7 +97,8 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (body.provider === 'openrouter') { headers['HTTP-Referer'] = env.APP_ORIGIN || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
       let payload; let suffix;
       if (path === '/api/chat') {
-        if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || typeof m.content !== 'string' || m.content.length > 150_000)) throw new HttpError(400, 'messages must contain standard role/content text pairs.');
+        if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || !validContent(m.content))) throw new HttpError(400, 'messages must contain standard role/content text pairs, optionally with up to five image parts.');
+        if (target.nativeCohere && body.messages.some(m => Array.isArray(m.content))) throw new HttpError(400, 'Cohere native chat does not accept images here. Choose a vision model on OpenRouter or Groq.');
         const max = body.max_tokens ?? 1024;
         if (!Number.isInteger(max) || max < 1 || max > 4096) throw new HttpError(400, 'max_tokens must be 1–4096.');
         payload = JSON.stringify({ model: normalizeModel(body.provider, body.model), messages: body.messages, stream: true, max_tokens: max, ...(!target.nativeCohere && body.provider !== 'custom' ? { stream_options: { include_usage: true } } : {}) });

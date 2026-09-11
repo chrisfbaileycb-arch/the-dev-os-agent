@@ -7,10 +7,11 @@ import { createProxy } from './proxy.mjs';
 import { openDatabase } from './db.mjs';
 import { createState } from './state.mjs';
 import { createBrowse } from './browse.mjs';
+import { createMcp } from './mcp.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 const dataFile = process.env.DATA_FILE || resolve(process.cwd(), process.env.DATA_DIR || 'data', 'heybuddy.sqlite');
 const db = openDatabase(dataFile);
-const handlers = [createProxy(), createState({ db }), createBrowse()];
+const handlers = [createProxy(), createState({ db }), createBrowse(), createMcp()];
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png' };
 // Hashed assets are immutable; the shell, the manifest, and the service worker must revalidate so a new build reaches installed apps.
 const cacheControl = (file) => file.startsWith(root + 'assets' + sep) ? 'public, max-age=31536000, immutable' : 'no-cache';

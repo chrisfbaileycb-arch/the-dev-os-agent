@@ -6,12 +6,13 @@ Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio. Origi
 
 ## What is in the box
 
-- **Workspace.** Sessions on the left, one chat canvas, a floating prompt dock with file drag-and-drop, paste-to-attach, a voice toggle (Web Speech API where the browser has it), and live token counters. Enter sends; Shift+Enter breaks a line.
+- **Workspace.** Sessions on the left, one chat canvas, a floating prompt dock with file and photo attachments (drag, paste, or the two attach buttons), a voice toggle (Web Speech API where the browser has it), an MCP button, and live token counters. Enter sends; Shift+Enter breaks a line. Photos are resized in the browser (1280 px, JPEG) and sent as image parts to a vision model; a small thumbnail stays in the session.
 - **Agent roster.** Operational Executive, Financial Auditor, Content and Reputation Specialist, and the Browser Agent lead a chat. Dispatcher, Researcher, Architect, Reviewer, and Scribe run the workflows *Plan it*, *Look into it*, and *Check my work* as a five-stage dependency graph on browser-adapted Ruflo entities, in the lead agent's focus. Every prompt starts with the same safety baseline (`src/lib/roster.ts`).
 - **Knowledge hub.** Notes and imported text files in IndexedDB, retrieved by keyword and attached to messages and runs. Never sent to the server store.
 - **Model hub.** A curated catalog (`src/lib/catalog.ts`): free and instant models on Groq and OpenRouter's free pool, pro and reasoning models through OpenRouter, plus any model ID or an approved custom OpenAI-compatible endpoint. Two ways to pay: bring your own key (optionally remembered in this browser, never charged) or platform credits (the deployment's model pool behind an access token, metered by model weight).
 - **Credit ledger.** Every request is logged with tokens and credits: fast models 0.5 credits per 1K tokens, standard 3, reasoning 15; BYOK and the scripted preview log at zero. The status bar shows the model, tier, payment mode, time to first token, output speed, remaining credits, and sync state.
 - **Browser Agent.** `POST /api/browse` opens one public page in headless Chromium and returns title, description, canonical, robots, headings, social tags, visible text, and links. Guardrails: an explicit host allowlist (`BROWSE_ALLOWED_HOSTS`), public IPv4 only (re-checked on every request the page makes), no downloads or credentials, timeouts, and a per-workspace hourly budget. The agent asks for it with a single `TOOL {...}` line; at most three calls per message.
+- **MCP servers.** The MCP button in the dock connects remote Model Context Protocol servers over Streamable HTTP (name, https URL, optional bearer token). `POST /api/mcp` runs the initialize handshake, keeps the session id, and forwards `tools/list` and `tools/call`; every tool on an enabled server becomes a chat tool named `<server>.<tool>` with a trace under the reply. Guardrails: https and public hosts only, no redirects, bounded responses, `MCP_MAX_PER_HOUR` per workspace. Tokens stay in memory unless remembered.
 - **Persistence.** Sessions, runs, and the ledger are saved in IndexedDB and mirrored to SQLite on the server (`server/db.mjs`, Node's built-in `node:sqlite`) under an anonymous workspace id the browser mints. A refresh, a reinstall, or a cleared cache keeps history and balances as long as the id survives in localStorage; there are no accounts.
 - **Installable.** Web app manifest, Hey Buddy's icon set, an Install button in Settings, and a shell service worker generated at build time so an installed app opens offline (the scripted preview keeps working; hosted models need a connection).
 
@@ -46,6 +47,7 @@ See `.env.example`.
 | `CREDIT_MONTHLY_POOL` | Platform credits per workspace per calendar month (default 100,000). |
 | `BROWSE_ALLOWED_HOSTS` | Hosts the sandbox browser may open. Empty disables it; `*` allows any public host. |
 | `BROWSE_MAX_PER_HOUR` | Per-workspace page budget (default 30). |
+| `MCP_MAX_PER_HOUR` | Per-workspace budget for MCP calls (default 120). |
 | `CUSTOM_API_ORIGINS`, `OLLAMA_BRIDGE_URL` | Approved custom endpoints and an administrator bridge to a home model server. |
 | `SERVER_CREDIT_ACCESS_TOKEN`, `*_API_KEY` | Server keys used only for requests carrying the access token (platform credits). |
 
@@ -54,6 +56,8 @@ See `.env.example`.
 - `POST /api/chat` streams SSE from OpenRouter, Groq, Cohere, or an approved custom endpoint; `POST /api/models` lists models; `GET /api/providers` reports the bridge. Unchanged from the FreeToken edition; see `server/proxy.mjs`.
 - `GET /api/state` returns the workspace's sessions, runs, ledger, and pool; `POST /api/state` upserts them; `POST /api/state/clear` deletes. Requires `X-Workspace-Id`.
 - `POST /api/browse` with `{ "url": "https://..." }` returns a page report or a 4xx/5xx with a plain message.
+- `POST /api/mcp` with `{ "url", "method": "tools/list" | "tools/call", "params", "authorization"? }` forwards one JSON-RPC call to a remote MCP server and returns its `result`.
+- `/api/chat` messages may carry OpenAI-style content parts: text plus up to five bounded `image_url` parts (data URLs or https). Native Cohere refuses image parts.
 
 ## Security and privacy
 
@@ -67,6 +71,6 @@ See `.env.example`.
 
 ```sh
 npm test            # catalog weights, ledger and merge, roster, tool protocol, chat tool loop, orchestrator, streaming, shell worker
-npm run test:server # proxy routing and SSRF, SQLite state routes, browse allowlist and a real Chromium inspection of a fixture page
+npm run test:server # proxy routing, SSRF, image parts, SQLite state routes, browse allowlist and a real Chromium inspection, MCP handshake against a fake server
 npm run build
 ```

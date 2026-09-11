@@ -38,10 +38,11 @@ async function checkResponse(response: Response): Promise<void> {
   try { const data = await response.json(); if (typeof data?.error?.message === 'string') message = data.error.message.slice(0, 400); } catch { /* no JSON error body */ }
   throw new ProviderError(message, response.status === 429 || response.status >= 500, response.status);
 }
-export async function complete(c: Connection, system: string, prompt: string, signal: AbortSignal, onDelta?: (text: string) => void): Promise<Completion> {
+export async function complete(c: Connection, system: string, prompt: string, signal: AbortSignal, onDelta?: (text: string) => void, images: string[] = []): Promise<Completion> {
+  const userContent = images.length ? [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))] : prompt;
   validateConnection(c); signal.throwIfAborted(); const timeout = AbortSignal.timeout(125_000);
   try {
-    const response = await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...requestBody(c), model: c.model, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }], max_tokens: c.maxTokens }) });
+    const response = await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...requestBody(c), model: c.model, messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], max_tokens: c.maxTokens }) });
     await checkResponse(response);
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new ProviderError('Expected a streaming SSE response from /api/chat.');
     let text = ''; let tokens = 0; let finished = false;

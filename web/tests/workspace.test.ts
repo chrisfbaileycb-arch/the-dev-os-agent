@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CREDIT_WEIGHTS, creditsFor, estimateTokens, tierFor, weightFor } from '../src/lib/catalog';
 import { computeBalance, makeEntry, merge, type LedgerEntry, type Session } from '../src/lib/store';
 import { SAFETY_BASELINE, composePrompt, personaById, personas, skills } from '../src/lib/roster';
-import { parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
+import { inspectPageSpec, parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
+import { mcpToolSpecs, slug, type McpConnection } from '../src/lib/mcp';
 import { chatTurn } from '../src/lib/chat';
 import { defaultConnection } from '../src/lib/providers';
 
@@ -53,10 +54,18 @@ describe('roster', () => {
     expect(personaById('nope').id).toBe('operator'); expect(personaById('browser').tools).toEqual(['inspect_page']);
   });
   it('parses only the documented tool call shape', () => {
-    expect(parseToolCall('TOOL {"tool":"inspect_page","url":"https://a.example"}\n')).toEqual({ tool: 'inspect_page', args: { url: 'https://a.example' } });
-    expect(parseToolCall('Sure. TOOL {"tool":"inspect_page","url":"x"}')).toBeNull(); expect(parseToolCall('TOOL {"tool":"delete_everything"}')).toBeNull(); expect(parseToolCall('TOOL not json')).toBeNull();
-    expect(toolProtocol(['inspect_page'])).toContain('inspect_page');
+    const specs = [inspectPageSpec];
+    expect(parseToolCall('TOOL {"tool":"inspect_page","url":"https://a.example"}\n', specs)).toEqual({ tool: 'inspect_page', args: { url: 'https://a.example' } });
+    expect(parseToolCall('TOOL {"tool":"inspect_page","args":{"url":"https://b.example"}}', specs)).toEqual({ tool: 'inspect_page', args: { url: 'https://b.example' } });
+    expect(parseToolCall('Sure. TOOL {"tool":"inspect_page","url":"x"}', specs)).toBeNull(); expect(parseToolCall('TOOL {"tool":"delete_everything"}', specs)).toBeNull(); expect(parseToolCall('TOOL not json', specs)).toBeNull();
+    expect(toolProtocol(specs)).toContain('inspect_page');
     expect(summarizeReport({ url: 'u', status: 200, title: 't', description: 'd', canonical: '', robots: '', lang: 'en', h1: ['H'], headingCount: 1, og: { 'og:title': 'x' }, wordCount: 3, text: 'a b c', links: [{ href: 'h', text: '' }], elapsedMs: 5 })).toContain('(no text) -> h');
+  });
+  it('turns enabled MCP connections into named chat tools', () => {
+    const conn: McpConnection = { id: 'c1', name: 'Shop Orders', url: 'https://mcp.example/orders', token: '', saveToken: false, enabled: true, tools: [{ name: 'lookup_order', description: 'Find an order', inputSchema: { properties: { number: { type: 'string' } }, required: ['number'] } }] };
+    const specs = mcpToolSpecs([conn, { ...conn, id: 'c2', enabled: false }]);
+    expect(slug('Shop Orders')).toBe('shop_orders'); expect(specs).toHaveLength(1); expect(specs[0].name).toBe('shop_orders.lookup_order'); expect(specs[0].description).toContain('"number": string');
+    expect(parseToolCall('TOOL {"tool":"shop_orders.lookup_order","args":{"number":"42"}}', specs)?.args).toEqual({ number: '42' });
   });
 });
 

@@ -6,6 +6,7 @@ import RunCard from './ui/RunCard';
 import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
+import McpPanel from './ui/Mcp';
 import StatusBar, { type Stats } from './ui/StatusBar';
 import { iconFor } from './ui/icons';
 import { chatTurn } from './lib/chat';
@@ -16,6 +17,8 @@ import { clearProviderStorage, forgetKeys, initialProvider, persistConnection } 
 import { defaultPersonaId, personaById, workflows } from './lib/roster';
 import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, storage, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { useInstallAvailable, useOnline } from './pwa';
+import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
+import { clearConnections, enabledToolCount, loadConnections, mcpToolSpecs, saveConnections, type McpConnection } from './lib/mcp';
 import type { Connection, Knowledge, Run, WorkerEvent } from './lib/types';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
@@ -53,6 +56,8 @@ export default function App() {
   const [draft, setDraft] = useState(''); const [mode, setMode] = useState<RunMode>('chat'); const [attachments, setAttachments] = useState<Attached[]>([]);
   const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false); const [notice, setNotice] = useState('');
   const [rosterOpen, setRosterOpen] = useState(false); const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
+  const [photos, setPhotos] = useState<Photo[]>([]); const [mcpOpen, setMcpOpen] = useState(false); const [connections, setConnectionsState] = useState<McpConnection[]>(loadConnections);
+  const setConnections = (list: McpConnection[]) => { saveConnections(list); setConnectionsState(list); };
   const [stats, setStats] = useState<Stats | null>(null); const [listening, setListening] = useState(false);
   const abortRef = useRef<AbortController | null>(null); const worker = useRef<Worker | null>(null); const recognition = useRef<Recognition | null>(null);
   const approvedRuns = useRef(false); const endRef = useRef<HTMLDivElement>(null);
@@ -62,7 +67,7 @@ export default function App() {
   const modelLabel = connection.mode === 'demo' ? 'Scripted preview' : (findModel(connection.model)?.label ?? connection.model ?? 'No model');
   const tierLabel = connection.mode === 'demo' ? 'no model' : tierFor(connection.model || '');
   const payLabel = connection.mode === 'demo' ? 'free' : connection.inference === 'credits' ? 'platform credits' : 'your key';
-  const tokens = useMemo(() => ({ draft: estimateTokens(draft), context: attachments.reduce((n, a) => n + estimateTokens(a.content), 0) + retrieve(draft, knowledge).reduce((n, d) => n + estimateTokens(d.content.slice(0, 6000)), 0) }), [draft, attachments, knowledge]);
+  const tokens = useMemo(() => ({ draft: estimateTokens(draft), context: attachments.reduce((n, a) => n + estimateTokens(a.content), 0) + photos.reduce((n, ph) => n + photoTokens(ph), 0) + retrieve(draft, knowledge).reduce((n, d) => n + estimateTokens(d.content.slice(0, 6000)), 0) }), [draft, attachments, photos, knowledge]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -99,9 +104,10 @@ export default function App() {
     return null;
   }
   async function addFiles(files: File[]) {
-    const added: Attached[] = [];
-    for (const f of files.slice(0, 5)) { try { added.push(await readTextFile(f)); } catch (e) { setNotice(errorText(e)); } }
-    setAttachments(a => [...a.filter(x => !added.some(n => n.name === x.name)), ...added].slice(0, 5));
+    const added: Attached[] = []; const addedPhotos: Photo[] = [];
+    for (const f of files.slice(0, 8)) { try { if (isImageFile(f)) addedPhotos.push(await readPhoto(f)); else added.push(await readTextFile(f)); } catch (e) { setNotice(errorText(e)); } }
+    if (added.length) setAttachments(a => [...a.filter(x => !added.some(n => n.name === x.name)), ...added].slice(0, 5));
+    if (addedPhotos.length) setPhotos(ps => { const next = [...ps.filter(x => !addedPhotos.some(n => n.name === x.name)), ...addedPhotos]; if (next.length > 4) setNotice('Up to four photos per message.'); return next.slice(0, 4); });
   }
   function toggleVoice() {
     if (listening) { recognition.current?.stop(); return; }
@@ -114,19 +120,20 @@ export default function App() {
   function send() {
     const text = draft.trim(); if (!text || busy || !ready) return;
     const problem = preflight(); if (problem) { setNotice(problem); return; }
+    if (mode !== 'chat' && photos.length) { setNotice('Photos go with chat messages. Workflows work from text; remove the photo or switch to Chat.'); return; }
     if (mode !== 'chat' && connection.mode === 'remote' && !approvedRuns.current) { setConfirm('run'); return; }
-    const session = ensureSession(); const files = attachments;
-    const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, at: now(), attachments: files.map(a => ({ name: a.name, chars: a.content.length })) };
+    const session = ensureSession(); const files = attachments; const shots = photos;
+    const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, at: now(), attachments: files.map(a => ({ name: a.name, chars: a.content.length })), photos: shots.map(ph => ({ name: ph.name, thumb: ph.thumb })) };
     const title = session.messages.length ? session.title : text.replace(/\s+/g, ' ').slice(0, 60);
-    setDraft(''); setAttachments([]); setNotice(''); setBusy(true); setPage('workspace');
-    if (mode === 'chat') void runChat(session, user, text, files, title); else startWorkflow(session, user, text, files, title, mode);
+    setDraft(''); setAttachments([]); setPhotos([]); setNotice(''); setBusy(true); setPage('workspace');
+    if (mode === 'chat') void runChat(session, user, text, files, shots, title); else startWorkflow(session, user, text, files, title, mode);
   }
-  async function runChat(session: Session, user: ChatMessage, text: string, files: Attached[], title: string) {
+  async function runChat(session: Session, user: ChatMessage, text: string, files: Attached[], shots: Photo[], title: string) {
     const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: persona.name, model: modelLabel };
     patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
     const controller = new AbortController(); abortRef.current = controller; const traces: ChatMessage['tools'] = [];
     try {
-      const result = await chatTurn({ connection: requestConnection(connection), personaId: persona.id, history: session.messages, input: text, attachments: files, knowledge, signal: controller.signal, onDelta: t => patchMessage(session.id, reply.id, { content: t }), onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); } });
+      const result = await chatTurn({ connection: requestConnection(connection), personaId: persona.id, history: session.messages, input: text, attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })), tools: mcpToolSpecs(connections), knowledge, signal: controller.signal, onDelta: t => patchMessage(session.id, reply.id, { content: t }), onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); } });
       patchMessage(session.id, reply.id, { content: result.text, tokens: result.tokens, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools }, true);
       setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens: result.tokens });
       await charge(session.id, result.tokens);
@@ -157,7 +164,7 @@ export default function App() {
   async function discover() { setChecking(true); try { const ids = await listModels(requestConnection(connection), new AbortController().signal); setModels(ids); if (ids.length && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
   function saveSettings() { try { if (connection.mode === 'remote') validateConnection(connection); persistConnection(connection); setNotice(connection.saveKey && connection.inference !== 'credits' ? 'Connection saved, including your key in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.'); } catch (e) { setNotice(errorText(e)); } }
   function forget() { try { forgetKeys(); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
-  async function clearAll() { setConfirm(null); try { await clearWorkspaceData(); localStorage.removeItem('hb-rail'); clearProviderStorage(); commitSessions([]); runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null); setBalance(b => computeBalance([], b.pool, b.source)); setConnection(initialConnection); setNotice('Workspace cleared here and on the server.'); } catch (e) { setNotice(errorText(e)); } }
+  async function clearAll() { setConfirm(null); try { await clearWorkspaceData(); localStorage.removeItem('hb-rail'); clearProviderStorage(); clearConnections(); setConnectionsState([]); setPhotos([]); commitSessions([]); runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null); setBalance(b => computeBalance([], b.pool, b.source)); setConnection(initialConnection); setNotice('Workspace cleared here and on the server.'); } catch (e) { setNotice(errorText(e)); } }
   function toggleRail() { setCollapsed(c => { try { localStorage.setItem('hb-rail', c ? 'expanded' : 'collapsed'); } catch { /* storage unavailable */ } return !c; }); }
   function download(name: string, body: string) { const url = URL.createObjectURL(new Blob([body], { type: 'text/markdown' })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 
@@ -181,17 +188,17 @@ export default function App() {
             <div className="messages">
               {!active?.messages.length && <div className="starter"><h1>Your AI crew. Always in your corner.</h1><p>Pick an agent, say what you need, and drop in a file if it helps. Nothing leaves this device until you send a message, and only to the model you chose.</p><div className="starter-grid">{starters.map(s => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={s.persona} className="starter-card" onClick={() => { choosePersona(s.persona); setMode(s.mode); setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div></div>}
               {active?.messages.map(m => {
-                if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}</div><pre className="msg-body">{m.content}</pre></article>;
+                if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}</div>{m.photos && m.photos.length > 0 && <div className="msg-photos">{m.photos.map(ph => <img key={ph.name} src={ph.thumb} alt={ph.name} title={ph.name} />)}</div>}<pre className="msg-body">{m.content}</pre></article>;
                 const run = m.runId ? runs.find(r => r.id === m.runId) : undefined;
                 return <article key={m.id} className="msg agent"><div className="msg-meta"><strong>{m.persona ?? 'Agent'}</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.model && <em>{m.model}</em>}{m.tokens ? <em>{m.tokens.toLocaleString()} tok</em> : null}{m.latencyMs ? <em>{m.latencyMs} ms</em> : null}</div>
                   {run ? <RunCard run={run} /> : <pre className="msg-body">{m.content || (busy && !m.error ? 'Working…' : '')}</pre>}
-                  {m.tools?.map((t, i) => <div key={i} className={t.ok ? 'tool-trace' : 'tool-trace failed'}><Wrench size={11} /><code>{t.tool} {t.args.url}</code><span>{t.summary}</span></div>)}
+                  {m.tools?.map((t, i) => { const args = JSON.stringify(t.args); return <div key={i} className={t.ok ? 'tool-trace' : 'tool-trace failed'}><Wrench size={11} /><code>{t.tool} {args.length > 60 ? `${args.slice(0, 57)}...` : args}</code><span>{t.summary}</span></div>; })}
                   {m.error && <p className="msg-error"><CircleAlert size={12} />{m.error}</p>}
                 </article>;
               })}
               <div ref={endRef} />
             </div>
-            <Dock draft={draft} setDraft={setDraft} mode={mode} setMode={setMode} persona={persona} openRoster={() => setRosterOpen(true)} attachments={attachments} addFiles={f => void addFiles(f)} removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))} busy={busy} ready={ready} send={send} stop={stop} listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice} tokens={tokens} />
+            <Dock draft={draft} setDraft={setDraft} mode={mode} setMode={setMode} persona={persona} openRoster={() => setRosterOpen(true)} attachments={attachments} photos={photos} addFiles={f => void addFiles(f)} removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))} removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))} openMcp={() => setMcpOpen(true)} mcpTools={enabledToolCount(connections)} busy={busy} ready={ready} send={send} stop={stop} listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice} tokens={tokens} />
           </section>
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>Business agents lead a chat and set the focus for a workflow. Work skills run the stages. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} /></div>}
@@ -201,6 +208,7 @@ export default function App() {
       <StatusBar model={modelLabel} tier={tierLabel} mode={payLabel} stats={stats} balance={balance} busy={busy} online={online} synced={serverReachable} />
     </div>
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} />
+    <McpPanel open={mcpOpen} close={() => setMcpOpen(false)} connections={connections} setConnections={setConnections} notify={setNotice} />
     {confirm && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
       <h2 id="confirm-title">{confirm === 'run' ? 'Send workflows to your provider?' : 'Clear this workspace?'}</h2>
       {confirm === 'run' ? <p>A workflow makes five requests, up to ten with retries, each capped at {connection.maxTokens.toLocaleString()} output tokens, through this app's proxy to {connection.provider === 'custom' ? connection.endpoint : connection.provider}. {connection.inference === 'credits' ? 'Credits are drawn from the monthly allowance.' : 'Your provider bills your key.'} Chat messages do not ask again this session.</p> : <p>This removes sessions, runs, the ledger, notes, and saved connection details from this browser and from the server copy. Export anything you want to keep first.</p>}

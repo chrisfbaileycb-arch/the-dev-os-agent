@@ -6,8 +6,8 @@ import { creditsFor, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tie
 // survive a refresh, a reinstall, or a cleared cache. Knowledge notes stay local only.
 
 export interface Attachment { name: string; chars: number; }
-export interface ToolTrace { tool: string; args: Record<string, string>; summary: string; ok: boolean; }
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; at: string; persona?: string; model?: string; tokens?: number; latencyMs?: number; tokensPerSecond?: number; tools?: ToolTrace[]; runId?: string; attachments?: Attachment[]; error?: string; }
+export interface ToolTrace { tool: string; args: Record<string, unknown>; summary: string; ok: boolean; }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; at: string; persona?: string; model?: string; tokens?: number; latencyMs?: number; tokensPerSecond?: number; tools?: ToolTrace[]; runId?: string; attachments?: Attachment[]; photos?: { name: string; thumb: string }[]; error?: string; }
 export interface Session { id: string; title: string; persona: string; createdAt: string; updatedAt: string; messages: ChatMessage[]; }
 export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode | 'demo'; tokens: number; credits: number; }
 export interface Balance { pool: number; used: number; remaining: number; month: string; source: 'server' | 'local'; }
