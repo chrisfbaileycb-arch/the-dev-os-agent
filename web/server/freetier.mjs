@@ -51,6 +51,10 @@ export function xkiroBase(env = process.env) {
   } catch { return XKIRO_DEFAULT_BASE; }
 }
 
+// What the gateway offers, which is not the same as what this deployment funds: deepseek-r1 is
+// a reasoning model, so FRONTIER drops it from the funded pool and it is reachable on a key
+// instead. A deployment whose xKiro plan covers it sets FREE_TIER_ALLOW_FRONTIER=true and this
+// list is then taken as written.
 const XKIRO_DEFAULT_POOL = [
   'deepseek/deepseek-chat',
   'deepseek/deepseek-r1',
@@ -66,15 +70,43 @@ export function xkiroPool(env = process.env) {
   return configured.length ? configured : XKIRO_DEFAULT_POOL;
 }
 
-/** Exact model ids a visitor may run without a key, with the provider that funds each. */
+/**
+ * Frontier models, which this deployment never funds from its own key.
+ *
+ * The zero-config tier exists so a stranger can type one sentence and get an answer. It is paid
+ * for out of the operator's pocket, at a flat rate, by anyone who finds the URL — so what it
+ * offers has to be cheap per token and bounded in output. A reasoning or flagship model is
+ * neither: an extended chain of thought can cost fifty times a short chat completion for the
+ * same visible answer, and the credit ledger here meters both at FREE_WEIGHT. One afternoon of
+ * traffic on those models drains a month of allowance.
+ *
+ * So they stay behind a key the visitor brings. That is not a downgrade of the product — the
+ * models are all still in the dropdown and all still one paste away — it is the difference
+ * between the operator paying for a stranger's reasoning run and the stranger paying for it.
+ *
+ * This matches on the id, not on a curated list, because the ids come from gateways whose
+ * catalogues change without asking us. A pattern still covers a model added tomorrow.
+ */
+export const FRONTIER = /claude|opus|sonnet|gpt-[45]|(^|[/_.-])o[134](?![0-9a-z])|(^|[/_.-])r1(?![0-9a-z])|grok|gemini-[0-9.]*-(pro|ultra)|reason|thinking/i;
+export const isFrontier = id => typeof id === 'string' && FRONTIER.test(id);
+
+/**
+ * Exact model ids a visitor may run without a key, with the provider that funds each.
+ *
+ * Frontier ids are dropped, including from an operator's own XKIRO_FREE_MODELS: pasting a
+ * gateway's full catalogue into that variable is the likeliest way to open the pool by
+ * accident, and the cost of that mistake lands on the operator, not on whoever made it. An
+ * operator who does mean it sets FREE_TIER_ALLOW_FRONTIER=true and gets the list they asked for.
+ */
 export function freeModels(env = process.env) {
-  return [
+  const all = [
     { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', envKey: 'GROQ_API_KEY' },
     { id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' },
     { id: 'openrouter/auto', provider: 'openrouter', envKey: 'OPENROUTER_API_KEY', pool: OPENROUTER_FREE_POOL },
     ...OPENROUTER_FREE_POOL.map(id => ({ id, provider: 'openrouter', envKey: 'OPENROUTER_API_KEY' })),
     ...xkiroPool(env).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
   ];
+  return env.FREE_TIER_ALLOW_FRONTIER === 'true' ? all : all.filter(m => !isFrontier(m.id));
 }
 
 /** The static list, for callers that only need the shape (tests, the catalog parity check). */
@@ -102,6 +134,10 @@ export function freeTierStatus(env = process.env) {
   return {
     enabled: funded.length > 0,
     models: funded.map(m => m.id),
+    // Which provider funds each id. The browser used to infer this from the id prefix, which
+    // sent every non-Groq free model to the OpenRouter endpoint the moment a visitor added
+    // their own key. The server already knows; saying so costs one field.
+    providers: Object.fromEntries(funded.map(m => [m.id, m.provider])),
     monthlyCredits: monthlyPool(env),
     perHour: burstLimit(env),
     weight: FREE_WEIGHT,

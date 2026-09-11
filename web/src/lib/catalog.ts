@@ -31,11 +31,11 @@ export const catalog: CatalogModel[] = [
   { id: 'meta-llama/llama-3.2-3b-instruct:free', provider: 'openrouter', label: 'Llama 3.2 3B (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
   { id: 'mistralai/mistral-nemo:free', provider: 'openrouter', label: 'Mistral Nemo (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
   { id: 'qwen/qwen-2.5-72b-instruct:free', provider: 'openrouter', label: 'Qwen 2.5 72B (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
-  // xKiro gateway seed. These mirror XKIRO_DEFAULT_POOL in server/freetier.mjs; a deployment
-  // that sets XKIRO_FREE_MODELS gets those ids instead, and the dropdown picks them up from
-  // /api/providers without needing an entry here.
+  // xKiro gateway seed. These mirror XKIRO_DEFAULT_POOL in server/freetier.mjs minus the ids
+  // its FRONTIER guard refuses to fund — DeepSeek R1 is in the gateway's pool and is listed
+  // below as a key-only model for that reason. A deployment that sets XKIRO_FREE_MODELS gets
+  // those ids instead, and the dropdown picks them up from /api/providers without an entry here.
   { id: 'deepseek/deepseek-chat', provider: 'xkiro', label: 'DeepSeek Chat', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'General chat through the xKiro gateway.' },
-  { id: 'deepseek/deepseek-r1', provider: 'xkiro', label: 'DeepSeek R1', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Reasoning model; thorough, and spends the free allowance faster.' },
   { id: 'z-ai/glm-5.2', provider: 'xkiro', label: 'GLM 5.2', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Strong all-rounder through the xKiro gateway.' },
   { id: 'z-ai/glm-5.3-flash', provider: 'xkiro', label: 'GLM 5.3 Flash', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Quickest of the GLM line; good for short questions.' },
   { id: 'qwen/qwen-2.5-72b-instruct', provider: 'xkiro', label: 'Qwen 2.5 72B', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Broad general knowledge; strong at structured output.' },
@@ -57,11 +57,11 @@ export function findModel(id: string): CatalogModel | undefined { return catalog
 /**
  * Credit weight per 1K tokens; catalog first, then a conservative guess from the model name.
  *
- * One id can appear more than once — a gateway may offer free what another provider bills for,
- * as xKiro and OpenRouter both do with DeepSeek R1 — so this takes the HIGHEST weight of the
- * matching entries. Picking the first match instead would let a free listing silently
- * under-charge the platform credit pool for the paid route. The free tier never consults this:
- * it meters at its own flat FREE_WEIGHT on the server.
+ * One id can appear more than once — a gateway may offer cheaply what another provider bills
+ * for, which is how DeepSeek R1 reached this catalog twice — so this takes the HIGHEST weight
+ * of the matching entries. Picking the first match instead would let a cheap listing silently
+ * under-charge the platform credit pool for the expensive route. The free tier never consults
+ * this: it meters at its own flat FREE_WEIGHT on the server.
  */
 export function weightFor(model: string): number {
   const hits = catalog.filter(m => bare(m.id) === bare(model));

@@ -12,7 +12,7 @@ export interface Session { id: string; title: string; persona: string; createdAt
 export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode | 'demo'; tokens: number; credits: number; }
 export interface Balance { pool: number; used: number; remaining: number; month: string; source: 'server' | 'local'; }
 /** What the deployment will fund for a visitor with no key. Read from /api/providers and /api/state. */
-export interface FreeTier { enabled: boolean; models: string[]; monthlyCredits: number; perHour: number; }
+export interface FreeTier { enabled: boolean; models: string[]; providers: Record<string, string>; monthlyCredits: number; perHour: number; }
 export interface Workspace { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; knowledge: Knowledge[]; balance: Balance; freeBalance: Balance; serverReachable: boolean; }
 
 // Kept at the original name on purpose: renaming the database would orphan the sessions,

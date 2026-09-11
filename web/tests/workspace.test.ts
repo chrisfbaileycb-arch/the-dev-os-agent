@@ -40,7 +40,7 @@ describe('ledger and workspace merge', () => {
   it('merges by newest session and unions runs and ledger, reporting what to push', () => {
     const s = (id: string, updatedAt: string, title: string): Session => ({ id, title, persona: 'operator', createdAt: updatedAt, updatedAt, messages: [] });
     const local = { sessions: [s('a', '2026-09-10T02:00:00.000Z', 'local newer'), s('c', '2026-09-10T01:00:00.000Z', 'local only')], runs: [], ledger: [entry({ id: 'l1' })] };
-    const server = { sessions: [s('a', '2026-09-10T01:00:00.000Z', 'server older'), s('b', '2026-09-10T01:00:00.000Z', 'server only')], runs: [], ledger: [entry({ id: 'l1' }), entry({ id: 'l2' })], pool: 100, freePool: 400, freeUsed: 0, free: { enabled: true, models: [], monthlyCredits: 400, perHour: 40 } };
+    const server = { sessions: [s('a', '2026-09-10T01:00:00.000Z', 'server older'), s('b', '2026-09-10T01:00:00.000Z', 'server only')], runs: [], ledger: [entry({ id: 'l1' }), entry({ id: 'l2' })], pool: 100, freePool: 400, freeUsed: 0, free: { enabled: true, models: [], providers: {}, monthlyCredits: 400, perHour: 40 } };
     const merged = merge(local, server);
     expect(merged.sessions.map(x => x.title).sort()).toEqual(['local newer', 'local only', 'server only']); expect(merged.ledger).toHaveLength(2);
     expect(merged.toPush.sessions.map(x => x.id)).toEqual(['a', 'c']); expect(merged.toPush.ledger).toHaveLength(0);
@@ -49,14 +49,28 @@ describe('ledger and workspace merge', () => {
 });
 
 describe('duplicate model ids across providers', () => {
-  it('charges the highest weight when one id is both free and paid', () => {
-    // xKiro offers DeepSeek R1 free; OpenRouter bills it as a reasoning model. Taking the first
-    // catalog match would under-charge the platform credit pool 30x for the paid route.
-    const entries = catalog.filter(m => m.id === 'deepseek/deepseek-r1');
-    expect(entries.length).toBe(2);
-    expect(entries.map(e => e.provider).sort()).toEqual(['openrouter', 'xkiro']);
-    expect(weightFor('deepseek/deepseek-r1')).toBe(CREDIT_WEIGHTS.reasoning);
-    expect(creditsFor('deepseek/deepseek-r1', 1000, 'credits')).toBe(15);
+  it('charges the highest weight when one id is listed both cheap and expensive', () => {
+    // A gateway can offer cheaply what another provider bills for — DeepSeek R1 was listed
+    // twice until the frontier guard took it out of the free pool. Taking the first catalog
+    // match rather than the dearest would under-charge the credit pool 30x for the paid route,
+    // so the guarantee is pinned here against a duplicate injected on purpose.
+    catalog.push({ id: 'deepseek/deepseek-r1', provider: 'xkiro', label: 'DeepSeek R1', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'test fixture' });
+    try {
+      expect(catalog.filter(m => m.id === 'deepseek/deepseek-r1').length).toBe(2);
+      expect(weightFor('deepseek/deepseek-r1')).toBe(CREDIT_WEIGHTS.reasoning);
+      expect(creditsFor('deepseek/deepseek-r1', 1000, 'credits')).toBe(15);
+    } finally { catalog.pop(); }
+  });
+  it('keeps every frontier model out of the shipped free group', () => {
+    // The server refuses to fund these; the dropdown must not offer them as free either.
+    for (const m of catalog.filter(m => m.zeroConfig)) {
+      expect(m.tier).toBe('free');
+      expect(m.weight).toBe(CREDIT_WEIGHTS.fast);
+      expect(/claude|opus|sonnet|gpt-[45]|[/_.-]r1$/i.test(m.id)).toBe(false);
+    }
+    for (const id of ['deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'openai/gpt-4o']) {
+      expect(catalog.find(m => m.id === id)?.zeroConfig).toBeFalsy();
+    }
   });
   it('leaves single-listed models exactly as before', () => {
     expect(weightFor('z-ai/glm-5.2')).toBe(CREDIT_WEIGHTS.fast);
@@ -86,6 +100,14 @@ describe('payment routing', () => {
     expect(inferenceFor('openai/gpt-4o', 'free', funded)).toBe('byok');
     expect(inferenceFor('openai/gpt-4o', 'credits', funded)).toBe('credits');
     expect(inferenceFor('anthropic/claude-3.5-sonnet', undefined, funded)).toBe('byok');
+  });
+  it('follows the server, not the compiled catalog, when the two disagree', () => {
+    // A deployment can fund a model this build never compiled in, and one it lists as key-only
+    // (FREE_TIER_ALLOW_FRONTIER). Billing the visitor for what the host already pays for is the
+    // worse of the two errors, so the funded list wins in both directions.
+    expect(inferenceFor('vendor/brand-new-model', 'byok', ['vendor/brand-new-model'])).toBe('free');
+    expect(inferenceFor('deepseek/deepseek-r1', 'byok', ['deepseek/deepseek-r1'])).toBe('free');
+    expect(inferenceFor('groq/llama-3.3-70b-versatile', 'byok', [])).toBe('byok');
   });
 });
 

@@ -24,12 +24,15 @@ export function defaultConnection(provider: Provider = 'openrouter'): Connection
  * model. A free model this host cannot fund is still perfectly runnable on the visitor's own
  * key, and routing it through the free tier would strip that key and fail the request.
  *
- * `funded` is the list from /api/providers. Pass it once it is known; omit it before then, when
- * assuming the free tier covers a free model is the right guess and keeps a returning
- * free-tier visitor on the free tier across a reload.
+ * `funded` is the list from /api/providers, and where it is known it decides — not the compiled
+ * catalog. A deployment can fund a model this build has never heard of, and billing the
+ * visitor's key for something the host is already paying for is the worse of the two mistakes.
+ * Omit it before the answer arrives, when assuming the free tier covers a free model is the
+ * right guess and keeps a returning free-tier visitor on the free tier across a reload.
  */
 export function inferenceFor(model: string, current?: InferenceMode, funded?: string[]): InferenceMode {
-  if (isZeroConfig(model) && (funded === undefined || funded.some(id => id.toLowerCase() === model.trim().toLowerCase()))) return 'free';
+  const id = model.trim().toLowerCase();
+  if (funded ? funded.some(f => f.toLowerCase() === id) : isZeroConfig(model)) return 'free';
   return current && current !== 'free' ? current : 'byok';
 }
 

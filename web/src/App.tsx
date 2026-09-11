@@ -12,10 +12,10 @@ import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
 import { iconFor } from './ui/icons';
 import { chatTurn } from './lib/chat';
-import { estimateTokens, isZeroConfig, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel } from './lib/catalog';
+import { estimateTokens, findModel, isZeroConfig, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel } from './lib/catalog';
 import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, forgetKeys, inferenceFor, initialProvider, persistConnection, providers, zeroConfigConnection } from './lib/providers';
+import { clearProviderStorage, forgetKeys, inferenceFor, initialProvider, persistConnection, providers, zeroConfigConnection, type Provider } from './lib/providers';
 import { defaultPersonaId, personaById, workflows } from './lib/roster';
 import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, storage, sync, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
@@ -138,11 +138,22 @@ export default function App() {
   function choosePersona(id: string) { setPersonaId(id); if (active) patchSession(active.id, s => ({ ...s, persona: id }), true); }
   function updateRun(run: Run) { const next = runsRef.current.some(r => r.id === run.id) ? runsRef.current.map(r => r.id === run.id ? run : r) : [run, ...runsRef.current]; runsRef.current = next; setRuns(next); }
 
-  /** Pick a model from the dock. A zero-config id switches the run onto the free tier by itself. */
+  /**
+   * Pick a model from the dock. A funded id switches the run onto the free tier by itself.
+   *
+   * Which provider serves it is the server's answer where it has one, then the catalog's, and
+   * only then a guess from the id. That order matters the moment a visitor adds their own key:
+   * the free tier ignores the provider field entirely and routes from its own allowlist, but a
+   * keyed request goes to whatever endpoint is set here, and a gateway model sent to OpenRouter
+   * fails with a puzzling 404 rather than a useful error.
+   */
   function pickModel(id: string) {
-    const entry = isZeroConfig(id);
+    const served = deployment.free.providers[id];
     setConnection(c => {
-      const provider = entry ? (id.startsWith('groq/') ? 'groq' : 'openrouter') : c.provider ?? 'openrouter';
+      const known = (served ?? findModel(id)?.provider) as Provider | undefined;
+      const provider = known && Object.hasOwn(providers, known)
+        ? known
+        : isZeroConfig(id) ? (id.startsWith('groq/') ? 'groq' : 'openrouter') : c.provider ?? 'openrouter';
       return { ...c, mode: 'remote', model: id, provider, endpoint: providers[provider].endpoint, inference: inferenceFor(id, c.inference, deployment.free.models) };
     });
     setNotice('');
