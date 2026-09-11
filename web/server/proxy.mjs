@@ -120,6 +120,26 @@ function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'appl
  */
 export const FREE_TIER_UNAVAILABLE = 'Public free tier warming up — enter your own key in Settings or try again shortly.';
 
+/** The host a URL points at, for an error a person can act on. Never the path or the query. */
+export function hostOf(url) { try { return new URL(url).host; } catch { return 'the provider'; } }
+
+/**
+ * Record an upstream failure where the operator will find it.
+ *
+ * A visitor sees a deliberately vague message — on the free tier the credential is the
+ * deployment's, so the real cause is never theirs to fix and naming it would only mislead. But
+ * somebody has to be able to see it, and until now nobody could: a connection that failed left
+ * no trace at all in the logs, which turns a one-line misconfiguration into an afternoon.
+ *
+ * Only the provider, the host and path, and the failure. Never the key, never the prompt,
+ * never the response body — this line goes to a log aggregator and is not a debugging dump.
+ */
+export function logUpstream(provider, url, detail, log = console.error) {
+  let where = url;
+  try { const u = new URL(url); where = u.host + u.pathname; } catch { /* keep it as given */ }
+  log(`[proxy] upstream ${provider} ${where} -> ${detail}`);
+}
+
 /** Pinned so a future Anthropic API revision cannot change the wire format under a live deploy. */
 export const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -167,7 +187,7 @@ function anthropicContent(content) {
 }
 
 const windows = new Map();
-export function createProxy({ env = process.env, transport = upstream, resolve = lookup, db = null } = {}) {
+export function createProxy({ env = process.env, transport = upstream, resolve = lookup, db = null, log = console.error } = {}) {
   const takeBurst = createBurstLimiter(env);
   const freeOutputCap = Math.min(4096, Math.max(64, Number(env.FREE_MAX_OUTPUT_TOKENS ?? 1024) || 1024));
   return async function handler(req, res) {
@@ -178,7 +198,12 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
     try {
       // Read before the browser sends anything, so the model dropdown knows which entries are
       // live on this deployment and the first message never fails with a surprise.
-      if (path === '/api/providers' && req.method === 'GET') { json(res, 200, { ollamaBridge: env.OLLAMA_BRIDGE_URL || null, free: freeTierStatus(env), billing: billingStatus(env) }); return true; }
+      // `gateway` is the xKiro base URL this deployment will actually use, so an operator can see
+      // at a glance whether XKIRO_BASE_URL took effect and points where they think it does. A
+      // well-formed but wrong host is the one misconfiguration that survives every check here and
+      // surfaces only as a connection failure; publishing it costs nothing, since it is a public
+      // API hostname and never the key.
+      if (path === '/api/providers' && req.method === 'GET') { json(res, 200, { ollamaBridge: env.OLLAMA_BRIDGE_URL || null, gateway: xkiroBase(env), free: freeTierStatus(env), billing: billingStatus(env) }); return true; }
       if (req.method !== 'POST') throw new HttpError(405, 'Use POST.');
       const origin = req.headers.origin;
       const expectedOrigin = env.APP_ORIGIN;
@@ -231,10 +256,25 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       } else suffix = '/models';
       const upstreamUrl = path === '/api/models' && target.nativeCohere ? 'https://api.cohere.com/v1/models' : target.base + suffix;
       if (target.nativeAnthropic && path === '/api/models') headers.Accept = 'application/json';
-      const response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
+      let response;
+      try {
+        response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
+      } catch (error) {
+        // Nothing answered: DNS, TCP or TLS failed, so there is no status code to report and
+        // nothing the visitor can do. This used to fall through to the generic 502 "Could not
+        // connect to provider", which is both unhelpful to them and, on a free-tier request,
+        // wrong — the deployment's own configuration is what failed, and that reads as a tier
+        // that is not ready. Either way the operator needs the cause, so it is logged here:
+        // this is the only place that knows which host was unreachable and why.
+        if (controller.signal.aborted) throw new HttpError(504, 'Provider request timed out.');
+        logUpstream(provider, upstreamUrl, `unreachable: ${error?.code || error?.message || 'connection failed'}`, log);
+        if (funding.mode === 'free') throw new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable');
+        throw new HttpError(502, `Could not reach ${hostOf(upstreamUrl)}. Check the provider endpoint and that this host can reach it.`);
+      }
       const status = response.statusCode || 502;
       if (status < 200 || status >= 300) {
         response.destroy();
+        logUpstream(provider, upstreamUrl, `HTTP ${status}`, log);
         // On a free-tier request the credential is the deployment's, so "invalid API key" would
         // send the visitor hunting for a problem that is not theirs. Report it as a tier that is
         // not answering, and leave the real status for the operator's logs.
