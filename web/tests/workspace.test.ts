@@ -8,6 +8,7 @@ import { activeTools, defaultSettings, parseRepo } from '../src/lib/connectors';
 import { retrieve } from '../src/lib/memory';
 import { chatTurn } from '../src/lib/chat';
 import { complete } from '../src/lib/provider';
+import { loadDeployment } from '../src/lib/deployment';
 import { defaultConnection, inferenceFor } from '../src/lib/providers';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -153,6 +154,42 @@ describe('chat turn', () => {
   });
 });
 
+
+describe('plans and checkout', () => {
+  // A Subscribe button is a request for money, so the browser filters what it will act on: the
+  // server already checks the URL, and checking twice costs nothing next to sending someone who
+  // is about to pay somewhere unintended.
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const reply = (billing: unknown) => new Response(JSON.stringify({ free: { enabled: false, models: [] }, billing }), { headers: { 'Content-Type': 'application/json' } });
+
+  it('keeps a well-formed checkout URL and drops anything else', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => reply({ plans: [
+      { id: 'starter', name: 'Starter', price: '$12.90', cadence: 'per month', checkout: 'https://buy.stripe.com/starter' },
+      { id: 'premium', name: 'Premium', price: '$24.90', cadence: 'per month', checkout: 'http://buy.stripe.com/insecure' },
+    ] })));
+    const { billing } = await loadDeployment();
+    expect(billing.enabled).toBe(true);
+    expect(billing.plans[0].checkout).toBe('https://buy.stripe.com/starter');
+    expect(billing.plans[1].checkout).toBeNull();
+    expect(billing.plans[1].price).toBe('$24.90');
+  });
+
+  it('treats a deployment with no checkout as not selling anything', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => reply({ plans: [{ id: 'starter', name: 'Starter', price: '$12.90', cadence: 'per month', checkout: null }] })));
+    expect((await loadDeployment()).billing.enabled).toBe(false);
+    vi.stubGlobal('fetch', vi.fn(async () => reply(undefined)));
+    expect((await loadDeployment()).billing).toEqual({ enabled: false, plans: [] });
+    vi.stubGlobal('fetch', vi.fn(async () => reply('nonsense')));
+    expect((await loadDeployment()).billing.plans).toEqual([]);
+  });
+
+  it('falls back to a deployment that sells nothing when the server is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    const d = await loadDeployment();
+    expect(d.reachable).toBe(false);
+    expect(d.billing.enabled).toBe(false);
+  });
+});
 
 describe('native provider stream shapes', () => {
   // Anthropic's SSE is not the OpenAI one and never sends [DONE] — message_stop terminates it,

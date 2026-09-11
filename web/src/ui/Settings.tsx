@@ -136,8 +136,9 @@ export default function Settings(p: SettingsProps) {
               {referralEnabled() && <p className="help referral-note">
                 <ExternalLink size={12} strokeWidth={1.75} />
                 <span>
-                  Don't want several subscriptions? <a {...referralLink()}>Get {REFERRAL_BREADTH} with {REFERRAL_ALLOWANCE} via xKiro</a>
-                  {' — '}{REFERRAL_DISCLOSURE} Those are xKiro's figures for their own service, worth checking on their site. A Groq or OpenRouter key works here just as well.
+                  Developer, or prefer your own direct API key?{' '}
+                  <a {...referralLink()}>Get {REFERRAL_ALLOWANCE} on xKiro with our partner link</a>
+                  {' — '}{REFERRAL_DISCLOSURE} Those are xKiro's figures for their own service ({REFERRAL_BREADTH}), worth checking on their site. Any Groq, OpenRouter, OpenAI, Anthropic or Google key works here just as well.
                 </span>
               </p>}
             </> : <>

@@ -4,6 +4,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
 import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, xkiroBase } from './freetier.mjs';
+import { billingStatus } from './billing.mjs';
 import { createMeter } from './meter.mjs';
 
 export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
@@ -177,7 +178,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
     try {
       // Read before the browser sends anything, so the model dropdown knows which entries are
       // live on this deployment and the first message never fails with a surprise.
-      if (path === '/api/providers' && req.method === 'GET') { json(res, 200, { ollamaBridge: env.OLLAMA_BRIDGE_URL || null, free: freeTierStatus(env) }); return true; }
+      if (path === '/api/providers' && req.method === 'GET') { json(res, 200, { ollamaBridge: env.OLLAMA_BRIDGE_URL || null, free: freeTierStatus(env), billing: billingStatus(env) }); return true; }
       if (req.method !== 'POST') throw new HttpError(405, 'Use POST.');
       const origin = req.headers.origin;
       const expectedOrigin = env.APP_ORIGIN;

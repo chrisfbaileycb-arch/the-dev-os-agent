@@ -173,6 +173,8 @@ input:not([type=checkbox]), select, textarea { border: 1px solid var(--line-stro
 .plan-cta { justify-content: center; margin-top: 10px; text-decoration: none; }
 a.plan-cta { color: var(--ink); }
 a.plan-cta:hover { border-color: var(--accent); color: var(--accent-ink); background: var(--panel-2); }
+/* The primary variant is the same button whether it is a link or a button element. */
+a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .plan-disclosure { display: block; margin-top: 6px; color: var(--muted); font-size: 10.5px; line-height: 1.4; text-align: center; }
 .referral-note { display: flex; align-items: flex-start; gap: 6px; } .referral-note svg { margin-top: 3px; } .referral-note a { color: var(--accent-ink); }
 

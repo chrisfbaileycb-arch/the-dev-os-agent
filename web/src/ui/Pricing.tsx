@@ -1,35 +1,50 @@
 import { ArrowUpRight, Check, KeyRound, Sparkles, Zap } from 'lucide-react';
 import { REFERRAL_ALLOWANCE, REFERRAL_DISCLOSURE, referralEnabled, referralLink } from '../lib/referral';
+import type { Billing, BillingPlan } from '../lib/deployment';
 import type { Balance, FreeTier } from '../lib/store';
 
 // Plans, in a three-card layout.
 //
-// One thing here is deliberately not what a pricing page usually is. Hey Buddy has no billing:
-// it never takes a payment, holds no subscription, and has no account to upgrade. The two
-// right-hand cards describe a key you buy FROM XKIRO and paste in here — so they say that,
-// rather than "Upgrade Plan" over a button that silently leaves for someone else's checkout.
-// A visitor who pays xKiro believing they upgraded Hey Buddy has been misled, and the wording
-// below is what prevents that while keeping the layout and the referral intact.
+// Two income streams, and they are deliberately not presented as one. Starter and Premium are
+// Hey Buddy's own subscriptions, paid to Hey Buddy, and they are the product. The xKiro referral
+// is a secondary note for the people who were never going to subscribe anyway — developers who
+// already hold keys and want to keep using them. Putting the referral beside the paid cards
+// would compete with the thing actually being sold.
 //
-// Only the left card is a Hey Buddy plan, and it is genuinely free: the deployment funds it.
+// One honesty constraint runs through this file. A Subscribe button is a request for money, so
+// it is only rendered as one when this deployment actually has somewhere to send the payment:
+// `plan.checkout` comes from the server and is null until the operator configures a checkout URL.
+// Unconfigured, the card keeps its price and its features and says checkout is not open yet —
+// taking someone's intent to pay and dropping it into a dead link is worse than saying so.
 
-export interface PricingProps { free: FreeTier; freeBalance: Balance; onStart: () => void; onAddKey: () => void; }
+export interface PricingProps {
+  free: FreeTier; billing: Billing; freeBalance: Balance;
+  onStart: () => void; onAddKey: () => void;
+}
 
 interface Tier {
   id: string; name: string; price: string; cadence: string; billedBy: string;
   icon: typeof Sparkles; featured?: boolean; blurb: string; features: string[];
-  cta: string; action: 'start' | 'key' | 'referral';
+  cta: string; action: 'start' | 'subscribe';
 }
+
+const PRICES: Record<string, { price: string; cadence: string }> = {
+  starter: { price: '$12.90', cadence: 'per month' },
+  premium: { price: '$24.90', cadence: 'per month' },
+};
 
 export default function Pricing(p: PricingProps) {
   const pool = p.free.models.length ? `${p.free.models.length} models` : 'a shared pool';
+  const plan = (id: string): BillingPlan | undefined => p.billing.plans.find(x => x.id === id);
+  const priced = (id: string) => plan(id) ?? { id, name: id, ...PRICES[id], checkout: null };
+
   const tiers: Tier[] = [
     {
-      id: 'free', name: 'Free', price: '$0', cadence: 'always', billedBy: 'Included — nothing to pay',
-      icon: Sparkles, featured: true,
-      blurb: 'The whole workspace, on models this deployment pays for. No account, no card, no API key.',
+      id: 'free', name: 'Free', price: '$0', cadence: 'always', billedBy: 'No card, no account',
+      icon: Sparkles,
+      blurb: 'The whole workspace on models this deployment pays for. Nothing to set up and nothing to cancel.',
       features: [
-        `${pool} from the shared xKiro pool — GLM, DeepSeek, Qwen, Kimi`,
+        `${pool} from the shared pool — GLM, DeepSeek, Qwen, Kimi, Llama`,
         `${p.free.monthlyCredits.toLocaleString()} credits a month, metered on the server`,
         `${p.free.perHour} requests an hour`,
         'Every agent, workflow and connector',
@@ -38,78 +53,83 @@ export default function Pricing(p: PricingProps) {
       cta: 'Start now', action: 'start',
     },
     {
-      id: 'pro', name: 'Pro', price: 'Your key', cadence: 'billed by xKiro', billedBy: 'Paid to xKiro, not to Hey Buddy',
-      icon: KeyRound,
-      blurb: 'Bring an xKiro key and the allowance above stops applying. Hey Buddy takes no payment for this.',
+      id: 'starter', name: 'Starter', price: priced('starter').price, cadence: priced('starter').cadence,
+      billedBy: 'Billed by Hey Buddy', icon: KeyRound, featured: true,
+      blurb: 'The managed pool. You never touch an API key — we hold the provider accounts and meter your usage against your plan.',
       features: [
-        'No monthly credit ceiling here — your provider sets the limits',
-        'The same models, plus everything else your key can reach',
-        'Deep reasoning: Claude 3.5 Sonnet, DeepSeek R1, GPT-4o',
-        'Your key stays in your browser; never stored on our server',
+        'A far larger monthly credit allowance than the free tier',
+        'No per-hour request cap',
+        'Every model in the hub, reasoning models included',
+        'No API keys to create, paste, rotate or pay separately for',
+        'Priority on the shared pool when it is busy',
       ],
-      cta: 'Get an API key', action: 'referral',
+      cta: 'Subscribe', action: 'subscribe',
     },
     {
-      id: 'ultimate', name: 'Ultimate', price: 'Your key', cadence: 'billed by xKiro', billedBy: 'Paid to xKiro, not to Hey Buddy',
-      icon: Zap,
-      blurb: 'The same Hey Buddy, on a larger xKiro plan. What changes is their rate limit, not our features.',
+      id: 'premium', name: 'Premium', price: priced('premium').price, cadence: priced('premium').cadence,
+      billedBy: 'Billed by Hey Buddy', icon: Zap,
+      blurb: 'Starter with room to work at length: longer runs, bigger documents, more of the expensive models.',
       features: [
-        'Higher throughput and priority routing on xKiro',
-        'Longer context windows where the model supports them',
-        'Everything in Pro',
-        'Already have a key? Paste it in Settings — no plan needed',
+        'Roughly triple the Starter allowance',
+        'Highest output limits and longest context windows',
+        'Multi-agent workflows without watching the meter',
+        'Everything in Starter',
+        'Your own key still works alongside it, at no cost to your allowance',
       ],
-      cta: 'Compare xKiro plans', action: 'referral',
+      cta: 'Upgrade', action: 'subscribe',
     },
   ];
 
   return <div className="page">
     <div className="page-head"><div>
       <h1>Plans</h1>
-      <p>Hey Buddy itself is free and takes no payment. What you can pay for is inference — the model calls — and that is billed by the provider whose key you use.</p>
+      <p>Start free with no account at all. Subscribe when you want the managed pool — a larger allowance on every model, with no API keys to manage.</p>
     </div></div>
 
     <div className="plan-grid">
-      {tiers.map(t => <section key={t.id} className={t.featured ? 'plan featured' : 'plan'}>
-        {t.featured && <span className="plan-flag">Active now</span>}
-        <div className="plan-head">
-          <span className="plan-icon"><t.icon size={17} strokeWidth={1.75} /></span>
-          <h2>{t.name}</h2>
-        </div>
-        <p className="plan-price"><strong>{t.price}</strong><small>{t.cadence}</small></p>
-        <p className="plan-billed">{t.billedBy}</p>
-        <p className="plan-blurb">{t.blurb}</p>
-        <ul className="plan-features">{t.features.map(f => <li key={f}><Check size={13} strokeWidth={2.25} />{f}</li>)}</ul>
-        {t.action === 'start'
-          ? <button className="button primary plan-cta" onClick={p.onStart}>{t.cta}</button>
-          : t.action === 'key'
-            ? <button className="button plan-cta" onClick={p.onAddKey}>{t.cta}</button>
-            : referralEnabled()
-              ? <a className="button plan-cta" {...referralLink()}>{t.cta}<ArrowUpRight size={14} /></a>
-              : <button className="button plan-cta" onClick={p.onAddKey}>Add your key in Settings</button>}
-        {t.action === 'referral' && referralEnabled() && <small className="plan-disclosure">{REFERRAL_DISCLOSURE}</small>}
-      </section>)}
+      {tiers.map(t => {
+        const checkout = t.action === 'subscribe' ? plan(t.id)?.checkout ?? null : null;
+        return <section key={t.id} className={t.featured ? 'plan featured' : 'plan'}>
+          {t.featured && <span className="plan-flag">Most popular</span>}
+          <div className="plan-head">
+            <span className="plan-icon"><t.icon size={17} strokeWidth={1.75} /></span>
+            <h2>{t.name}</h2>
+          </div>
+          <p className="plan-price"><strong>{t.price}</strong><small>{t.cadence}</small></p>
+          <p className="plan-billed">{t.billedBy}</p>
+          <p className="plan-blurb">{t.blurb}</p>
+          <ul className="plan-features">{t.features.map(f => <li key={f}><Check size={13} strokeWidth={2.25} />{f}</li>)}</ul>
+          {t.action === 'start'
+            ? <button className="button primary plan-cta" onClick={p.onStart}>{t.cta}</button>
+            : checkout
+              ? <a className={t.featured ? 'button primary plan-cta' : 'button plan-cta'} href={checkout} rel="noopener">{t.cta}</a>
+              : <button className="button plan-cta" disabled title="Checkout is not open on this deployment yet.">Checkout opening soon</button>}
+          {t.action === 'subscribe' && !checkout && <small className="plan-disclosure">Not taking payment yet. The free tier below is live now.</small>}
+        </section>;
+      })}
     </div>
 
     <section className="panel">
-      <h2>What you are actually buying</h2>
+      <h2>What a subscription changes</h2>
       <p className="help">
-        Only the Free plan is ours to give: this deployment funds it from its own xKiro key, and the
-        credits on the left are what it will spend on you each month. <strong>Pro and Ultimate are xKiro's
-        plans, not ours.</strong> Following either button takes you to xKiro, you buy a key from them, and
-        you paste it into Settings here. No money reaches Hey Buddy, there is nothing to cancel with us,
-        and the app works identically either way — the difference is only who pays for the model calls.
+        Only one thing, really: <strong>who holds the API keys and who pays the model bill.</strong> On the free
+        tier and on a paid plan alike, Hey Buddy runs the models for you and meters what you use — a plan
+        simply raises the ceiling and unlocks the expensive models. Bring your own key instead and the app
+        works identically, except your provider bills you directly and no allowance is touched at all.
+        The interface, the agents, the workflows and the connectors are the same in every case.
       </p>
-      {referralEnabled() && <p className="help">
-        {REFERRAL_DISCLOSURE} It costs you nothing extra, and
-        you are equally welcome to go to xKiro directly, or to use a Groq, OpenRouter or custom key
-        instead — the model dropdown treats them all the same. xKiro advertises {REFERRAL_ALLOWANCE} on
-        a free account; that is their claim about their own product, so check it on their site before
-        relying on it.
+      {referralEnabled() && <p className="help referral-note">
+        <ArrowUpRight size={12} strokeWidth={1.75} />
+        <span>
+          Developer, or prefer your own direct API key?{' '}
+          <a {...referralLink()}>Get {REFERRAL_ALLOWANCE} on xKiro with our partner link</a>
+          {' — '}{REFERRAL_DISCLOSURE} That is xKiro's figure for their own service, worth checking on their
+          site; a Groq, OpenRouter, OpenAI, Anthropic or Google key works here just as well.
+        </span>
       </p>}
       <p className="help">
-        Running low on free credits does not lock anything: the workspace, your sessions and your
-        documents stay exactly as they are, and adding a key picks up where the allowance left off.
+        Running out of credits never locks anything. The workspace, your sessions and your documents stay
+        exactly as they are, and adding a key or a plan picks up where the allowance left off.
       </p>
     </section>
   </div>;
