@@ -138,3 +138,34 @@ test('a vendor model with no key is refused before anything is sent', async () =
     }
   });
 });
+
+test('a checkout URL is published only when it is one', async () => {
+  // The Plans page renders a Subscribe button from this and nothing else. A URL that is not
+  // HTTPS, or carries credentials, or is simply a typo, must read as "not configured" — sending
+  // someone who is about to pay to an unintended destination is the failure worth preventing,
+  // and a dead Subscribe button is worse than an honest one that says checkout is not open.
+  const { billingStatus, checkoutUrl } = await import('../server/billing.mjs');
+  assert.equal(checkoutUrl('https://buy.stripe.com/test_abc'), 'https://buy.stripe.com/test_abc');
+  for (const bad of ['', '   ', 'http://buy.stripe.com/x', 'buy.stripe.com/x', 'https://user:pw@buy.stripe.com/x', 'https://buy.stripe.com/x#frag', 'not a url', undefined, null]) {
+    assert.equal(checkoutUrl(bad), null, String(bad));
+  }
+  const none = billingStatus({});
+  assert.equal(none.enabled, false);
+  assert.deepEqual(none.plans.map(p => p.checkout), [null, null]);
+  assert.deepEqual(none.plans.map(p => p.price), ['$12.90', '$24.90'], 'the price is shown even with no checkout');
+
+  const one = billingStatus({ STRIPE_STARTER_URL: 'https://buy.stripe.com/starter' });
+  assert.equal(one.enabled, true, 'one configured plan is enough to be selling something');
+  assert.equal(one.plans.find(p => p.id === 'starter').checkout, 'https://buy.stripe.com/starter');
+  assert.equal(one.plans.find(p => p.id === 'premium').checkout, null);
+  assert.ok(!JSON.stringify(one).includes('sk_'), 'no processor secret is ever published here');
+});
+
+test('/api/providers reports billing alongside the free tier', async () => {
+  await withProxy({ env: { STRIPE_PREMIUM_URL: 'https://buy.stripe.com/premium' } }, async url => {
+    const body = await (await fetch(url + '/api/providers')).json();
+    assert.equal(body.billing.enabled, true);
+    assert.equal(body.billing.plans.find(p => p.id === 'premium').checkout, 'https://buy.stripe.com/premium');
+    assert.equal(body.free.enabled, false, 'billing and the free tier are independent');
+  });
+});

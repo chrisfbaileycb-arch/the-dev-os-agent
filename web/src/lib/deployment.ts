@@ -9,7 +9,17 @@ import type { FreeTier } from './store';
 // answer, and a deployment with no keys falls back to the scripted preview instead of failing
 // on the visitor's first message.
 
-export interface Deployment { free: FreeTier; ollamaBridge: string | null; reachable: boolean; }
+/**
+ * Hey Buddy's own paid plans, as this deployment reports them.
+ *
+ * `checkout` is null until the operator sets the plan's checkout URL in the environment, and the
+ * Plans page renders that honestly rather than putting a Subscribe button over a dead link. It
+ * is a deployment setting, not a build-time constant, so opening checkout is a dashboard edit.
+ */
+export interface BillingPlan { id: string; name: string; price: string; cadence: string; checkout: string | null; }
+export interface Billing { enabled: boolean; plans: BillingPlan[]; }
+
+export interface Deployment { free: FreeTier; billing: Billing; ollamaBridge: string | null; reachable: boolean; }
 
 /**
  * What a visitor sees whenever the zero-config tier cannot serve them: keys unset, provider
@@ -27,9 +37,29 @@ export const isFreeTierWarming = (code?: string): boolean => Boolean(code && WAR
 
 export const offlineDeployment: Deployment = {
   free: { enabled: false, models: [], providers: {}, monthlyCredits: DEFAULT_FREE_POOL, perHour: 0 },
+  billing: { enabled: false, plans: [] },
   ollamaBridge: null,
   reachable: false,
 };
+
+/**
+ * Plans as reported, filtered rather than trusted. A checkout URL is somewhere this app sends a
+ * person who is about to pay, so it must be HTTPS and carry no credentials — the server checks
+ * the same thing, and checking twice costs nothing next to sending someone's card details
+ * somewhere unintended.
+ */
+function billingFrom(raw: unknown): Billing {
+  const plans = Array.isArray((raw as Billing)?.plans) ? (raw as Billing).plans : [];
+  const clean = plans
+    .filter((p): p is BillingPlan => Boolean(p) && typeof p.id === 'string' && typeof p.name === 'string')
+    .map(p => ({
+      id: p.id, name: p.name,
+      price: typeof p.price === 'string' ? p.price : '',
+      cadence: typeof p.cadence === 'string' ? p.cadence : '',
+      checkout: typeof p.checkout === 'string' && /^https:\/\//.test(p.checkout) && !/[@#]/.test(p.checkout) ? p.checkout : null,
+    }));
+  return { enabled: clean.some(p => p.checkout), plans: clean };
+}
 
 /**
  * Which provider funds each free model, as the server reports it. Filtered rather than trusted:
@@ -45,10 +75,11 @@ export async function loadDeployment(signal?: AbortSignal): Promise<Deployment> 
   try {
     const response = await fetch('/api/providers', { credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(10_000)]) });
     if (!response.ok) return offlineDeployment;
-    const body = await response.json() as { free?: Partial<FreeTier>; ollamaBridge?: string | null };
+    const body = await response.json() as { free?: Partial<FreeTier>; billing?: unknown; ollamaBridge?: string | null };
     const free = body.free ?? {};
     return {
       reachable: true,
+      billing: billingFrom(body.billing),
       ollamaBridge: typeof body.ollamaBridge === 'string' ? body.ollamaBridge : null,
       free: {
         enabled: free.enabled === true && Array.isArray(free.models) && free.models.length > 0,

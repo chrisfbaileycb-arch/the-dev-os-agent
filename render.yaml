@@ -93,6 +93,15 @@ services:
         value: "100000"
 
       # --- Connectors ------------------------------------------------------------------
+      # Hey Buddy's own paid plans. A hosted checkout URL per plan — a Stripe Payment Link is the
+      # simplest thing that works. Until one is set the Plans page keeps the price and the feature
+      # list but says checkout is not open, rather than putting a Subscribe button over a dead
+      # link. These are public URLs by design; the processor's secret key never reaches this
+      # server. Setting them here is a dashboard edit and a restart, never a rebuild.
+      - key: STRIPE_STARTER_URL
+        sync: false
+      - key: STRIPE_PREMIUM_URL
+        sync: false
       # URL crawler (/api/fetch): a plain GET converted to text server-side, so the browser can
       # read external pages despite CORS. Open to any public host; set a list to narrow it.
       - key: FETCH_ALLOWED_HOSTS
