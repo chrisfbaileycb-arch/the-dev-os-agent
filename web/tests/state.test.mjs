@@ -22,9 +22,14 @@ test('requires a workspace id and rejects cross-origin callers', async () => { a
 }); });
 test('stores sessions, runs, and ledger entries per workspace and reports the monthly pool', async () => { await withState({ CREDIT_MONTHLY_POOL: '5000' }, async (url, db) => {
   const post = await call(url, 'POST', { sessions: [session], ledger: [entry], runs: [{ id: 'r1', goal: 'g', workflow: 'build', mode: 'remote', model: 'm', status: 'completed', startedAt: now, steps: [], tokens: 10, calls: 1, cacheHits: 0, contextTitles: [], sessionId: 's1' }] });
-  assert.equal(post.status, 200); assert.deepEqual(await post.json(), { ok: true, used: 1, pool: 5000 });
+  assert.equal(post.status, 200);
+  const posted = await post.json();
+  assert.equal(posted.ok, true); assert.equal(posted.used, 1); assert.equal(posted.pool, 5000);
+  // The free allowance is a separate budget, reported alongside the credit pool.
+  assert.equal(posted.freeUsed, 0); assert.equal(posted.freePool, 400); assert.equal(posted.free.enabled, false);
   const state = await (await call(url, 'GET')).json();
   assert.equal(state.sessions.length, 1); assert.equal(state.runs.length, 1); assert.equal(state.ledger.length, 1); assert.equal(state.pool, 5000);
+  assert.equal(state.freePool, 400);
   assert.equal(db.usedThisMonth(ws), 1);
   const other = await fetch(url + '/api/state', { headers: { 'X-Workspace-Id': '11111111-2222-4333-8444-555555555555' } });
   assert.equal((await other.json()).sessions.length, 0);

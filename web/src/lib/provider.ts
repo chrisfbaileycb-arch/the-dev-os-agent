@@ -1,3 +1,4 @@
+import { workspaceId } from './store';
 import type { Completion, Connection } from './types';
 export class ProviderError extends Error { constructor(message: string, public retryable = false, public status?: number) { super(message); } }
 export function validateEndpoint(value: string): string {
@@ -8,7 +9,9 @@ export function validateEndpoint(value: string): string {
 }
 export function validateConnection(c: Connection): void {
   if (c.mode === 'demo') return;
-  if (!c.provider || c.provider === 'custom') validateEndpoint(c.endpoint);
+  // A zero-config run is routed entirely by the server from its own allowlist, so the browser
+  // has no endpoint to validate and never supplies one.
+  if (c.inference !== 'free' && (!c.provider || c.provider === 'custom')) validateEndpoint(c.endpoint);
   if (!c.model.trim() || c.model.length > 200) throw new Error('Choose a model from your provider.');
   if (!Number.isInteger(c.maxTokens) || c.maxTokens < 64 || c.maxTokens > 4096) throw new Error('Output limit must be between 64 and 4096 tokens.');
 }
@@ -32,6 +35,8 @@ export async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerat
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 const requestBody = (c: Connection) => ({ provider: c.provider || 'custom', apiKey: c.token, baseUrl: c.endpoint, ...(c.serverAccessToken ? { serverAccessToken: c.serverAccessToken } : {}) });
+/** The workspace header is how the server meters a zero-config run against its free credit pool. */
+const apiHeaders = () => ({ 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId() });
 async function checkResponse(response: Response): Promise<void> {
   if (response.ok) return;
   let message = response.status === 401 || response.status === 403 ? 'Invalid API key or insufficient permissions.' : response.status === 429 ? 'Rate limit reached. Wait and retry.' : `Provider request failed (HTTP ${response.status}).`;
@@ -42,7 +47,7 @@ export async function complete(c: Connection, system: string, prompt: string, si
   const userContent = images.length ? [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))] : prompt;
   validateConnection(c); signal.throwIfAborted(); const timeout = AbortSignal.timeout(125_000);
   try {
-    const response = await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...requestBody(c), model: c.model, messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], max_tokens: c.maxTokens }) });
+    const response = await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), model: c.model, messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], max_tokens: c.maxTokens }) });
     await checkResponse(response);
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new ProviderError('Expected a streaming SSE response from /api/chat.');
     let text = ''; let tokens = 0; let finished = false;
@@ -69,7 +74,7 @@ export async function complete(c: Connection, system: string, prompt: string, si
   }
 }
 export async function listModels(c: Connection, signal: AbortSignal): Promise<string[]> {
-  const response = await fetch('/api/models', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody(c)) });
+  const response = await fetch('/api/models', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: apiHeaders(), body: JSON.stringify(requestBody(c)) });
   await checkResponse(response); const body = await response.json();
   if (!Array.isArray(body.data)) throw new ProviderError('Unsupported model catalog. You can still type a model ID.');
   return body.data.map((m: { id?: unknown }) => m?.id).filter((id: unknown): id is string => typeof id === 'string' && id.length <= 200).slice(0, 2000);

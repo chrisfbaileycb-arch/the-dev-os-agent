@@ -1,7 +1,7 @@
 import { complete, ProviderError } from './provider';
 import { retrieve } from './memory';
 import { composePrompt, personaById, type Persona } from './roster';
-import { inspectPageSpec, parseToolCall, toolProtocol, type ToolSpec } from './tools';
+import { parseToolCall, toolProtocol, type ToolSpec } from './tools';
 import { estimateTokens } from './catalog';
 import type { ChatMessage, ToolTrace } from './store';
 import type { Connection, Knowledge } from './types';
@@ -24,7 +24,9 @@ export async function chatTurn(t: TurnInput): Promise<TurnResult> {
   const persona = personaById(t.personaId);
   const notes = retrieve(t.input, t.knowledge);
   const photos = t.photos ?? [];
-  const specs: ToolSpec[] = [...(persona.tools?.includes('inspect_page') ? [inspectPageSpec] : []), ...(t.tools ?? [])];
+  // The caller assembles the tool list (persona tools plus every enabled connector) so that
+  // one place decides what an agent can reach. See src/lib/connectors.ts.
+  const specs: ToolSpec[] = t.tools ?? [];
   const context = [...notes.map(n => `[note: ${n.title}]\n${n.content.slice(0, 6000)}`), ...t.attachments.map(a => `[attached: ${a.name}]\n${a.content.slice(0, 12000)}`)].join('\n\n');
   const started = performance.now();
   if (t.connection.mode === 'demo') { await new Promise(r => setTimeout(r, 400)); const text = scripted(persona, t.input, notes, photos.length, specs.length); t.onDelta?.(text); return { text, tokens: 0, latencyMs: Math.round(performance.now() - started), tokensPerSecond: 0, tools: [], contextTitles: notes.map(n => n.title) }; }

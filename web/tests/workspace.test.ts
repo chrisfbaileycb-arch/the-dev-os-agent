@@ -4,6 +4,8 @@ import { computeBalance, makeEntry, merge, type LedgerEntry, type Session } from
 import { SAFETY_BASELINE, composePrompt, personaById, personas, skills } from '../src/lib/roster';
 import { inspectPageSpec, parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
 import { mcpToolSpecs, slug, type McpConnection } from '../src/lib/mcp';
+import { activeTools, defaultSettings, parseRepo } from '../src/lib/connectors';
+import { retrieve } from '../src/lib/memory';
 import { chatTurn } from '../src/lib/chat';
 import { defaultConnection } from '../src/lib/providers';
 
@@ -38,7 +40,7 @@ describe('ledger and workspace merge', () => {
   it('merges by newest session and unions runs and ledger, reporting what to push', () => {
     const s = (id: string, updatedAt: string, title: string): Session => ({ id, title, persona: 'operator', createdAt: updatedAt, updatedAt, messages: [] });
     const local = { sessions: [s('a', '2026-09-10T02:00:00.000Z', 'local newer'), s('c', '2026-09-10T01:00:00.000Z', 'local only')], runs: [], ledger: [entry({ id: 'l1' })] };
-    const server = { sessions: [s('a', '2026-09-10T01:00:00.000Z', 'server older'), s('b', '2026-09-10T01:00:00.000Z', 'server only')], runs: [], ledger: [entry({ id: 'l1' }), entry({ id: 'l2' })], pool: 100 };
+    const server = { sessions: [s('a', '2026-09-10T01:00:00.000Z', 'server older'), s('b', '2026-09-10T01:00:00.000Z', 'server only')], runs: [], ledger: [entry({ id: 'l1' }), entry({ id: 'l2' })], pool: 100, freePool: 400, freeUsed: 0, free: { enabled: true, models: [], monthlyCredits: 400, perHour: 40 } };
     const merged = merge(local, server);
     expect(merged.sessions.map(x => x.title).sort()).toEqual(['local newer', 'local only', 'server only']); expect(merged.ledger).toHaveLength(2);
     expect(merged.toPush.sessions.map(x => x.id)).toEqual(['a', 'c']); expect(merged.toPush.ledger).toHaveLength(0);
@@ -75,7 +77,8 @@ describe('chat turn', () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push(url); if (url === '/api/browse') return new Response(JSON.stringify({ url: 'https://shop.example', status: 200, title: 'Shop', description: '', canonical: '', robots: '', lang: '', h1: [], headingCount: 0, og: {}, wordCount: 2, text: 'hello world', links: [], elapsedMs: 1 }), { headers: { 'Content-Type': 'application/json' } }); const body = JSON.parse(String(init.body)); return body.messages[1].content.includes('TOOL RESULT') ? sse('The page title is Shop.') : sse('TOOL {"tool":"inspect_page","url":"https://shop.example"}'); }));
     const deltas: string[] = []; const traces: string[] = [];
-    const result = await chatTurn({ connection: { ...defaultConnection('groq'), token: 'k' }, personaId: 'browser', history: [], input: 'Check https://shop.example', attachments: [], knowledge: [], signal: new AbortController().signal, onDelta: t => deltas.push(t), onTool: t => traces.push(t.summary) });
+    const tools = activeTools({ settings: { ...defaultSettings(), web: { enabled: false }, knowledge: { enabled: false } }, mcp: [], knowledge: [], search: retrieve, personaTools: ['inspect_page'] });
+    const result = await chatTurn({ connection: { ...defaultConnection('groq'), token: 'k' }, personaId: 'browser', history: [], input: 'Check https://shop.example', attachments: [], knowledge: [], tools, signal: new AbortController().signal, onDelta: t => deltas.push(t), onTool: t => traces.push(t.summary) });
     expect(result.text).toBe('The page title is Shop.'); expect(result.tools).toHaveLength(1); expect(result.tools[0].ok).toBe(true); expect(traces[0]).toContain('Shop'); expect(result.tokens).toBe(80);
     expect(calls).toEqual(['/api/chat', '/api/browse', '/api/chat']); expect(deltas.some(d => d.startsWith('TOOL'))).toBe(false);
   });

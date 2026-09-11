@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
 // SQLite persistence for sessions, runs, and the credit ledger, keyed by an anonymous workspace
@@ -25,8 +26,9 @@ export function openDatabase(file = ':memory:') {
     sessions: db.prepare('SELECT body FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC LIMIT 200'),
     runs: db.prepare('SELECT body FROM runs WHERE workspace_id = ? ORDER BY started_at DESC LIMIT 200'),
     entries: db.prepare('SELECT id, at, session_id, model, tier, mode, tokens, credits FROM ledger WHERE workspace_id = ? ORDER BY at DESC LIMIT 2000'),
-    used: db.prepare("SELECT COALESCE(SUM(credits), 0) AS used FROM ledger WHERE workspace_id = ? AND mode = 'credits' AND at >= ? AND at < ?"),
+    used: db.prepare('SELECT COALESCE(SUM(credits), 0) AS used FROM ledger WHERE workspace_id = ? AND mode = ? AND at >= ? AND at < ?'),
     counts: db.prepare('SELECT (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?) AS sessions, (SELECT COUNT(*) FROM runs WHERE workspace_id = ?) AS runs'),
+    latest: db.prepare('SELECT id, at, session_id, model, tier, mode, tokens, credits FROM ledger WHERE workspace_id = ? AND mode = ? ORDER BY at DESC LIMIT 1'),
     clear: ['sessions', 'runs', 'ledger'].map(t => db.prepare(`DELETE FROM ${t} WHERE workspace_id = ?`)),
   };
   const parse = rows => rows.map(r => { try { return JSON.parse(r.body); } catch { return null; } }).filter(Boolean);
@@ -35,9 +37,21 @@ export function openDatabase(file = ':memory:') {
     upsertRuns(workspace, list) { db.exec('BEGIN'); try { for (const r of list) statements.run.run(workspace, r.id, r.sessionId ?? null, r.startedAt, JSON.stringify(r)); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },
     addLedger(workspace, list) { db.exec('BEGIN'); try { for (const e of list) statements.ledger.run(workspace, e.id, e.at, e.sessionId ?? null, e.model, e.tier, e.mode, e.tokens, e.credits); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },
     state(workspace) { return { sessions: parse(statements.sessions.all(workspace)), runs: parse(statements.runs.all(workspace)), ledger: statements.entries.all(workspace).map(e => ({ id: e.id, at: e.at, sessionId: e.session_id ?? undefined, model: e.model, tier: e.tier, mode: e.mode, tokens: e.tokens, credits: e.credits })) }; },
-    usedThisMonth(workspace, now = new Date()) { const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString(); const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString(); return Number(statements.used.get(workspace, start, end)?.used ?? 0); },
+    // Credits a workspace has drawn in the current UTC month for one payment mode. The free
+    // tier and the token-funded pool are separate budgets, so the mode is part of the query.
+    usedThisMonth(workspace, now = new Date(), mode = 'credits') { const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString(); const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString(); return Number(statements.used.get(workspace, mode, start, end)?.used ?? 0); },
+    /** Write one server-measured ledger row. Used by the proxy to bill the zero-config tier. */
+    recordUsage(workspace, { model, tier = 'free', mode = 'free', tokens, credits, sessionId = null, at = new Date().toISOString() }) {
+      const entry = { id: randomUUID(), at, sessionId: sessionId ?? undefined, model, tier, mode, tokens: Math.max(0, Math.round(tokens)), credits };
+      statements.ledger.run(workspace, entry.id, entry.at, sessionId, model, tier, mode, entry.tokens, credits);
+      return entry;
+    },
     counts(workspace) { return statements.counts.get(workspace, workspace); },
+    /** The newest server-written row for one payment mode, so the client can show it without a full pull. */
+    latestEntry(workspace, mode = 'free') { const e = statements.latest.get(workspace, mode); return e ? { id: e.id, at: e.at, sessionId: e.session_id ?? undefined, model: e.model, tier: e.tier, mode: e.mode, tokens: e.tokens, credits: e.credits } : null; },
     clear(workspace) { for (const s of statements.clear) s.run(workspace); },
+    /** The underlying handle, so server/jobs.mjs can own its own table in the same file. */
+    raw() { return db; },
     close() { db.close(); },
   };
 }

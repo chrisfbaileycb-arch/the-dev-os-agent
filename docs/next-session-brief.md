@@ -1,5 +1,18 @@
 # Next session brief: Hey Buddy, web edition
 
+> **Status note, 2026-09-11.** This is a historical record of the Floot rebuild session; read
+> sections 3 and 4 (licences, the owner's assets) as still current and the rest as background.
+> Two things have changed since it was written:
+>
+> - **The Floot edition is gone.** `floot/` and `docs/floot-rebuild-brief.md` were deleted, and
+>   `web/` is now the only edition. Floot is no longer a deployment target; Render is, via the
+>   two services in `render.yaml`.
+> - **The "no anonymous server-funded pool" decision of 2026-09-10 was reversed.** The web
+>   edition now ships a zero-config free tier: a visitor with no key streams a live reply on an
+>   allowlisted set of free models funded by the deployment's own Groq and OpenRouter keys, and
+>   metered on the server against a visible credit quota. See `web/server/freetier.mjs` and the
+>   free-tier section of `web/README.md`.
+
 Written at the end of the Floot rebuild session so the next session starts with the decisions made, the licences checked, and the owner's own material at the centre.
 
 ## 1. Where things stand
