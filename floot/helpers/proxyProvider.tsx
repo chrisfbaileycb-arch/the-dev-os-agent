@@ -14,7 +14,8 @@ class ProxyError extends Error {
   }
 }
 
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+type ChatPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string | ChatPart[] };
 
 interface ConnectionInput {
   provider: Provider;
@@ -110,6 +111,7 @@ async function chat(input: ChatInput): Promise<{ text: string; tokens: number }>
   const target = await resolveTarget(input.provider, input.baseUrl);
   const apiKey = (input.apiKey ?? "").trim();
   if (!apiKey && input.provider !== "custom") throw new ProxyError(401, "Add your provider API key in Settings. This deployment does not supply server credits.");
+  if (target.native === "cohere" && input.messages.some((m) => Array.isArray(m.content))) throw new ProxyError(400, "Cohere native chat does not accept photos here. Choose a vision model on OpenRouter or Groq.");
   const model = input.provider === "groq" ? input.model.trim().replace(/^groq\//, "") : input.model.trim();
   const url = target.native === "cohere" ? `${target.base}/chat` : `${target.base}/chat/completions`;
   const data = (await send(url, {
