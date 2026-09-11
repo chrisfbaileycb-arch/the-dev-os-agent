@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { createProxy, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, createProxy, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent } from '../server/proxy.mjs';
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
 async function withProxy(options, fn) { const handler = createProxy(options); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
 function stream(text, status = 200, type = 'text/event-stream') { const s = Readable.from([Buffer.from(text)]); s.statusCode = status; s.headers = { 'content-type': type }; return s; }
 const post = (url, body, route = '/api/chat', headers = {}) => fetch(url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+// A keyless request, so the server funds it from its own key and the free-tier paths apply.
+const chatFree = (url, body) => post(url, body, '/api/chat', { 'X-Workspace-Id': '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f' });
 test('fixed routes and model namespace handling', async () => { assert.equal((await resolveTarget('openrouter')).base,'https://openrouter.ai/api/v1'); assert.equal((await resolveTarget('groq')).base,'https://api.groq.com/openai/v1'); assert.equal((await resolveTarget('cohere')).nativeCohere,true); assert.equal(normalizeModel('groq','groq/llama-3.3-70b-versatile'),'llama-3.3-70b-versatile'); assert.equal(normalizeModel('openrouter','deepseek/deepseek-r1'),'deepseek/deepseek-r1'); });
 test('server credits require explicit deployment authorization', () => { const env = { GROQ_API_KEY: 'server-secret', SERVER_CREDIT_ACCESS_TOKEN: 'access' }; assert.equal(keyFor({ provider:'groq' },env),''); assert.equal(keyFor({ provider:'groq', serverAccessToken:'wrong' },env),''); assert.equal(keyFor({ provider:'groq', serverAccessToken:'access' },env),'server-secret'); assert.equal(keyFor({ provider:'groq', apiKey:'visitor' },env),'visitor'); });
 test('custom SSRF protections and exact Ollama bridge approval', async () => { await assert.rejects(resolveTarget('custom','http://localhost:11434/v1',{})); await assert.rejects(resolveTarget('custom','https://api.example.com/v1',{})); await assert.rejects(resolveTarget('custom','https://api.example.com/v1',{ CUSTOM_API_ORIGINS:'https://api.example.com' },async () => [{address:'127.0.0.1'}])); const target = await resolveTarget('custom','https://api.example.com/v1',{ CUSTOM_API_ORIGINS:'https://api.example.com' },async () => [{ address:'8.8.8.8' }]); assert.equal(target.address,'8.8.8.8'); assert.equal((await resolveTarget('custom','http://localhost:11434/v1',{ OLLAMA_BRIDGE_URL:'http://localhost:11434/v1' })).approvedBridge,true); await assert.rejects(resolveTarget('custom','http://localhost:11434/other',{ OLLAMA_BRIDGE_URL:'http://localhost:11434/v1' })); for (const ip of ['127.0.0.1','10.0.0.1','169.254.169.254','172.16.0.1','192.168.1.1','100.64.0.1','::1','::ffff:127.0.0.1']) assert.equal(publicAddress(ip),false); });
@@ -167,5 +169,58 @@ test('/api/providers reports billing alongside the free tier', async () => {
     assert.equal(body.billing.enabled, true);
     assert.equal(body.billing.plans.find(p => p.id === 'premium').checkout, 'https://buy.stripe.com/premium');
     assert.equal(body.free.enabled, false, 'billing and the free tier are independent');
+  });
+});
+
+test('a connection that never lands is reported, not swallowed', async () => {
+  // The failure that actually happened in production: nothing answered, so there was no status
+  // code, and the generic catch turned it into a bare 502 with no log line anywhere. The
+  // operator had nothing to go on. Two things are asserted here — the visitor gets the right
+  // message for who is at fault, and the cause reaches the logs.
+  const lines = [];
+  const dead = async () => { const e = new Error('getaddrinfo ENOTFOUND api.example.com'); e.code = 'ENOTFOUND'; throw e; };
+
+  // Free tier: the deployment's own key and endpoint failed, which is not the visitor's problem.
+  await withProxy({ env: { XKIRO_API_KEY: 'k' }, transport: dead, log: l => lines.push(l) }, async url => {
+    const response = await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.error.code, 'free_tier_unavailable');
+    assert.equal(body.error.message, FREE_TIER_UNAVAILABLE, 'the warming-up wording, not a raw proxy error');
+  });
+
+  // BYOK: the visitor chose the endpoint, so name the host they need to look at.
+  await withProxy({ env: {}, transport: dead, log: l => lines.push(l) }, async url => {
+    const response = await post(url, { ...base, provider: 'openai', model: 'gpt-4o' });
+    assert.equal(response.status, 502);
+    assert.match((await response.json()).error.message, /Could not reach api\.openai\.com/);
+  });
+
+  assert.equal(lines.length, 2, 'every unreachable upstream leaves exactly one line');
+  assert.match(lines[0], /^\[proxy\] upstream xkiro api\.xkiro\.com\/v1\/chat\/completions -> unreachable: ENOTFOUND$/);
+  assert.match(lines[1], /openai api\.openai\.com\/v1\/chat\/completions -> unreachable: ENOTFOUND/);
+  for (const line of lines) assert.ok(!/\bk\b|gpt-4o|hi\b/.test(line.replace('api.openai.com', '')), `no key or prompt in: ${line}`);
+});
+
+test('an upstream that answers badly logs the status it answered with', async () => {
+  // The free tier hides the status from the visitor on purpose. It must not hide it from the
+  // operator too, or "warming up" becomes unfalsifiable.
+  const lines = [];
+  await withProxy({ env: { XKIRO_API_KEY: 'k' }, log: l => lines.push(l), transport: async () => { const s = Readable.from([Buffer.from('{"error":"no such model"}')]); s.statusCode = 404; s.headers = {}; return s; } }, async url => {
+    const response = await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 503, 'the visitor still sees warming up');
+    assert.equal((await response.json()).error.code, 'free_tier_unavailable');
+  });
+  assert.match(lines[0], /upstream xkiro api\.xkiro\.com\/v1\/chat\/completions -> HTTP 404/);
+});
+
+test('/api/providers names the gateway it will actually call', async () => {
+  // A well-formed but wrong XKIRO_BASE_URL passes every check and surfaces only as a connection
+  // failure. Publishing the resolved base makes that visible before anyone sends a message.
+  await withProxy({ env: {} }, async url => {
+    assert.equal((await (await fetch(url + '/api/providers')).json()).gateway, 'https://api.xkiro.com/v1');
+  });
+  await withProxy({ env: { XKIRO_BASE_URL: 'https://gateway.example.com/v1' } }, async url => {
+    assert.equal((await (await fetch(url + '/api/providers')).json()).gateway, 'https://gateway.example.com/v1');
   });
 });

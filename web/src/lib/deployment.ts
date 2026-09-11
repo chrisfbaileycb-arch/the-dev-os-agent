@@ -19,7 +19,7 @@ import type { FreeTier } from './store';
 export interface BillingPlan { id: string; name: string; price: string; cadence: string; checkout: string | null; }
 export interface Billing { enabled: boolean; plans: BillingPlan[]; }
 
-export interface Deployment { free: FreeTier; billing: Billing; ollamaBridge: string | null; reachable: boolean; }
+export interface Deployment { free: FreeTier; billing: Billing; gateway: string | null; ollamaBridge: string | null; reachable: boolean; }
 
 /**
  * What a visitor sees whenever the zero-config tier cannot serve them: keys unset, provider
@@ -38,6 +38,7 @@ export const isFreeTierWarming = (code?: string): boolean => Boolean(code && WAR
 export const offlineDeployment: Deployment = {
   free: { enabled: false, models: [], providers: {}, monthlyCredits: DEFAULT_FREE_POOL, perHour: 0 },
   billing: { enabled: false, plans: [] },
+  gateway: null,
   ollamaBridge: null,
   reachable: false,
 };
@@ -75,11 +76,12 @@ export async function loadDeployment(signal?: AbortSignal): Promise<Deployment> 
   try {
     const response = await fetch('/api/providers', { credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(10_000)]) });
     if (!response.ok) return offlineDeployment;
-    const body = await response.json() as { free?: Partial<FreeTier>; billing?: unknown; ollamaBridge?: string | null };
+    const body = await response.json() as { free?: Partial<FreeTier>; billing?: unknown; gateway?: unknown; ollamaBridge?: string | null };
     const free = body.free ?? {};
     return {
       reachable: true,
       billing: billingFrom(body.billing),
+      gateway: typeof body.gateway === 'string' && /^https:\/\//.test(body.gateway) ? body.gateway : null,
       ollamaBridge: typeof body.ollamaBridge === 'string' ? body.ollamaBridge : null,
       free: {
         enabled: free.enabled === true && Array.isArray(free.models) && free.models.length > 0,

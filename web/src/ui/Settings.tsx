@@ -10,7 +10,7 @@ import { REFERRAL_ALLOWANCE, REFERRAL_BREADTH, REFERRAL_DISCLOSURE, referralEnab
 export interface SettingsProps {
   connection: Connection; setConnection: (c: Connection) => void;
   models: string[]; checking: boolean; discover: () => void; save: () => void; forget: () => void;
-  balance: Balance; freeBalance: Balance; free: FreeTier;
+  balance: Balance; freeBalance: Balance; free: FreeTier; gateway: string | null;
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
 }
 
@@ -102,6 +102,7 @@ export default function Settings(p: SettingsProps) {
               <label>Output limit<select disabled={p.busy} value={c.maxTokens} onChange={e => set({ maxTokens: Number(e.target.value) })}>{[512, 1024, 2048, 4096].map(n => <option key={n} value={n}>{n.toLocaleString()} tokens</option>)}</select></label>
             </div>
             {c.mode === 'remote' && c.model && !current && <p className="help">Unlisted model: charged at {weightFor(c.model)} credits per 1K tokens on platform credits, judged from its name. Free-tier funding covers listed models only.</p>}
+            {provider === 'xkiro' && p.gateway && <p className="help">This deployment reaches xKiro at <strong className="mono">{p.gateway}</strong>. That is the resolved value of XKIRO_BASE_URL — if it is not the address you expect, the variable is the thing to correct, and a wrong-but-valid host shows up only as a failed connection.</p>}
             {provider === 'custom' && <p className="help">HTTPS only, and the origin must be listed in CUSTOM_API_ORIGINS on the server. A home PC running Ollama or LM Studio is reached through an administrator bridge, never through localhost on a hosted server.</p>}
           </div>
         </section>
