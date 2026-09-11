@@ -53,11 +53,11 @@ export default function ModelPicker(p: ModelPickerProps) {
   const zeroConfig = catalog.filter(m => m.zeroConfig);
   const keyed = catalog.filter(m => !m.zeroConfig);
 
+  // Reachable now: the deployment funds it, or the visitor's own key can pay for it.
+  const reachable = (m: CatalogModel) => live(m) || p.hasKey || p.inference === 'credits';
   function choose(m: CatalogModel) {
     setOpen(false);
-    if (live(m) || p.hasKey || p.inference === 'credits') p.onPick(m.id);
-    else if (m.zeroConfig) p.onNeedsKey(m); // free tier is off on this deployment
-    else p.onNeedsKey(m);
+    if (reachable(m)) p.onPick(m.id); else p.onNeedsKey(m);
   }
 
   const badge = p.demo ? 'offline' : p.inference === 'free' ? 'free' : p.inference === 'credits' ? 'credits' : 'your key';
@@ -74,16 +74,16 @@ export default function ModelPicker(p: ModelPickerProps) {
         {p.free.enabled
           ? <small className="model-group-note">{p.free.monthlyCredits.toLocaleString()} credits a month on this deployment, then bring your own key.</small>
           : <small className="model-group-note">This deployment has no server keys configured, so free models are unavailable here.</small>}
-        {zeroConfig.map(m => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}${live(m) ? '' : ' locked'}`} onClick={() => choose(m)}>
+        {zeroConfig.map(m => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}${reachable(m) ? '' : ' locked'}`} onClick={() => choose(m)}>
           <strong>{m.label}{current?.id === m.id && !p.demo && <Check size={12} />}</strong>
-          <small>{providers[m.provider].name} · {live(m) ? 'ready now' : 'not funded here'}</small>
+          <small>{providers[m.provider].name} · {live(m) ? 'ready now' : p.hasKey ? 'on your key' : 'not funded here'}</small>
           <span>{m.note}</span>
         </button>)}
       </div>
       <div className="model-group">
         <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />Deep reasoning · your key</span>
         <small className="model-group-note">{p.hasKey ? 'Billed by your provider; no credits are drawn.' : 'Add an OpenRouter, Groq, or custom key in Settings to unlock these.'}</small>
-        {keyed.map(m => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}${p.hasKey || p.inference === 'credits' ? '' : ' locked'}`} onClick={() => choose(m)}>
+        {keyed.map(m => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}${reachable(m) ? '' : ' locked'}`} onClick={() => choose(m)}>
           <strong>{m.label}{current?.id === m.id && !p.demo && <Check size={12} />}</strong>
           <small>{providers[m.provider].name} · {m.weight} cr/1K on credits</small>
           <span>{m.note}</span>

@@ -13,12 +13,19 @@ const MODES: InferenceMode[] = ['free', 'credits', 'byok'];
 export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: providers[provider].models[0] || '', token: '', maxTokens: 1024, saveKey: false }; }
 
 /**
- * How a given model gets paid for. A zero-config model always routes through the free tier so
- * a visitor's key is never spent on something the deployment already covers; anything else
- * keeps whatever the visitor chose, falling back to their own key.
+ * How a given model gets paid for.
+ *
+ * A zero-config model routes through the free tier so a visitor's key is never spent on
+ * something the deployment already covers — but only if the deployment actually funds *that*
+ * model. A free model this host cannot fund is still perfectly runnable on the visitor's own
+ * key, and routing it through the free tier would strip that key and fail the request.
+ *
+ * `funded` is the list from /api/providers. Pass it once it is known; omit it before then, when
+ * assuming the free tier covers a free model is the right guess and keeps a returning
+ * free-tier visitor on the free tier across a reload.
  */
-export function inferenceFor(model: string, current?: InferenceMode): InferenceMode {
-  if (isZeroConfig(model)) return 'free';
+export function inferenceFor(model: string, current?: InferenceMode, funded?: string[]): InferenceMode {
+  if (isZeroConfig(model) && (funded === undefined || funded.some(id => id.toLowerCase() === model.trim().toLowerCase()))) return 'free';
   return current && current !== 'free' ? current : 'byok';
 }
 

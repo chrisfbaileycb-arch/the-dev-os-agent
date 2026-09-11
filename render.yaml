@@ -1,86 +1,98 @@
 # Render Blueprint for the Hey Buddy web edition.
 # Create it from the dashboard: New > Blueprint, pick this repo, branch main.
 #
-# Two services, which is Render's dual-service shape:
+# ONE standard Node web service. No Docker, no persistent disk, no background worker — this
+# file matches the service actually running at https://hey-buddy-web.onrender.com so that
+# recreating it from the Blueprint reproduces what is live, rather than a different topology.
 #
-#   hey-buddy-web     a public HTTP Web Service. Serves the app, streams provider responses as
-#                     Server-Sent Events, owns the SQLite disk, meters the free tier, and hands
-#                     out background jobs. This service is required.
+# What that costs, stated plainly so it is a choice and not a surprise:
 #
-#   hey-buddy-worker  an optional Background Worker with no public port. It claims heavier
-#                     multi-step agent runs from the web service over the private network and
-#                     posts results back, so a long workflow never occupies a dyno that should
-#                     be streaming. Delete this block if you do not want it: workflows then run
-#                     in the visitor's browser, which is the default either way.
+#   No Chromium.      The Browser Agent persona cannot run; /api/browse answers 503. Everything
+#                     else works, including the URL crawler connector, which needs no browser.
 #
-# A Render disk attaches to exactly one service, so the worker never touches SQLite directly —
-# it talks to the web service over HTTP, authenticated by WORKER_TOKEN.
+#   No disk.          SQLite lives at DATA_FILE and is wiped on every restart and redeploy.
+#                     Sessions, runs, and the ledger are reconstructed from each browser's own
+#                     IndexedDB copy, so a returning visitor keeps their history; what does not
+#                     survive is the server's record. The free-tier monthly quota resets with it,
+#                     which makes FREE_MAX_PER_HOUR — an in-memory per-IP window — the cap that
+#                     actually bounds spend on the deployment's keys.
+#
+#   No worker.        Multi-step agent workflows run in the visitor's own browser Web Worker,
+#                     which is the default path regardless. /api/jobs reports `worker: false`
+#                     and the queue stays idle. The worker code (server/worker.mjs) is kept and
+#                     tested so a second service can be added later without a rewrite.
+#
+# To get the durable version — Chromium for the Browser Agent, a 1 GB disk so the ledger and the
+# free-tier quota persist, and a background worker for heavy runs — see "Scaling up" in
+# web/README.md, which describes the Docker-plus-disk topology this file previously declared.
 
 services:
   - type: web
     name: hey-buddy-web
-    runtime: docker
-    # A persistent disk requires a paid instance; free instances cannot mount one.
-    plan: starter
+    runtime: node
+    # Free plan: no disk, and the instance sleeps after inactivity (first request then takes a
+    # few seconds to wake). Move to `starter` for an always-on instance.
+    plan: free
     region: oregon
     branch: main
-    rootDir: web
-    dockerfilePath: ./Dockerfile
-    # Verified to answer 200 with no database or provider key present.
-    healthCheckPath: /api/providers
     autoDeploy: true
-    disk:
-      # Sessions, runs, the credit ledger, and the job queue live here as SQLite. Without this
-      # disk the workspace resets on every deploy and restart.
-      name: workspace-data
-      mountPath: /data
-      sizeGB: 1
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    # Answers 200 with no database and no provider key present, which is why it is the probe.
+    healthCheckPath: /api/providers
     envVars:
-      - key: DATA_DIR
-        value: /data
-      - key: CREDIT_MONTHLY_POOL
-        value: "100000"
+      - key: NODE_VERSION
+        value: "22"
+      # node:sqlite needs Node 22+. Chromium is not installed on this runtime, so skip the
+      # download that playwright's postinstall would otherwise attempt.
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"
+      # Ephemeral by design on a diskless plan. /tmp is writable on Render.
+      - key: DATA_FILE
+        value: /tmp/heybuddy.sqlite
 
       # --- Zero-config free tier -------------------------------------------------------
-      # Set one or both of these and visitors get a live streaming reply with no API key and
-      # no account: the server funds an allowlisted set of free models from its own keys.
-      # Leave them unset and the app still works — it opens in the scripted preview and asks
-      # the visitor for their own key. Both providers offer free accounts.
-      # Add the real values in the dashboard, never in this file.
+      # Set one or both and visitors get a live streaming reply with no API key and no account:
+      # the server funds an allowlisted set of free models from its own keys. Leave them unset
+      # and the app still runs — it shows "Public free tier warming up" and asks for a key.
+      # Enter the real values in the dashboard; `sync: false` keeps them out of this file.
       - key: GROQ_API_KEY
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
-      # Credits a workspace may spend on the free tier per month, at 0.5 credits per 1K tokens.
-      # 400 credits is roughly 800,000 tokens. Metered on the server from the bytes that
-      # actually streamed, so a browser cannot under-report its own usage.
+      # Credits per workspace per month at 0.5 credits per 1K tokens (400 ≈ 800,000 tokens).
+      # Metered on the server from the bytes that actually streamed. Resets on restart here.
       - key: FREE_CREDIT_MONTHLY_POOL
         value: "400"
-      # Per-IP burst cap. The workspace id is minted by the browser and can be rotated, so this
-      # is what bounds how fast one network can spend the deployment's keys.
+      # Per-IP burst cap. With no disk this is the binding constraint on free-tier spend, since
+      # the workspace id is browser-minted and the monthly quota does not survive a restart.
       - key: FREE_MAX_PER_HOUR
         value: "40"
       - key: FREE_MAX_OUTPUT_TOKENS
         value: "1024"
-      # Set to "true" to switch the free tier off entirely without removing the provider keys.
+      # "true" switches the tier off without removing the provider keys.
       - key: FREE_TIER_DISABLED
         value: "false"
 
+      # --- Platform credits (separate budget, administrator-gated) -----------------------
+      - key: CREDIT_MONTHLY_POOL
+        value: "100000"
+
       # --- Connectors ------------------------------------------------------------------
-      # URL crawler (/api/fetch). Open to any public host by default: it issues a plain GET and
-      # runs no JavaScript. Set a comma-separated host list to narrow it.
+      # URL crawler (/api/fetch): a plain GET converted to text server-side, so the browser can
+      # read external pages despite CORS. Open to any public host; set a list to narrow it.
       - key: FETCH_ALLOWED_HOSTS
         value: ""
       - key: FETCH_MAX_PER_HOUR
         value: "60"
-      # GitHub connector (/api/github). Read-only. A server token is optional; visitors may
+      # GitHub connector (/api/github): read-only. A server token is optional — visitors may
       # supply their own in the Connectors hub.
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_MAX_PER_HOUR
         value: "120"
-      # Browser Agent allowlist. Empty keeps the sandbox browser disabled, which is the safe
-      # default. Set hostnames here to switch it on.
+      # Browser Agent: inert on this runtime (no Chromium), so the allowlist stays empty.
       - key: BROWSE_ALLOWED_HOSTS
         value: ""
       - key: BROWSE_MAX_PER_HOUR
@@ -88,42 +100,6 @@ services:
       - key: MCP_MAX_PER_HOUR
         value: "120"
 
-      # --- Background worker hand-off ---------------------------------------------------
-      # Shared secret for /api/jobs/claim, /api/jobs/update, and /api/jobs/finish. Render
-      # generates it once and the worker below reads the same value. With no worker deployed
-      # this is unused and the browser runs workflows itself.
-      - key: WORKER_TOKEN
-        generateValue: true
-
       # APP_ORIGIN is deliberately unset. The server falls back to matching the request Origin
       # against its own Host, which is correct on Render. Set it only to pin a single external
       # origin, and never to a guessed URL: a wrong value makes every API call fail with 403.
-
-  - type: worker
-    name: hey-buddy-worker
-    runtime: node
-    plan: starter
-    region: oregon
-    branch: main
-    rootDir: web
-    buildCommand: npm ci
-    startCommand: npm run worker
-    autoDeploy: true
-    envVars:
-      # Chromium is only needed by the web service's Browser Agent, not by the worker.
-      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
-        value: "1"
-      # The web service's internal address. Render resolves the service name on the private
-      # network, so this never leaves the datacentre.
-      - key: WEB_SERVICE_URL
-        fromService:
-          name: hey-buddy-web
-          type: web
-          property: hostport
-      - key: WORKER_TOKEN
-        fromService:
-          name: hey-buddy-web
-          type: web
-          envVarKey: WORKER_TOKEN
-      - key: WORKER_POLL_MS
-        value: "3000"

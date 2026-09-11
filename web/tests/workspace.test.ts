@@ -7,7 +7,7 @@ import { mcpToolSpecs, slug, type McpConnection } from '../src/lib/mcp';
 import { activeTools, defaultSettings, parseRepo } from '../src/lib/connectors';
 import { retrieve } from '../src/lib/memory';
 import { chatTurn } from '../src/lib/chat';
-import { defaultConnection } from '../src/lib/providers';
+import { defaultConnection, inferenceFor } from '../src/lib/providers';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -45,6 +45,30 @@ describe('ledger and workspace merge', () => {
     expect(merged.sessions.map(x => x.title).sort()).toEqual(['local newer', 'local only', 'server only']); expect(merged.ledger).toHaveLength(2);
     expect(merged.toPush.sessions.map(x => x.id)).toEqual(['a', 'c']); expect(merged.toPush.ledger).toHaveLength(0);
     expect(merge(local, null).toPush.sessions).toHaveLength(0);
+  });
+});
+
+describe('payment routing', () => {
+  const funded = ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'];
+  it('routes a funded free model through the free tier and never spends the visitor key on it', () => {
+    expect(inferenceFor('groq/llama-3.3-70b-versatile', 'byok', funded)).toBe('free');
+    expect(inferenceFor('GROQ/LLAMA-3.3-70B-VERSATILE', 'byok', funded)).toBe('free');
+  });
+  it('routes a free model this host does not fund to the visitor own key', () => {
+    // Otherwise the browser would strip the key the request actually needs and the send fails.
+    expect(inferenceFor('mistralai/mistral-nemo:free', 'byok', funded)).toBe('byok');
+    expect(inferenceFor('mistralai/mistral-nemo:free', 'free', funded)).toBe('byok');
+  });
+  it('keeps a free model on the free tier before the funded list is known', () => {
+    // On first paint /api/providers has not answered; flipping a returning free-tier visitor to
+    // BYOK for a frame would ask them for a key they never needed.
+    expect(inferenceFor('mistralai/mistral-nemo:free', 'free')).toBe('free');
+    expect(inferenceFor('groq/llama-3.1-8b-instant', undefined)).toBe('free');
+  });
+  it('leaves a pro model on whatever the visitor chose, defaulting to their own key', () => {
+    expect(inferenceFor('openai/gpt-4o', 'free', funded)).toBe('byok');
+    expect(inferenceFor('openai/gpt-4o', 'credits', funded)).toBe('credits');
+    expect(inferenceFor('anthropic/claude-3.5-sonnet', undefined, funded)).toBe('byok');
   });
 });
 

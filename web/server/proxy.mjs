@@ -6,7 +6,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest } from './freetier.mjs';
 import { createMeter } from './meter.mjs';
 
-export class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
 export function publicAddress(ip) {
   if (isIP(ip) === 6) return false; // Conservative: custom endpoints must resolve to public IPv4.
   if (isIP(ip) !== 4) return false;
@@ -93,6 +93,15 @@ async function readBody(req, limit = 256_000) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'Invalid JSON body.'); }
 }
 function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(data)); }
+
+/**
+ * What a visitor is told when the zero-config tier cannot serve them right now — whether the
+ * deployment's keys are unset, the provider is rate-limiting, or the upstream is down. All three
+ * look identical from a keyless browser and none of them are the visitor's key to fix, so they
+ * share one message and one code. The operator sees the real cause in /api/providers and the logs.
+ */
+export const FREE_TIER_UNAVAILABLE = 'Public free tier warming up — enter your own key in Settings or try again shortly.';
+
 const windows = new Map();
 export function createProxy({ env = process.env, transport = upstream, resolve = lookup, db = null } = {}) {
   const takeBurst = createBurstLimiter(env);
@@ -123,14 +132,20 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       const provider = funding.mode === 'free' ? funding.entry.provider : body.provider;
       const target = await resolveTarget(provider, body.baseUrl, env, resolve);
       const apiKey = funding.apiKey;
-      if (!apiKey && provider !== 'custom' && !(path === '/api/models' && provider === 'openrouter')) throw new HttpError(401, 'That model needs a key. Pick a free model, or add your own OpenRouter or Groq key in Settings.');
+      if (!apiKey && provider !== 'custom' && !(path === '/api/models' && provider === 'openrouter')) {
+        // A model on the free allowlist that is simply not funded right now reads as a warming-up
+        // tier, not as the visitor's mistake; anything else genuinely needs their own key.
+        throw freeModel(body.model)
+          ? new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable')
+          : new HttpError(401, 'That model needs a key. Pick a free model, or add your own OpenRouter or Groq key in Settings.', 'key_required');
+      }
       const workspace = typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'].slice(0, 64) : ip;
       if (funding.mode === 'free' && path === '/api/chat') {
         const burst = takeBurst(ip);
-        if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`);
+        if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`, 'free_tier_busy');
         const pool = monthlyPool(env);
         const used = db ? db.usedThisMonth(workspace, new Date(), 'free') : 0;
-        if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own OpenRouter or Groq key in Settings — both offer free accounts — or wait for the monthly reset.`);
+        if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own OpenRouter or Groq key in Settings — both offer free accounts — or wait for the monthly reset.`, 'free_tier_exhausted');
       }
       const headers = { 'Content-Type': 'application/json', Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) };
       if (provider === 'openrouter') { headers['HTTP-Referer'] = env.APP_ORIGIN || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
@@ -149,7 +164,14 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       const upstreamUrl = path === '/api/models' && target.nativeCohere ? 'https://api.cohere.com/v1/models' : target.base + suffix;
       const response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
       const status = response.statusCode || 502;
-      if (status < 200 || status >= 300) { response.destroy(); throw new HttpError(status >= 300 && status < 400 ? 502 : status, errorMessage(status)); }
+      if (status < 200 || status >= 300) {
+        response.destroy();
+        // On a free-tier request the credential is the deployment's, so "invalid API key" would
+        // send the visitor hunting for a problem that is not theirs. Report it as a tier that is
+        // not answering, and leave the real status for the operator's logs.
+        if (funding.mode === 'free') throw new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable');
+        throw new HttpError(status >= 300 && status < 400 ? 502 : status, errorMessage(status));
+      }
       if (path === '/api/models') {
         let size = 0; const chunks = [];
         for await (const chunk of response) { size += chunk.length; if (size > 4_000_000) { response.destroy(); throw new HttpError(502, 'Model catalog too large.'); } chunks.push(chunk); }
@@ -170,7 +192,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (meter && db) { try { const tokens = meter.total(); db.recordUsage(workspace, { model: body.model, tier: 'free', mode: 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
       return true;
     } catch (error) {
-      if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.' } });
+      if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) } });
       else if (!res.destroyed) { res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'Provider stream interrupted. Please retry.' } })}\n\n`); res.end(); }
       return true;
     } finally { clearTimeout(timeout); }
