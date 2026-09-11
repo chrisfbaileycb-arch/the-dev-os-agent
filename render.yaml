@@ -61,6 +61,15 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
+      # xKiro unified gateway (https://api.xkiro.com/v1) — DeepSeek, GLM, Qwen and Kimi behind
+      # one OpenAI-compatible endpoint. This key alone is enough to switch the free tier on.
+      - key: XKIRO_API_KEY
+        sync: false
+      # The xKiro ids offered free, replacing the shipped seed. A gateway's catalogue is its
+      # own to define, so set this to what GET /v1/models actually returns; blank keeps the
+      # seed. Changing it here beats redeploying when a model id turns out to be wrong.
+      - key: XKIRO_FREE_MODELS
+        value: ""
       # Credits per workspace per month at 0.5 credits per 1K tokens (400 ≈ 800,000 tokens).
       # Metered on the server from the bytes that actually streamed. Resets on restart here.
       - key: FREE_CREDIT_MONTHLY_POOL

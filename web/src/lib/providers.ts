@@ -1,11 +1,15 @@
 import { DEFAULT_FREE_MODEL, isZeroConfig } from './catalog';
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'cohere' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'cohere' | 'xkiro' | 'custom';
 export const providers: Record<Provider, { name: string; tier: string; endpoint: string; models: string[] }> = {
   openrouter: { name: 'OpenRouter', tier: 'Universal', endpoint: 'https://openrouter.ai/api/v1', models: ['meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-nemo:free', 'qwen/qwen-2.5-72b-instruct:free', 'deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'anthropic/claude-3.5-haiku', 'openai/gpt-4o'] },
   groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
   cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
+  // A unified gateway fronting many model families through one OpenAI-compatible endpoint.
+  // Its catalogue is the gateway's to define, so these ids are a seed: Discover reads the real
+  // list from /v1/models, and /api/providers reports which of them this deployment funds.
+  xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: ['deepseek/deepseek-chat', 'deepseek-r1', 'glm-5.2', 'glm-5.3-flash'] },
   custom: { name: 'Custom endpoint', tier: 'Custom', endpoint: '', models: [] },
 };
 const profiles = new Map<Provider, Connection>();

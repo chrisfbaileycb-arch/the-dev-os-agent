@@ -3,7 +3,7 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest } from './freetier.mjs';
+import { XKIRO_BASE, createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest } from './freetier.mjs';
 import { createMeter } from './meter.mjs';
 
 export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
@@ -14,7 +14,7 @@ export function publicAddress(ip) {
   return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 168 || b === 0)) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)));
 }
 export async function resolveTarget(provider, baseUrl, env = process.env, resolve = lookup) {
-  const fixed = { openrouter: 'https://openrouter.ai/api/v1', groq: 'https://api.groq.com/openai/v1', cohere: 'https://api.cohere.com/v2' };
+  const fixed = { openrouter: 'https://openrouter.ai/api/v1', groq: 'https://api.groq.com/openai/v1', cohere: 'https://api.cohere.com/v2', xkiro: XKIRO_BASE };
   if (fixed[provider]) return { base: fixed[provider], nativeCohere: provider === 'cohere' };
   if (provider !== 'custom') throw new HttpError(400, 'Unsupported provider.');
   let url; try { url = new URL(baseUrl); } catch { throw new HttpError(400, 'Invalid custom baseUrl.'); }
@@ -40,7 +40,7 @@ export function keyFor(body, env = process.env) {
   const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
   if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
-  return env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]] || '';
+  return env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]] || '';
 }
 /**
  * Who pays for this request, decided entirely on the server.
@@ -58,7 +58,7 @@ export function fundingFor(body, env = process.env) {
   const supplied = keyFor(body, env);
   if (supplied) return { mode: typeof body.apiKey === 'string' && body.apiKey.trim() ? 'byok' : 'credits', apiKey: supplied };
   if (env.FREE_TIER_DISABLED === 'true') return { mode: 'none', apiKey: '' };
-  const entry = freeModel(body.model);
+  const entry = freeModel(body.model, env);
   const key = entry && env[entry.envKey];
   return key ? { mode: 'free', apiKey: key, entry } : { mode: 'none', apiKey: '' };
 }
@@ -135,7 +135,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (!apiKey && provider !== 'custom' && !(path === '/api/models' && provider === 'openrouter')) {
         // A model on the free allowlist that is simply not funded right now reads as a warming-up
         // tier, not as the visitor's mistake; anything else genuinely needs their own key.
-        throw freeModel(body.model)
+        throw freeModel(body.model, env)
           ? new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable')
           : new HttpError(401, 'That model needs a key. Pick a free model, or add your own OpenRouter or Groq key in Settings.', 'key_required');
       }

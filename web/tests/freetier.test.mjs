@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { FREE_TIER_UNAVAILABLE, createProxy } from '../server/proxy.mjs';
 import { openDatabase } from '../server/db.mjs';
-import { FREE_MODELS, createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, routeFreeRequest } from '../server/freetier.mjs';
+import { FREE_MODELS, XKIRO_BASE, createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, fundedModels, routeFreeRequest, xkiroPool } from '../server/freetier.mjs';
 import { createMeter, deltaLength, usageFrom } from '../server/meter.mjs';
 
 const workspace = '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f';
@@ -155,7 +155,10 @@ test('/api/providers advertises the tier without ever leaking a key', async () =
     assert.ok(!text.includes('server-key-do-not-leak') && !text.includes('other-secret'));
     const body = JSON.parse(text);
     assert.equal(body.free.enabled, true);
-    assert.equal(body.free.models.length, FREE_MODELS.length);
+    // Only what these two keys fund — the xKiro entries stay out until its key is present.
+    assert.equal(body.free.models.length, 6);
+    assert.ok(!body.free.models.includes('glm-5.2'));
+    assert.ok(FREE_MODELS.length > body.free.models.length, 'the static list is a superset of any one deployment');
   });
   // The health check must still answer 200 on a deployment with nothing configured.
   await withProxy({ env: {}, transport: async () => { throw Error('must not call'); } }, async url => {
@@ -228,4 +231,69 @@ test('quota and burst refusals carry codes the browser can branch on', async () 
     await chat(url, base);
     assert.equal((await (await chat(url, base)).json()).error.code, 'free_tier_busy');
   });
+});
+
+test('xKiro funds the free tier on its own, and clears the warming-up state', () => {
+  // The whole point of point 3: one key, and the tier reports enabled.
+  const env = { XKIRO_API_KEY: 'k' };
+  const status = freeTierStatus(env);
+  assert.equal(status.enabled, true);
+  assert.deepEqual(status.models, ['deepseek/deepseek-chat', 'deepseek-r1', 'glm-5.2', 'glm-5.3-flash']);
+  // No Groq or OpenRouter ids leak in when only the gateway key is present.
+  assert.ok(!status.models.some(id => id.startsWith('groq/') || id.endsWith(':free')));
+  assert.equal(freeTierStatus({}).enabled, false);
+  assert.equal(freeTierStatus({ ...env, FREE_TIER_DISABLED: 'true' }).enabled, false);
+});
+
+test('the xKiro pool is operator-configurable, so a wrong model id is a dashboard fix', () => {
+  // This build cannot verify xKiro's real catalogue, so the seed must be overridable without
+  // a code change — otherwise a guessed id strands the tier until someone redeploys.
+  assert.deepEqual(xkiroPool({}), ['deepseek/deepseek-chat', 'deepseek-r1', 'glm-5.2', 'glm-5.3-flash']);
+  assert.deepEqual(xkiroPool({ XKIRO_FREE_MODELS: 'qwen-max, kimi-k2 ,, glm-4.6 ' }), ['qwen-max', 'kimi-k2', 'glm-4.6']);
+  assert.deepEqual(xkiroPool({ XKIRO_FREE_MODELS: '   ' }), xkiroPool({}), 'blank falls back to the seed');
+
+  const env = { XKIRO_API_KEY: 'k', XKIRO_FREE_MODELS: 'kimi-k2' };
+  assert.equal(freeModel('kimi-k2', env)?.provider, 'xkiro');
+  assert.equal(freeModel('glm-5.2', env), undefined, 'the override replaces the seed, never merges');
+  assert.deepEqual(fundedModels(env).map(m => m.id), ['kimi-k2']);
+});
+
+test('several provider keys stack into one pool', () => {
+  const both = freeTierStatus({ GROQ_API_KEY: 'k', XKIRO_API_KEY: 'k' }).models;
+  assert.ok(both.includes('groq/llama-3.3-70b-versatile'));
+  assert.ok(both.includes('glm-5.2'));
+  assert.equal(both.length, 6);
+});
+
+test('xKiro routes to its gateway with the server key and an unmodified model id', async () => {
+  let captured;
+  await withProxy({ env: { XKIRO_API_KEY: 'gateway-key' }, transport: async (url, options) => { captured = { url, ...options }; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await chat(url, { provider: 'xkiro', model: 'glm-5.2', messages: [{ role: 'user', content: 'hi' }] })).status, 200);
+  });
+  assert.equal(captured.url, `${XKIRO_BASE}/chat/completions`);
+  assert.equal(captured.headers.Authorization, 'Bearer gateway-key');
+  const body = JSON.parse(captured.body);
+  // The gateway names its own models; nothing is stripped or rewritten on the way through.
+  assert.equal(body.model, 'glm-5.2');
+  assert.equal(body.stream, true);
+  assert.deepEqual(body.stream_options, { include_usage: true });
+});
+
+test('a visitor cannot point the free tier at an xKiro model this deployment did not offer', async () => {
+  await withProxy({ env: { XKIRO_API_KEY: 'gateway-key', XKIRO_FREE_MODELS: 'glm-5.2' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    const response = await chat(url, { provider: 'xkiro', model: 'some-expensive-model', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error.code, 'key_required');
+  });
+});
+
+test('an xKiro stream is metered to the free ledger like any other funded model', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    await withProxy({ env: { XKIRO_API_KEY: 'gateway-key' }, db, transport: async () => stream('data: {"usage":{"total_tokens":4000}}\n\ndata: [DONE]\n\n') }, async url => {
+      assert.equal((await chat(url, { provider: 'xkiro', model: 'deepseek-r1', messages: [{ role: 'user', content: 'hi' }] })).status, 200);
+      assert.equal(db.usedThisMonth(workspace, new Date(), 'free'), 2, '4,000 tokens at 0.5 credits per 1K');
+      assert.equal(db.latestEntry(workspace, 'free').model, 'deepseek-r1');
+    });
+  } finally { db.close(); }
 });

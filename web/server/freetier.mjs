@@ -26,25 +26,52 @@ export const OPENROUTER_FREE_POOL = [
   'qwen/qwen-2.5-72b-instruct:free',
 ];
 
-/** Exact model ids a visitor may run without a key, with the provider that funds each. */
-export const FREE_MODELS = [
-  { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', envKey: 'GROQ_API_KEY' },
-  { id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' },
-  { id: 'openrouter/auto', provider: 'openrouter', envKey: 'OPENROUTER_API_KEY', pool: OPENROUTER_FREE_POOL },
-  ...OPENROUTER_FREE_POOL.map(id => ({ id, provider: 'openrouter', envKey: 'OPENROUTER_API_KEY' })),
+/**
+ * xKiro is a unified gateway: one OpenAI-compatible endpoint fronting many model families
+ * (DeepSeek, GLM, Qwen, Kimi and others). Its catalogue moves faster than this file can, and
+ * the exact ids are the gateway's to define, so the default list below is only a seed —
+ * XKIRO_FREE_MODELS overrides it wholesale, and /api/models reads the real list from the
+ * gateway. A model id that turns out to be wrong is therefore a dashboard fix, not a deploy.
+ */
+export const XKIRO_BASE = 'https://api.xkiro.com/v1';
+const XKIRO_DEFAULT_POOL = [
+  'deepseek/deepseek-chat',
+  'deepseek-r1',
+  'glm-5.2',
+  'glm-5.3-flash',
 ];
 
-const byId = new Map(FREE_MODELS.map(m => [m.id.toLowerCase(), m]));
+/** The xKiro ids this deployment offers free, from XKIRO_FREE_MODELS or the seed above. */
+export function xkiroPool(env = process.env) {
+  const configured = (env.XKIRO_FREE_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
+  return configured.length ? configured : XKIRO_DEFAULT_POOL;
+}
+
+/** Exact model ids a visitor may run without a key, with the provider that funds each. */
+export function freeModels(env = process.env) {
+  return [
+    { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', envKey: 'GROQ_API_KEY' },
+    { id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' },
+    { id: 'openrouter/auto', provider: 'openrouter', envKey: 'OPENROUTER_API_KEY', pool: OPENROUTER_FREE_POOL },
+    ...OPENROUTER_FREE_POOL.map(id => ({ id, provider: 'openrouter', envKey: 'OPENROUTER_API_KEY' })),
+    ...xkiroPool(env).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
+  ];
+}
+
+/** The static list, for callers that only need the shape (tests, the catalog parity check). */
+export const FREE_MODELS = freeModels({});
 
 /** The free entry for a model id, or undefined. Exact match only — no normalisation, no prefixes. */
-export function freeModel(id) {
-  return typeof id === 'string' ? byId.get(id.trim().toLowerCase()) : undefined;
+export function freeModel(id, env = process.env) {
+  if (typeof id !== 'string') return undefined;
+  const wanted = id.trim().toLowerCase();
+  return freeModels(env).find(m => m.id.toLowerCase() === wanted);
 }
 
 /** Free models this deployment can actually fund, i.e. the ones whose provider key is set. */
 export function fundedModels(env = process.env) {
   if (env.FREE_TIER_DISABLED === 'true') return [];
-  return FREE_MODELS.filter(m => Boolean(env[m.envKey]));
+  return freeModels(env).filter(m => Boolean(env[m.envKey]));
 }
 
 /**
@@ -76,6 +103,7 @@ export const creditsForTokens = tokens => Math.ceil((Math.max(0, tokens) * FREE_
 export function routeFreeRequest(entry) {
   if (entry.provider === 'groq') return { model: entry.id.replace(/^groq\//, '') };
   if (entry.pool) return { model: entry.pool[0], models: [...entry.pool] };
+  // xKiro and the OpenRouter :free ids are passed through exactly as the gateway names them.
   return { model: entry.id };
 }
 

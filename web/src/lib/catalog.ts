@@ -31,6 +31,13 @@ export const catalog: CatalogModel[] = [
   { id: 'meta-llama/llama-3.2-3b-instruct:free', provider: 'openrouter', label: 'Llama 3.2 3B (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
   { id: 'mistralai/mistral-nemo:free', provider: 'openrouter', label: 'Mistral Nemo (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
   { id: 'qwen/qwen-2.5-72b-instruct:free', provider: 'openrouter', label: 'Qwen 2.5 72B (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
+  // xKiro gateway seed. These mirror XKIRO_DEFAULT_POOL in server/freetier.mjs; a deployment
+  // that sets XKIRO_FREE_MODELS gets those ids instead, and the dropdown picks them up from
+  // /api/providers without needing an entry here.
+  { id: 'deepseek/deepseek-chat', provider: 'xkiro', label: 'DeepSeek Chat', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'General chat through the xKiro gateway.' },
+  { id: 'deepseek-r1', provider: 'xkiro', label: 'DeepSeek R1', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Reasoning model; thorough, and spends the free allowance faster.' },
+  { id: 'glm-5.2', provider: 'xkiro', label: 'GLM 5.2', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Strong all-rounder through the xKiro gateway.' },
+  { id: 'glm-5.3-flash', provider: 'xkiro', label: 'GLM 5.3 Flash', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Quickest of the GLM line; good for short questions.' },
   // Deep reasoning: needs your own key, or platform credits on a deployment that grants them.
   { id: 'deepseek/deepseek-r1', provider: 'openrouter', label: 'DeepSeek R1', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Deliberate reasoning; slow and thorough.' },
   { id: 'anthropic/claude-3.5-sonnet', provider: 'openrouter', label: 'Claude 3.5 Sonnet', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Strong writing and analysis.' },
