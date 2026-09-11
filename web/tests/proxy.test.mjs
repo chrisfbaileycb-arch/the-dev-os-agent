@@ -20,12 +20,13 @@ test('an anonymous request is funded only for an allowlisted free model', async 
   // Not on the allowlist: refused outright, whatever keys the deployment holds.
   await withProxy({ env: { GROQ_API_KEY: 'server-key', OPENROUTER_API_KEY: 'server-key' }, transport: async () => { throw Error('must not call'); } },
     async url => { const r = await post(url, { ...base, apiKey: '', provider: 'openrouter', model: 'anthropic/claude-3.5-sonnet' }); assert.equal(r.status, 401); assert.match(await r.text(), /needs a key/); });
-  // On the allowlist but this deployment funds nothing: still refused.
+  // On the allowlist but unfunded here, or switched off: still refused, but as a warming tier
+  // rather than a key error — the visitor cannot act on the deployment's configuration.
+  // tests/freetier.test.mjs asserts the message and code in full.
   await withProxy({ env: {}, transport: async () => { throw Error('must not call'); } },
-    async url => { assert.equal((await post(url, { ...base, apiKey: '' })).status, 401); });
-  // Explicitly switched off by the operator.
+    async url => { assert.equal((await post(url, { ...base, apiKey: '' })).status, 503); });
   await withProxy({ env: { GROQ_API_KEY: 'server-key', FREE_TIER_DISABLED: 'true' }, transport: async () => { throw Error('must not call'); } },
-    async url => { assert.equal((await post(url, { ...base, apiKey: '' })).status, 401); });
+    async url => { assert.equal((await post(url, { ...base, apiKey: '' })).status, 503); });
 });
 test('openrouter/auto on the free tier is pinned to the zero-cost pool, never the paid router', async () => {
   await withProxy({ env: { OPENROUTER_API_KEY: 'server-key' }, transport: async (url, options) => {

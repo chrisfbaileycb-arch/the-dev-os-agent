@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { createProxy } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, createProxy } from '../server/proxy.mjs';
 import { openDatabase } from '../server/db.mjs';
 import { FREE_MODELS, createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, routeFreeRequest } from '../server/freetier.mjs';
 import { createMeter, deltaLength, usageFrom } from '../server/meter.mjs';
@@ -162,5 +162,70 @@ test('/api/providers advertises the tier without ever leaking a key', async () =
     const body = await (await fetch(url + '/api/providers')).json();
     assert.equal(body.free.enabled, false);
     assert.deepEqual(body.free.models, []);
+  });
+});
+
+test('the warming-up message is identical in the server and the browser', () => {
+  // The browser shows its own copy on states the server never sees (a failed /api/providers),
+  // so the two constants must match exactly or a visitor gets two different explanations.
+  const client = readFileSync(new URL('../src/lib/deployment.ts', import.meta.url), 'utf8');
+  const match = client.match(/export const FREE_TIER_WARMING = '([^']+)'/);
+  assert.ok(match, 'FREE_TIER_WARMING is declared in src/lib/deployment.ts');
+  assert.equal(match[1], FREE_TIER_UNAVAILABLE);
+  assert.match(FREE_TIER_UNAVAILABLE, /warming up/);
+});
+
+test('an allowlisted model this deployment cannot fund reads as a warming tier, not a key error', async () => {
+  // No provider keys at all.
+  await withProxy({ env: {}, transport: async () => { throw Error('must not call'); } }, async url => {
+    const response = await chat(url, base);
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.error.message, FREE_TIER_UNAVAILABLE);
+    assert.equal(body.error.code, 'free_tier_unavailable');
+  });
+  // Switched off deliberately: same story for the visitor, who cannot act on the difference.
+  await withProxy({ env: { GROQ_API_KEY: 'k', FREE_TIER_DISABLED: 'true' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    assert.equal((await chat(url, base)).status, 503);
+  });
+  // A model that was never free still asks for a key, because that is the honest fix.
+  await withProxy({ env: {}, transport: async () => { throw Error('must not call'); } }, async url => {
+    const response = await chat(url, { ...base, provider: 'openrouter', model: 'openai/gpt-4o' });
+    assert.equal(response.status, 401);
+    const body = await response.json();
+    assert.equal(body.error.code, 'key_required');
+    assert.match(body.error.message, /needs a key/);
+  });
+});
+
+test('an upstream failure on a server-funded request is never reported as the visitor key', async () => {
+  for (const status of [401, 403, 429, 500]) {
+    await withProxy({ env: { GROQ_API_KEY: 'expired-server-key' }, db: null, transport: async () => stream('nope', status) }, async url => {
+      const response = await chat(url, base);
+      assert.equal(response.status, 503, `upstream ${status}`);
+      const body = await response.json();
+      assert.equal(body.error.message, FREE_TIER_UNAVAILABLE);
+      assert.ok(!/API key|permissions/i.test(body.error.message), 'never blames the visitor key');
+    });
+  }
+  // The same upstream 401 on a BYOK request still says what it means: that key really is bad.
+  await withProxy({ env: {}, transport: async () => stream('nope', 401) }, async url => {
+    const response = await chat(url, { ...base, apiKey: 'visitor-key' });
+    assert.equal(response.status, 401);
+    assert.match((await response.json()).error.message, /Invalid API key/);
+  });
+});
+
+test('quota and burst refusals carry codes the browser can branch on', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.recordUsage(workspace, { model: 'groq/llama-3.3-70b-versatile', tokens: 100_000, credits: 50 });
+    await withProxy({ env: { GROQ_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '10' }, db, transport: async () => { throw Error('must not call'); } }, async url => {
+      assert.equal((await (await chat(url, base)).json()).error.code, 'free_tier_exhausted');
+    });
+  } finally { db.close(); }
+  await withProxy({ env: { GROQ_API_KEY: 'k', FREE_MAX_PER_HOUR: '1' }, transport: async () => stream('data: [DONE]\n\n') }, async url => {
+    await chat(url, base);
+    assert.equal((await (await chat(url, base)).json()).error.code, 'free_tier_busy');
   });
 });

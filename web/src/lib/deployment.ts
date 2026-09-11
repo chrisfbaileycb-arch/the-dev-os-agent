@@ -11,6 +11,20 @@ import type { FreeTier } from './store';
 
 export interface Deployment { free: FreeTier; ollamaBridge: string | null; reachable: boolean; }
 
+/**
+ * What a visitor sees whenever the zero-config tier cannot serve them: keys unset, provider
+ * rate-limiting, or upstream down. Mirrors FREE_TIER_UNAVAILABLE in server/proxy.mjs — the two
+ * are compared in tests so the wording cannot drift between the server and the browser.
+ *
+ * It deliberately does not distinguish those causes. None of them is the visitor's key to fix,
+ * and both routes out — wait, or bring your own key — are the same in every case.
+ */
+export const FREE_TIER_WARMING = 'Public free tier warming up — enter your own key in Settings or try again shortly.';
+
+/** Server codes that mean "the free tier, not you". Anything else is reported as it arrived. */
+const WARMING_CODES = new Set(['free_tier_unavailable', 'free_tier_busy']);
+export const isFreeTierWarming = (code?: string): boolean => Boolean(code && WARMING_CODES.has(code));
+
 export const offlineDeployment: Deployment = {
   free: { enabled: false, models: [], monthlyCredits: DEFAULT_FREE_POOL, perHour: 0 },
   ollamaBridge: null,

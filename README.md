@@ -51,21 +51,23 @@ Export a real `GROQ_API_KEY` or `OPENROUTER_API_KEY` before `npm run dev` to see
 
 **https://hey-buddy-web.onrender.com** — Render service `hey-buddy-web`, auto-deploying from `main`.
 
-That service was created directly rather than from the Blueprint, so it differs from `render.yaml`
-in two ways worth knowing:
+One standard Node web service — no Docker, no persistent disk, no background worker. `render.yaml`
+now declares exactly this, so recreating from the Blueprint reproduces what is running. Two
+consequences worth knowing:
 
-- **It runs the Node runtime, not Docker**, so Chromium is absent. Everything works except the
-  Browser Agent, whose `/api/browse` answers 503. The URL crawler connector is unaffected — it
-  needs no browser.
-- **It has no persistent disk**, so `DATA_FILE=/tmp/heybuddy.sqlite` is ephemeral. Sessions, the
-  ledger, and the free-tier quota reset on every restart and redeploy. Be aware of what that costs
-  once a provider key is set: a quota that resets is a weaker spend cap than one that persists, and
-  the per-IP hourly limit (`FREE_MAX_PER_HOUR`, in memory) resets with it. To get the durable
-  version, replace the service with a Blueprint from `render.yaml`, which provisions the Docker
-  runtime and a 1 GB disk at `/data`.
+- **No Chromium**, so the Browser Agent cannot run and `/api/browse` answers 503. Everything else
+  works, including the URL crawler connector, which needs no browser.
+- **No disk**, so `DATA_FILE=/tmp/heybuddy.sqlite` is wiped on every restart and redeploy. Each
+  browser keeps its own IndexedDB copy, so a returning visitor keeps their history; what does not
+  survive is the server's record. The free-tier monthly quota resets with it, which makes
+  `FREE_MAX_PER_HOUR` — an in-memory per-IP window — the cap that actually bounds spend on the
+  deployment's keys.
+
+Both are reversible without a rewrite; see **Scaling up** in [`web/README.md`](web/README.md).
 
 The zero-config free tier is off until `GROQ_API_KEY` or `OPENROUTER_API_KEY` is set in the Render
-dashboard. Until then the app opens in the scripted preview and asks each visitor for their own key.
+dashboard. Until then visitors see *"Public free tier warming up — enter your own key in Settings or
+try again shortly."* and can supply their own key or use the scripted preview.
 
 ## Hosting
 

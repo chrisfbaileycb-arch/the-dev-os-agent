@@ -13,11 +13,11 @@ import { iconFor } from './ui/icons';
 import { chatTurn } from './lib/chat';
 import { estimateTokens, isZeroConfig, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel } from './lib/catalog';
 import { retrieve } from './lib/memory';
-import { listModels, validateConnection } from './lib/provider';
+import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, forgetKeys, inferenceFor, initialProvider, persistConnection, providers, zeroConfigConnection } from './lib/providers';
 import { defaultPersonaId, personaById, workflows } from './lib/roster';
 import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, storage, sync, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
-import { loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
+import { FREE_TIER_WARMING, isFreeTierWarming, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
@@ -105,7 +105,7 @@ export default function App() {
         // Nothing is funded here: fall back to the scripted preview rather than a failing send.
         return { ...c, mode: 'demo' };
       });
-      if (!d.free.enabled && d.reachable) setNotice('This deployment has no server provider keys, so free models are off. The scripted preview works now; add your own key in Settings for real replies.');
+      if (!d.free.enabled && d.reachable) setNotice(FREE_TIER_WARMING);
     });
     // Whether a Render background worker is deployed alongside this web service. Workflows run
     // in the browser either way; this only reports that the heavier path exists.
@@ -142,7 +142,7 @@ export default function App() {
     const entry = isZeroConfig(id);
     setConnection(c => {
       const provider = entry ? (id.startsWith('groq/') ? 'groq' : 'openrouter') : c.provider ?? 'openrouter';
-      return { ...c, mode: 'remote', model: id, provider, endpoint: providers[provider].endpoint, inference: inferenceFor(id, c.inference) };
+      return { ...c, mode: 'remote', model: id, provider, endpoint: providers[provider].endpoint, inference: inferenceFor(id, c.inference, deployment.free.models) };
     });
     setNotice('');
   }
@@ -176,12 +176,21 @@ export default function App() {
     } catch (e) { setNotice(errorText(e)); }
   }
 
+  /**
+   * A failure on a server-funded request is reported as a warming tier rather than as a key
+   * problem: the credential was the deployment's, so "invalid API key" would send the visitor
+   * looking for a fault that is not theirs. Every other error is reported exactly as it arrived.
+   */
+  function freeTierMessage(e: unknown): string {
+    if (inference === 'free' && e instanceof ProviderError && isFreeTierWarming(e.code)) return FREE_TIER_WARMING;
+    return errorText(e);
+  }
   function preflight(): string | null {
     if (demo) return null;
     try { validateConnection(connection); } catch (e) { return errorText(e); }
     if (!online) return 'You are offline. Hosted models need a connection; the scripted preview still works.';
     if (inference === 'free') {
-      if (!deployment.free.enabled) return 'Free models are not configured on this deployment. Add your own key in Settings, or use the scripted preview.';
+      if (!deployment.free.enabled) return FREE_TIER_WARMING;
       if (!deployment.free.models.includes(connection.model)) return `${connection.model} is not on this deployment's free list. Pick another free model from the dropdown.`;
       if (freeBalance.remaining <= 0) return `The free allowance for ${freeBalance.month} is used up. Add your own OpenRouter or Groq key in Settings — both offer free accounts — or wait for the monthly reset.`;
       return null;
@@ -257,8 +266,9 @@ export default function App() {
       await charge(session.id, result.tokens);
     } catch (e) {
       const stopped = controller.signal.aborted;
-      patchMessage(session.id, reply.id, m => stopped ? { content: `${m.content}${m.content ? '\n\n' : ''}(stopped)` } : { error: errorText(e) }, true);
-      if (!stopped) setNotice(errorText(e));
+      const message = freeTierMessage(e);
+      patchMessage(session.id, reply.id, m => stopped ? { content: `${m.content}${m.content ? '\n\n' : ''}(stopped)` } : { error: message }, true);
+      if (!stopped) setNotice(message);
     } finally { abortRef.current = null; setBusy(false); }
   }
 

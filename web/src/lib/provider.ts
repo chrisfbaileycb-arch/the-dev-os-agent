@@ -1,6 +1,6 @@
 import { workspaceId } from './store';
 import type { Completion, Connection } from './types';
-export class ProviderError extends Error { constructor(message: string, public retryable = false, public status?: number) { super(message); } }
+export class ProviderError extends Error { constructor(message: string, public retryable = false, public status?: number, public code?: string) { super(message); } }
 export function validateEndpoint(value: string): string {
   let url: URL; try { url = new URL(value); } catch { throw new Error('Enter a valid API base URL.'); }
   if (url.username || url.password || url.search || url.hash) throw new Error('Use a URL without credentials, queries, or fragments.');
@@ -40,8 +40,13 @@ const apiHeaders = () => ({ 'Content-Type': 'application/json', 'X-Workspace-Id'
 async function checkResponse(response: Response): Promise<void> {
   if (response.ok) return;
   let message = response.status === 401 || response.status === 403 ? 'Invalid API key or insufficient permissions.' : response.status === 429 ? 'Rate limit reached. Wait and retry.' : `Provider request failed (HTTP ${response.status}).`;
-  try { const data = await response.json(); if (typeof data?.error?.message === 'string') message = data.error.message.slice(0, 400); } catch { /* no JSON error body */ }
-  throw new ProviderError(message, response.status === 429 || response.status >= 500, response.status);
+  let code: string | undefined;
+  try {
+    const data = await response.json();
+    if (typeof data?.error?.message === 'string') message = data.error.message.slice(0, 400);
+    if (typeof data?.error?.code === 'string') code = data.error.code;
+  } catch { /* no JSON error body */ }
+  throw new ProviderError(message, response.status === 429 || response.status >= 500, response.status, code);
 }
 export async function complete(c: Connection, system: string, prompt: string, signal: AbortSignal, onDelta?: (text: string) => void, images: string[] = []): Promise<Completion> {
   const userContent = images.length ? [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))] : prompt;

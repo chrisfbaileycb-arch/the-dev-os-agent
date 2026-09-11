@@ -27,7 +27,7 @@ export default function Settings(p: SettingsProps) {
 
   function pick(m: CatalogModel) {
     const base = m.provider === provider ? c : switchProvider(c, m.provider);
-    p.setConnection({ ...base, mode: 'remote', model: m.id, inference: inferenceFor(m.id, base.inference) });
+    p.setConnection({ ...base, mode: 'remote', model: m.id, inference: inferenceFor(m.id, base.inference, p.free.models) });
   }
   function pickProvider(id: Provider) { if (id === provider) { set({ mode: 'remote' }); return; } p.setConnection({ ...switchProvider(c, id), mode: 'remote' }); }
   function pickInference(next: InferenceMode) {
@@ -56,7 +56,7 @@ export default function Settings(p: SettingsProps) {
             <div className="form-grid">
               <label>Provider<select value={provider} disabled={p.busy || c.mode === 'demo'} onChange={e => pickProvider(e.target.value as Provider)}>{(Object.keys(providers) as Provider[]).map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
               {provider === 'custom' && <label>API base URL<input type="url" disabled={p.busy || c.mode === 'demo'} value={c.endpoint} placeholder="https://your-inference.example/v1" onChange={e => set({ endpoint: e.target.value })} /></label>}
-              <label className="grow">Model ID<span className="row"><input list="model-catalog" disabled={p.busy || c.mode === 'demo'} value={c.model} placeholder="Model served by your provider" onChange={e => set({ model: e.target.value, inference: inferenceFor(e.target.value, c.inference) })} /><datalist id="model-catalog">{p.models.map(m => <option key={m} value={m} />)}</datalist><button className="button small" disabled={p.busy || p.checking || c.mode === 'demo' || (provider === 'custom' && !c.endpoint)} onClick={p.discover}>{p.checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover</button></span></label>
+              <label className="grow">Model ID<span className="row"><input list="model-catalog" disabled={p.busy || c.mode === 'demo'} value={c.model} placeholder="Model served by your provider" onChange={e => set({ model: e.target.value, inference: inferenceFor(e.target.value, c.inference, p.free.models) })} /><datalist id="model-catalog">{p.models.map(m => <option key={m} value={m} />)}</datalist><button className="button small" disabled={p.busy || p.checking || c.mode === 'demo' || (provider === 'custom' && !c.endpoint)} onClick={p.discover}>{p.checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover</button></span></label>
               <label>Output limit<select disabled={p.busy} value={c.maxTokens} onChange={e => set({ maxTokens: Number(e.target.value) })}>{[512, 1024, 2048, 4096].map(n => <option key={n} value={n}>{n.toLocaleString()} tokens</option>)}</select></label>
             </div>
             {c.mode === 'remote' && c.model && !current && <p className="help">Unlisted model: charged at {weightFor(c.model)} credits per 1K tokens on platform credits, judged from its name. Free-tier funding covers listed models only.</p>}
