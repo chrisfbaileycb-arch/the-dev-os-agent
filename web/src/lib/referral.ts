@@ -22,6 +22,12 @@ export const REFERRAL_URL = 'https://xkiro.com/ref/3RMPMQ2';
  */
 export const REFERRAL_ALLOWANCE = '5M free tokens/day';
 
+/**
+ * xKiro's advertised breadth. UNVERIFIED, for the same reason as the allowance above: it is a
+ * claim about someone else's catalogue, and it is the operator who is quoting it.
+ */
+export const REFERRAL_BREADTH = '40+ models';
+
 /** Shown next to every referral link. Short enough to sit inline, explicit enough to be a disclosure. */
 export const REFERRAL_DISCLOSURE = 'Referral link — we may earn a commission if you sign up.';
 

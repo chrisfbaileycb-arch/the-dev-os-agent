@@ -45,6 +45,14 @@ export const catalog: CatalogModel[] = [
   { id: 'anthropic/claude-3.5-sonnet', provider: 'openrouter', label: 'Claude 3.5 Sonnet', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Strong writing and analysis.' },
   { id: 'anthropic/claude-3.5-haiku', provider: 'openrouter', label: 'Claude 3.5 Haiku', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Quick and careful.' },
   { id: 'openai/gpt-4o', provider: 'openrouter', label: 'GPT-4o', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'General purpose flagship.' },
+  // Direct on the vendor's own API, billed to the visitor's account with that vendor. The same
+  // families are reachable through OpenRouter above; these exist so a key you already hold works
+  // without opening an account somewhere new. Model names move faster than a deploy, so these
+  // are seeds — Discover reads the live list and the model field accepts anything typed.
+  { id: 'gpt-4o', provider: 'openai', label: 'GPT-4o (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'On your own OpenAI key.' },
+  { id: 'claude-sonnet-4-5', provider: 'anthropic', label: 'Claude Sonnet (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'On your own Anthropic key.' },
+  { id: 'gemini-2.5-pro', provider: 'google', label: 'Gemini 2.5 Pro (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'On your own Google AI Studio key.' },
+  { id: 'gemini-2.5-flash', provider: 'google', label: 'Gemini 2.5 Flash (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Quick and cheap on your own Google key.' },
 ];
 
 /** Model ids a visitor can run with no key at all, in dropdown order. */

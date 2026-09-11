@@ -176,6 +176,14 @@ a.plan-cta:hover { border-color: var(--accent); color: var(--accent-ink); backgr
 .plan-disclosure { display: block; margin-top: 6px; color: var(--muted); font-size: 10.5px; line-height: 1.4; text-align: center; }
 .referral-note { display: flex; align-items: flex-start; gap: 6px; } .referral-note svg { margin-top: 3px; } .referral-note a { color: var(--accent-ink); }
 
+/* One key field per provider. Two columns on a wide panel, one on a narrow one. */
+.key-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.key-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.key-field > span { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.key-field.active > span { color: var(--ink); }
+.key-field em { font-style: normal; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; background: var(--accent-soft); color: var(--accent-ink); border-radius: 9px; padding: 1px 6px; }
+@media (max-width: 640px) { .key-grid { grid-template-columns: minmax(0, 1fr); } }
+
 /* Connectors hub */
 .connector-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .connector-tab { display: flex; align-items: center; gap: 8px; text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 10px; color: var(--ink); min-width: 0; }

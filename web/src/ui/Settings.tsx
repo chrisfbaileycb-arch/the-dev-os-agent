@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import { Check, Coins, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wallet } from 'lucide-react';
 import { catalog, findModel, weightFor, type CatalogModel, type InferenceMode, type Tier } from '../lib/catalog';
-import { inferenceFor, providers, switchProvider, type Provider } from '../lib/providers';
+import { emptyKeyring, inferenceFor, loadKeyring, providers, saveKeyring, switchProvider, type Keyring, type Provider } from '../lib/providers';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
-import { REFERRAL_ALLOWANCE, REFERRAL_DISCLOSURE, referralEnabled, referralLink } from '../lib/referral';
+import { REFERRAL_ALLOWANCE, REFERRAL_BREADTH, REFERRAL_DISCLOSURE, referralEnabled, referralLink } from '../lib/referral';
 
 export interface SettingsProps {
   connection: Connection; setConnection: (c: Connection) => void;
@@ -12,6 +13,23 @@ export interface SettingsProps {
   balance: Balance; freeBalance: Balance; free: FreeTier;
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
 }
+
+/**
+ * The providers that get their own key field, in the order they are offered.
+ *
+ * `custom` is left out: it is not an account you hold a key for, it is an endpoint you point at,
+ * and it is configured with its base URL in the model hub above.
+ */
+const KEYED: Provider[] = ['openai', 'anthropic', 'google', 'xkiro', 'openrouter', 'groq', 'cohere'];
+const KEY_HINTS: Partial<Record<Provider, string>> = {
+  openai: 'sk-… from platform.openai.com',
+  anthropic: 'sk-ant-… from console.anthropic.com',
+  google: 'From Google AI Studio',
+  xkiro: 'From your xKiro dashboard',
+  openrouter: 'sk-or-… from openrouter.ai',
+  groq: 'gsk_… from console.groq.com',
+  cohere: 'From dashboard.cohere.com',
+};
 
 const tiers: { id: Tier; title: string; blurb: string }[] = [
   { id: 'free', title: 'Free and instant', blurb: 'No key, no account. This deployment funds these from its own provider keys, metered against a monthly free allowance.' },
@@ -24,6 +42,29 @@ export default function Settings(p: SettingsProps) {
   const current = findModel(c.model);
   const inference: InferenceMode = c.inference ?? 'byok';
   const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch });
+  const [keys, setKeys] = useState<Keyring>(loadKeyring);
+
+  /**
+   * A key belongs to a provider, not to the session, so all of them are editable at once and
+   * whichever one the chosen model needs is the one that gets sent. The active provider's field
+   * is the connection's own token, so typing there takes effect on the next message rather than
+   * waiting for a save.
+   */
+  function setKey(id: Provider, value: string) {
+    setKeys(k => ({ ...k, [id]: value }));
+    if (id === provider) set({ token: value });
+  }
+  /**
+   * Save. The remember checkbox governs every key, not just the active one — a single honest
+   * switch beats a per-field ambiguity about which of them localStorage ends up holding. Unticked
+   * means nothing is written and anything previously stored is cleared; the keys stay usable in
+   * this tab until it closes.
+   */
+  function saveAll() {
+    saveKeyring(c.saveKey ? keys : emptyKeyring());
+    p.save();
+  }
+  function forgetAll() { setKeys(emptyKeyring()); p.forget(); }
   const funded = (m: CatalogModel) => Boolean(m.zeroConfig && p.free.enabled && p.free.models.includes(m.id));
 
   function pick(m: CatalogModel) {
@@ -83,21 +124,27 @@ export default function Settings(p: SettingsProps) {
           </div>
           {inference === 'free' ? <p className="help">Nothing to enter. Requests route through this deployment's own Groq and OpenRouter keys, restricted to the free models above, and every request is metered on the server against the allowance shown to the right. When the allowance runs out, add your own key here and the same models keep working — free accounts at either provider are enough.</p>
             : inference === 'byok' ? <>
-              <label>{providers[provider].name} API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.token} placeholder="Your provider key" onChange={e => set({ token: e.target.value })} /></label>
-              <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember this key in this browser</label>
-              <p className="help">Saved keys live in localStorage, unencrypted, readable by any script on this origin. Use a restricted key on a device you trust. Keys are never exported and never stored on the server.</p>
+              <p className="help">One key per provider. The model you pick decides which one is used, so a key you already hold works straight away — you do not need an account at all of them.</p>
+              <div className="key-grid">
+                {KEYED.map(id => <label key={id} className={id === provider ? 'key-field active' : 'key-field'}>
+                  <span>{providers[id].name}{id === provider && <em>in use</em>}</span>
+                  <input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={id === provider ? c.token : keys[id]} placeholder={KEY_HINTS[id] ?? 'Your provider key'} onChange={e => setKey(id, e.target.value)} />
+                </label>)}
+              </div>
+              <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember these keys in this browser</label>
+              <p className="help">Every request runs through this deployment's proxy so the key never has to leave your tab for a third-party script to see — it is attached to the outbound call and never written to the server's disk or logs. Remembered keys live in this browser's localStorage, unencrypted and readable by any script on this origin, so use a restricted key on a device you trust. Leave the box unticked and they last only until you close the tab.</p>
               {referralEnabled() && <p className="help referral-note">
                 <ExternalLink size={12} strokeWidth={1.75} />
                 <span>
-                  <a {...referralLink()}>Get an API key with {REFERRAL_ALLOWANCE} via xKiro</a>
-                  {' — '}{REFERRAL_DISCLOSURE} A Groq or OpenRouter key works here just as well.
+                  Don't want several subscriptions? <a {...referralLink()}>Get {REFERRAL_BREADTH} with {REFERRAL_ALLOWANCE} via xKiro</a>
+                  {' — '}{REFERRAL_DISCLOSURE} Those are xKiro's figures for their own service, worth checking on their site. A Groq or OpenRouter key works here just as well.
                 </span>
               </p>}
             </> : <>
               <label>Deployment access token<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.serverAccessToken ?? ''} placeholder="Given to you by the administrator" onChange={e => set({ serverAccessToken: e.target.value })} /></label>
               <p className="help">Platform credits route through the deployment's own provider keys and need this token. It stays in memory for the session. Each request draws credits from the monthly allowance shown to the right; your own key is not used.</p>
             </>}
-          <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={p.save}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={p.forget}><Trash2 size={13} />Forget saved keys</button></div>
+          <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={saveAll}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={forgetAll}><Trash2 size={13} />Forget saved keys</button></div>
         </section>
       </div>
 

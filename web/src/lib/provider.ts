@@ -61,11 +61,21 @@ export async function complete(c: Connection, system: string, prompt: string, si
       if (event.data === '[DONE]') { finished = true; break; }
       let data; try { data = JSON.parse(event.data); } catch { throw new ProviderError('Malformed provider stream.'); }
       if (event.event === 'error' || data.error) throw new ProviderError('Provider reported a streaming error. Check your model, key, and quota.');
-      // Both OpenAI-compatible and native Cohere v2 SSE events are supported.
-      const delta = data.choices?.[0]?.delta?.content ?? (data.type === 'content-delta' ? data.delta?.message?.content?.text : undefined);
+      // Three stream shapes reach here, and they are normalized in this one place rather than
+      // rewritten by the proxy mid-flight: OpenAI-compatible (OpenRouter, Groq, OpenAI, Gemini,
+      // xKiro, custom), native Cohere v2, and native Anthropic. Anthropic also never sends
+      // [DONE] — message_stop is its terminator — so completion is detected per shape.
+      const delta = data.choices?.[0]?.delta?.content
+        ?? (data.type === 'content-delta' ? data.delta?.message?.content?.text : undefined)
+        ?? (data.type === 'content_block_delta' ? data.delta?.text : undefined);
       if (typeof delta === 'string') { text += delta; onDelta?.(text); }
       if (Number.isFinite(data.usage?.total_tokens)) tokens = data.usage.total_tokens;
       if (data.type === 'message-end') { const usage = data.delta?.usage?.tokens; if (usage) tokens = (usage.input_tokens || 0) + (usage.output_tokens || 0); finished = true; }
+      // Anthropic reports the prompt on message_start and the completion on message_delta, so
+      // the total is only whole once both have arrived.
+      if (data.type === 'message_start' && Number.isFinite(data.message?.usage?.input_tokens)) tokens = data.message.usage.input_tokens;
+      if (data.type === 'message_delta' && Number.isFinite(data.usage?.output_tokens)) tokens += data.usage.output_tokens;
+      if (data.type === 'message_stop') finished = true;
       if (data.choices?.[0]?.finish_reason) finished = true;
     }
     if (!finished) throw new ProviderError('Provider stream ended before completion. Retry the run.');

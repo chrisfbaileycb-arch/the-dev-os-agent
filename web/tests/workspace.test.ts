@@ -7,6 +7,7 @@ import { mcpToolSpecs, slug, type McpConnection } from '../src/lib/mcp';
 import { activeTools, defaultSettings, parseRepo } from '../src/lib/connectors';
 import { retrieve } from '../src/lib/memory';
 import { chatTurn } from '../src/lib/chat';
+import { complete } from '../src/lib/provider';
 import { defaultConnection, inferenceFor } from '../src/lib/providers';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -149,5 +150,84 @@ describe('chat turn', () => {
     const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
     const result = await chatTurn({ connection: { mode: 'demo', endpoint: '', model: '', token: '', maxTokens: 512 }, personaId: 'auditor', history: [], input: 'Reconcile March', attachments: [], knowledge: [{ id: 'n', title: 'March ledger', content: 'March totals reconcile to the bank', createdAt: '' }], signal: new AbortController().signal });
     expect(result.text).toContain('SCRIPTED PREVIEW'); expect(result.text).toContain('Financial Auditor'); expect(result.contextTitles).toEqual(['March ledger']); expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('native provider stream shapes', () => {
+  // Anthropic's SSE is not the OpenAI one and never sends [DONE] — message_stop terminates it,
+  // and the token count arrives in two halves. Parsed as an OpenAI stream it yields no text and
+  // then fails as "ended before completion", so this pins the normalization.
+  afterEach(() => { vi.unstubAllGlobals(); });
+  it('reads text and both halves of the token count from an Anthropic stream', async () => {
+    const events = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":11}}}',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":" there"}}',
+      'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":4}}',
+      'event: message_stop\ndata: {"type":"message_stop"}',
+    ].join('\n\n') + '\n\n';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(events, { headers: { 'Content-Type': 'text/event-stream' } })));
+    const result = await complete({ ...defaultConnection('anthropic'), token: 'sk-ant' }, 'be brief', 'hi', new AbortController().signal);
+    expect(result.text).toBe('Hello there');
+    expect(result.tokens).toBe(15);
+  });
+});
+
+describe('the provider keyring', () => {
+  // A visitor who already pays OpenAI and Anthropic holds two keys, not one. Keys were always
+  // stored per provider; what was missing was a way to enter more than the active one.
+  //
+  // Each case reloads the module after writing, because the round trip being tested is through
+  // localStorage — an in-process cache answering from memory would prove nothing about what a
+  // returning visitor gets.
+  function stubStorage() {
+    const data = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => { data.set(k, v); },
+      removeItem: (k: string) => { data.delete(k); },
+    });
+    return data;
+  }
+  const reload = async () => { vi.resetModules(); return import('../src/lib/providers'); };
+  afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); });
+
+  it('keeps one key per provider and hands each back to its own provider', async () => {
+    stubStorage();
+    (await reload()).saveKeyring({ openai: 'sk-openai', anthropic: 'sk-ant', google: 'goog' });
+    const fresh = await reload();
+    const ring = fresh.loadKeyring();
+    expect(ring.openai).toBe('sk-openai');
+    expect(ring.anthropic).toBe('sk-ant');
+    expect(ring.groq).toBe('');
+    // Switching to a provider picks up that provider's key, so the model decides which is spent.
+    expect(fresh.switchProvider(fresh.defaultConnection('groq'), 'anthropic').token).toBe('sk-ant');
+    expect(fresh.switchProvider(fresh.defaultConnection('groq'), 'openai').token).toBe('sk-openai');
+  });
+
+  it('clears the stored key rather than remembering an empty one', async () => {
+    const data = stubStorage();
+    const mod = await reload();
+    mod.saveKeyring({ openai: 'sk-openai' });
+    mod.saveKeyring({ openai: '   ' });
+    expect((await reload()).loadKeyring().openai).toBe('');
+    expect(JSON.parse(data.get('ft-provider-openai') ?? '{}')).not.toHaveProperty('token');
+  });
+
+  it('writes nothing when the visitor declines to be remembered', async () => {
+    const data = stubStorage();
+    const mod = await reload();
+    mod.saveKeyring({ openai: 'sk-openai', anthropic: 'sk-ant' });
+    mod.saveKeyring(mod.emptyKeyring());
+    for (const id of Object.keys(mod.providers)) expect(data.get(`ft-provider-${id}`) ?? '').not.toContain('sk-');
+  });
+
+  it('reaches each vendor at its own endpoint', () => {
+    // The point of a direct key is that the vendor bills the visitor. Routing OpenAI through an
+    // aggregator would bill somewhere else entirely.
+    expect(defaultConnection('openai').endpoint).toBe('https://api.openai.com/v1');
+    expect(defaultConnection('anthropic').endpoint).toBe('https://api.anthropic.com/v1');
+    expect(defaultConnection('google').endpoint).toContain('generativelanguage.googleapis.com');
   });
 });
