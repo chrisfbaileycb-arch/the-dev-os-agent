@@ -1,6 +1,6 @@
 # Floot edition (source mirror)
 
-Floot project id: `599da6cf-0aa2-48c3-8788-206be3f30c05` (name: FreeToken Web x Ruflo).
+Floot project id: `599da6cf-0aa2-48c3-8788-206be3f30c05` (name: Hey Buddy).
 
 Floot cannot import a repository, so its project files are authored through the Floot MCP and mirrored here so the rebuild is versioned alongside the original `web/` app. Paths follow Floot's item scheme: `pages/<route>.tsx` + `.module.css` + `.pageLayout.tsx`, `components/Name.tsx` + `.module.css`, `helpers/name.tsx`, `endpoints/<route>_<METHOD>.ts` + `.schema.ts`, `base.css`, `static/__dev/*`.
 

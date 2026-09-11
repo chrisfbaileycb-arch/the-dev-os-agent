@@ -54,7 +54,7 @@ export default function SettingsPage() {
 
   return (
     <>
-      <Helmet><title>Settings - FreeToken Web</title></Helmet>
+      <Helmet><title>Settings - Hey Buddy</title></Helmet>
       <div className={styles.pageHeading}>
         <span className={styles.eyebrow}>Make it yours</span>
         <h1 className={styles.h1}>Your browser. Your model provider.</h1>

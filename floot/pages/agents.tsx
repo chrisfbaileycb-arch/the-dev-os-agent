@@ -7,7 +7,7 @@ import styles from "./agents.module.css";
 export default function AgentsPage() {
   return (
     <>
-      <Helmet><title>Agent team - FreeToken Web</title></Helmet>
+      <Helmet><title>Agent team - Hey Buddy</title></Helmet>
       <div className={styles.pageHeading}>
         <span className={styles.eyebrow}>Your collaborators</span>
         <h1 className={styles.h1}>A small team. A wider perspective.</h1>

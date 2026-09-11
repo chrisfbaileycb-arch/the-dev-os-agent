@@ -37,9 +37,9 @@ export const AppShell = ({ children, className }: { children: React.ReactNode; c
 
   const sidebarBody = (
     <>
-      <Link to="/" className={styles.brand} aria-label="FreeToken Web home" onClick={() => setOpen(false)}>
+      <Link to="/" className={styles.brand} aria-label="Hey Buddy home" onClick={() => setOpen(false)}>
         <span className={styles.brandMark}><Zap size={18} strokeWidth={2} /></span>
-        <span className={styles.brandName}>FreeToken<span className={styles.brandEdition}>Web</span></span>
+        <span className={styles.brandName}>Hey Buddy<span className={styles.brandEdition}>Web</span></span>
       </Link>
       <div className={styles.navLabel}>Workspace</div>
       <nav className={styles.nav} aria-label="Primary">

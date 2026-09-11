@@ -15,7 +15,7 @@ function open(): Promise<IDBDatabase> {
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(new Error("Browser storage is unavailable. Your workspace may not persist."));
-    request.onblocked = () => reject(new Error("Close other FreeToken tabs to unlock workspace storage."));
+    request.onblocked = () => reject(new Error("Close other Hey Buddy tabs to unlock workspace storage."));
   });
 }
 

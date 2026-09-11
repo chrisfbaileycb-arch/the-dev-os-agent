@@ -2,7 +2,7 @@ import type { Run } from "./runTypes";
 
 export function exportRun(run: Run): string {
   const lines = [
-    `# FreeToken Web - ${run.workflow} workflow`,
+    `# Hey Buddy - ${run.workflow} workflow`,
     "",
     `Mode: ${run.mode === "demo" ? "SCRIPTED PREVIEW - not AI-generated" : "Hosted inference"}`,
     `Model: ${run.model}`,

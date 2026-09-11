@@ -1,4 +1,4 @@
-FreeToken Web x Ruflo. Design principles.
+Hey Buddy. Design principles.
 
 Distinctive thread: a dispatch board. The app is a control room for a five-agent team, so every surface reads like a well-kept operations desk: hairline rules instead of boxes, tabular numerals for counts and tokens, monospace for agent output, stages laid out as a rail of tickets that light up in order. One signal colour only, a warm amber, reserved for what is live right now: the running stage, the active provider dot, the focus ring. Everything else is graphite-blue ink on warm paper. Engineered and calm, never playful, never a generic SaaS dashboard.
 
