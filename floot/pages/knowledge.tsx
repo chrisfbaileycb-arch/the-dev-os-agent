@@ -38,7 +38,7 @@ export default function KnowledgePage() {
 
   return (
     <>
-      <Helmet><title>Knowledge - FreeToken Web</title></Helmet>
+      <Helmet><title>Knowledge - Hey Buddy</title></Helmet>
       <div className={styles.pageHeading}>
         <div>
           <span className={styles.eyebrow}>Context that stays with you</span>

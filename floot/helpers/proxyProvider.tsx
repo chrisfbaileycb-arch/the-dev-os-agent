@@ -75,7 +75,7 @@ function headersFor(provider: Provider, apiKey: string): Record<string, string> 
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   if (provider === "openrouter") {
     headers["HTTP-Referer"] = "https://github.com/chrisfbaileycb-arch/the-dev-os-agent";
-    headers["X-Title"] = "FreeToken Web";
+    headers["X-Title"] = "Hey Buddy";
   }
   return headers;
 }

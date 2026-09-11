@@ -102,10 +102,10 @@ export default function WorkspacePage() {
 
   return (
     <>
-      <Helmet><title>Workspace - FreeToken Web</title></Helmet>
+      <Helmet><title>Workspace - Hey Buddy</title></Helmet>
       <div className={styles.pageHeading}>
         <div>
-          <div className={styles.eyebrow}><span className={styles.miniLine} aria-hidden="true" />FreeToken x Ruflo</div>
+          <div className={styles.eyebrow}><span className={styles.miniLine} aria-hidden="true" />Hey Buddy</div>
           <h1 className={styles.h1}>Big ideas. A whole team behind you.</h1>
           <p className={styles.lede}>One goal. Five specialists. A more thoughtful result.</p>
         </div>
@@ -186,7 +186,7 @@ export default function WorkspacePage() {
         </div>
       </section>
 
-      <footer className={styles.footer}><span>No desktop app. No local engine. Just your browser.</span><span>FreeToken Web / Ruflo-derived orchestration</span></footer>
+      <footer className={styles.footer}><span>No desktop app. No local engine. Just your browser.</span><span>Hey Buddy / Ruflo-derived orchestration</span></footer>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>

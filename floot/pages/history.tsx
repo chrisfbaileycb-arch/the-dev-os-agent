@@ -23,7 +23,7 @@ export default function HistoryPage() {
   }
   return (
     <>
-      <Helmet><title>Run history - FreeToken Web</title></Helmet>
+      <Helmet><title>Run history - Hey Buddy</title></Helmet>
       <div className={styles.pageHeading}>
         <div>
           <span className={styles.eyebrow}>Your work, remembered</span>
