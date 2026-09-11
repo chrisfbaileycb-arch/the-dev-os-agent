@@ -55,3 +55,31 @@
   .composer { padding: var(--spacing-4); }
   .workflowSelect { width: 100%; }
 }
+.goalDrop { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--spacing-2); }
+.chip, .photoChip { display: inline-flex; align-items: center; gap: var(--spacing-2); padding: 0.25rem 0.4rem 0.25rem 0.55rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: 0.78rem; max-width: 100%; }
+.chip small { color: var(--muted-foreground); font-size: 0.7rem; }
+.photoChip { padding-left: 0.25rem; }
+.photoChip img { width: 2.5rem; height: 2.5rem; object-fit: cover; border-radius: calc(var(--radius) - 2px); background: var(--card); }
+.chipName { max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chipRemove { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.chipRemove:hover { background: var(--card); color: var(--foreground); }
+.chipRemove:disabled { opacity: 0.5; cursor: default; }
+.dock { display: flex; align-items: center; gap: var(--spacing-2); flex-wrap: wrap; padding-top: var(--spacing-1); }
+.badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.15rem; height: 1.15rem; padding: 0 0.3rem; border-radius: var(--radius-full); background: var(--primary); color: var(--primary-foreground); font-size: 0.65rem; font-weight: 600; margin-left: 0.15rem; }
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.mcpForm { display: flex; flex-direction: column; gap: var(--spacing-2); align-items: flex-start; }
+.mcpRow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: var(--spacing-2); width: 100%; }
+.mcpRemember { display: inline-flex; align-items: center; gap: var(--spacing-2); font-size: 0.8rem; color: var(--muted-foreground); }
+.mcpList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--spacing-2); max-height: 40vh; overflow-y: auto; }
+.mcpItem { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-3); padding: var(--spacing-2) var(--spacing-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.mcpMeta { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; font-size: 0.8rem; }
+.mcpUrl { font-family: var(--font-family-monospace); font-size: 0.7rem; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcpOk { font-size: 0.74rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.mcpError { font-size: 0.74rem; color: var(--destructive); overflow-wrap: anywhere; }
+.mcpActions { display: flex; align-items: center; gap: var(--spacing-1); flex: none; }
+@media (max-width: 900px) {
+  .mcpRow { grid-template-columns: minmax(0, 1fr); }
+  .chipName { max-width: 9rem; }
+}

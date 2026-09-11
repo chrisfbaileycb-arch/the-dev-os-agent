@@ -12,7 +12,7 @@ export async function handle(request: Request) {
     const limit = await rateLimit(request);
     if (!limit.allowed) return reply(429, { error: "Proxy request limit reached. Wait one minute." });
     const raw = await request.text();
-    if (raw.length > 512_000) return reply(413, { error: "Request is too large." });
+    if (raw.length > 12_000_000) return reply(413, { error: "Request is too large." });
     const input = schema.parse(superjson.parse(raw));
     const completion = await proxyProvider.chat({
       provider: input.provider,

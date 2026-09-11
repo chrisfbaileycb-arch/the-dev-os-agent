@@ -1,20 +1,40 @@
+# Render Blueprint for the Hey Buddy web edition.
+# Create it from the dashboard: New > Blueprint, pick this repo, branch main.
+# Render reads this file and provisions the service, the disk, and the env vars.
+
 services:
   - type: web
     name: hey-buddy-web
     runtime: docker
+    # A persistent disk requires a paid instance; free instances cannot mount one.
+    plan: starter
+    region: oregon
+    branch: main
     rootDir: web
     dockerfilePath: ./Dockerfile
+    # Verified to answer 200 with no database or provider key present.
     healthCheckPath: /api/providers
+    autoDeploy: true
     disk:
+      # Sessions, runs, and the credit ledger live here as SQLite. Without this
+      # disk the workspace resets on every deploy and restart.
       name: workspace-data
       mountPath: /data
       sizeGB: 1
     envVars:
-      - key: APP_ORIGIN
-        sync: false
       - key: DATA_DIR
         value: /data
       - key: CREDIT_MONTHLY_POOL
         value: "100000"
+      # Browser Agent allowlist. Empty keeps the sandbox browser disabled, which
+      # is the safe default. Set hostnames here to switch it on.
       - key: BROWSE_ALLOWED_HOSTS
-        sync: false
+        value: ""
+      - key: BROWSE_MAX_PER_HOUR
+        value: "30"
+      - key: MCP_MAX_PER_HOUR
+        value: "120"
+      # APP_ORIGIN is deliberately unset. The server falls back to matching the
+      # request Origin against its own Host, which is correct on Render. Set it
+      # only to pin a single external origin, and never to a guessed URL: a wrong
+      # value makes every API call fail with 403.

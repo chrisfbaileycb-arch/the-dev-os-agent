@@ -43,7 +43,7 @@ npm run build && npm start   # production server on PORT (default 4173)
 
 The server streams provider responses as Server-Sent Events and keeps a SQLite file for sessions and the credit ledger, so the host must run a long-lived Node process with a writable disk and must not buffer responses. Static-only hosting and buffered serverless routers cannot serve `/api/chat`.
 
-- **Render**: connect this repository and Render reads `render.yaml` (Docker runtime, 1 GB disk at `/data`). Set `APP_ORIGIN` to the service URL and `BROWSE_ALLOWED_HOSTS` if you want the Browser Agent.
+- **Render** (recommended): in the dashboard choose **New > Blueprint**, pick this repository, and select branch `main`. Render reads `render.yaml` and provisions a Docker service with a 1 GB disk at `/data`. A disk requires a paid instance, so the blueprint pins the `starter` plan. Leave `APP_ORIGIN` unset: the server already matches the request origin against its own host, and a wrong value makes every API call fail with 403. Set `BROWSE_ALLOWED_HOSTS` afterwards only if you want the Browser Agent switched on.
 - **Any container host**: build `web/Dockerfile` (Playwright base image with Chromium); the image listens on port 8080 and stores data under `/data`.
 - **Any Node host**: from `web/`, run `npm ci && npm run build && npm start`; without Chromium the browse route answers 503 and everything else works.
 
