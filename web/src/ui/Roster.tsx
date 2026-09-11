@@ -2,6 +2,7 @@ import { Check, X } from 'lucide-react';
 import { businessPersonas, skills, workflows, type Persona } from '../lib/roster';
 import type { Workflow } from '../lib/types';
 import { iconFor } from './icons';
+import { useDismiss } from './useDismiss';
 function Card({ p, active, onPick }: { p: Persona; active: boolean; onPick?: (id: string) => void }) {
   const Icon = iconFor(p.icon);
   return <button className={active ? 'persona-card active' : 'persona-card'} onClick={() => onPick?.(p.id)} disabled={!onPick} aria-pressed={active}>
@@ -20,6 +21,7 @@ export function RosterList({ activeId, onPick }: { activeId: string; onPick: (id
   </>;
 }
 export default function RosterDrawer({ open, close, activeId, onPick }: { open: boolean; close: () => void; activeId: string; onPick: (id: string) => void }) {
+  useDismiss(open, close);
   if (!open) return null;
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) close(); }}><section className="drawer" role="dialog" aria-modal="true" aria-labelledby="roster-title">
     <div className="drawer-head"><h2 id="roster-title">Choose an agent</h2><button className="icon-button" aria-label="Close" onClick={close} autoFocus><X size={16} /></button></div>

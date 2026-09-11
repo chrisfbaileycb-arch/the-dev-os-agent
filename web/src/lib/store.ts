@@ -1,5 +1,5 @@
 import type { Knowledge, Run } from './types';
-import { creditsFor, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tier } from './catalog';
+import { creditsFor, DEFAULT_FREE_POOL, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tier } from './catalog';
 
 // Local-first workspace store. IndexedDB is the source of truth for the open tab; the server
 // keeps a copy in SQLite keyed by an anonymous workspace id so sessions and credit balances
@@ -11,8 +11,12 @@ export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: 
 export interface Session { id: string; title: string; persona: string; createdAt: string; updatedAt: string; messages: ChatMessage[]; }
 export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode | 'demo'; tokens: number; credits: number; }
 export interface Balance { pool: number; used: number; remaining: number; month: string; source: 'server' | 'local'; }
-export interface Workspace { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; knowledge: Knowledge[]; balance: Balance; serverReachable: boolean; }
+/** What the deployment will fund for a visitor with no key. Read from /api/providers and /api/state. */
+export interface FreeTier { enabled: boolean; models: string[]; monthlyCredits: number; perHour: number; }
+export interface Workspace { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; knowledge: Knowledge[]; balance: Balance; freeBalance: Balance; serverReachable: boolean; }
 
+// Kept at the original name on purpose: renaming the database would orphan the sessions,
+// runs, and notes of anyone who already has data in this browser.
 const DB = 'freetoken-web-v1';
 type Store = 'runs' | 'knowledge' | 'sessions' | 'ledger';
 const STORES: Store[] = ['runs', 'knowledge', 'sessions', 'ledger'];
@@ -57,16 +61,24 @@ export const storage = {
 };
 
 export const monthKey = (date = new Date()) => date.toISOString().slice(0, 7);
-export function computeBalance(entries: LedgerEntry[], pool = DEFAULT_MONTHLY_POOL, source: Balance['source'] = 'local', month = monthKey()): Balance {
-  const used = Math.round(entries.filter(e => e.mode === 'credits' && e.at.startsWith(month)).reduce((sum, e) => sum + e.credits, 0) * 100) / 100;
+/** A balance for one payment mode. The free pool and the credit pool are separate budgets. */
+export function computeBalance(entries: LedgerEntry[], pool = DEFAULT_MONTHLY_POOL, source: Balance['source'] = 'local', month = monthKey(), mode: LedgerEntry['mode'] = 'credits'): Balance {
+  const used = Math.round(entries.filter(e => e.mode === mode && e.at.startsWith(month)).reduce((sum, e) => sum + e.credits, 0) * 100) / 100;
   return { pool, used, remaining: Math.max(0, Math.round((pool - used) * 100) / 100), month, source };
+}
+/** A balance straight from the server's own meter; used for the free tier, which the server bills. */
+export function serverBalance(pool: number, used: number, month = monthKey()): Balance {
+  const spent = Math.round(Math.max(0, used) * 100) / 100;
+  return { pool, used: spent, remaining: Math.max(0, Math.round((pool - spent) * 100) / 100), month, source: 'server' };
 }
 export function makeEntry(input: { sessionId: string; model: string; mode: InferenceMode | 'demo'; tokens: number }): LedgerEntry {
   return { id: crypto.randomUUID(), at: new Date().toISOString(), sessionId: input.sessionId, model: input.model, tier: tierFor(input.model), mode: input.mode, tokens: Math.max(0, Math.round(input.tokens)), credits: creditsFor(input.model, input.tokens, input.mode) };
 }
 
 // Server sync. Failures are silent: the tab keeps working from IndexedDB and retries on next load.
-interface ServerState { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; pool: number; }
+interface Budget { pool: number; freePool: number; freeUsed: number; free: FreeTier; }
+interface ServerState extends Budget { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; }
+export interface UsageReading extends Budget { used: number; entry: LedgerEntry | null; }
 async function api<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T | null> {
   try {
     const response = await fetch(path, { ...init, credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(15_000)]), headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId(), ...(init.headers ?? {}) } });
@@ -76,6 +88,8 @@ async function api<T>(path: string, init: RequestInit = {}, signal?: AbortSignal
 }
 export const sync = {
   pull: (signal?: AbortSignal) => api<ServerState>('/api/state', {}, signal),
+  /** Re-read the server's own meter after a zero-config turn; cheap enough to call every message. */
+  usage: (signal?: AbortSignal) => api<UsageReading>('/api/state/usage', {}, signal),
   push: (payload: { sessions?: Session[]; runs?: Run[]; ledger?: LedgerEntry[] }) => api<{ ok: true }>('/api/state', { method: 'POST', body: JSON.stringify(payload) }),
   clear: () => api<{ ok: true }>('/api/state/clear', { method: 'POST', body: '{}' }),
 };
@@ -100,7 +114,8 @@ export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
   await Promise.all([...merged.sessions.filter(s => !sessions.find(l => l.id === s.id && l.updatedAt >= s.updatedAt)).map(storage.saveSession), ...merged.runs.filter(r => !runs.find(l => l.id === r.id) || fixedRuns.find(l => l.id === r.id)?.status === 'interrupted').map(storage.saveRun), ...merged.ledger.filter(e => !ledger.find(l => l.id === e.id)).map(storage.saveLedger)]);
   if (server && (merged.toPush.sessions.length || merged.toPush.runs.length || merged.toPush.ledger.length)) void sync.push(merged.toPush);
   const pool = server?.pool ?? DEFAULT_MONTHLY_POOL;
-  return { sessions: merged.sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), runs: merged.runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt)), ledger: merged.ledger, knowledge, balance: computeBalance(merged.ledger, pool, server ? 'server' : 'local'), serverReachable: Boolean(server) };
+  const freePool = server?.freePool ?? DEFAULT_FREE_POOL;
+  return { sessions: merged.sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), runs: merged.runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt)), ledger: merged.ledger, knowledge, balance: computeBalance(merged.ledger, pool, server ? 'server' : 'local'), freeBalance: server ? serverBalance(freePool, server.freeUsed) : computeBalance(merged.ledger, freePool, 'local', monthKey(), 'free'), serverReachable: Boolean(server) };
 }
 
 export async function persistSession(session: Session): Promise<void> { await storage.saveSession(session); void sync.push({ sessions: [session] }); }

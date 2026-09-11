@@ -8,10 +8,16 @@ import { openDatabase } from './db.mjs';
 import { createState } from './state.mjs';
 import { createBrowse } from './browse.mjs';
 import { createMcp } from './mcp.mjs';
+import { createFetcher } from './fetch.mjs';
+import { createGithub } from './github.mjs';
+import { createJobs, openJobs } from './jobs.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 const dataFile = process.env.DATA_FILE || resolve(process.cwd(), process.env.DATA_DIR || 'data', 'heybuddy.sqlite');
 const db = openDatabase(dataFile);
-const handlers = [createProxy(), createState({ db }), createBrowse(), createMcp()];
+const jobs = openJobs(db);
+const handlers = [createProxy({ db }), createState({ db }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs })];
+// Finished jobs are a transient hand-off, not a record; the run itself lands in the workspace store.
+setInterval(() => jobs.prune(new Date(Date.now() - 24 * 3_600_000).toISOString()), 3_600_000).unref();
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png' };
 // Hashed assets are immutable; the shell, the manifest, and the service worker must revalidate so a new build reaches installed apps.
 const cacheControl = (file) => file.startsWith(root + 'assets' + sep) ? 'public, max-age=31536000, immutable' : 'no-cache';

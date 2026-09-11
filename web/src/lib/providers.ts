@@ -1,3 +1,5 @@
+import { DEFAULT_FREE_MODEL, isZeroConfig } from './catalog';
+import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
 export type Provider = 'openrouter' | 'groq' | 'cohere' | 'custom';
 export const providers: Record<Provider, { name: string; tier: string; endpoint: string; models: string[] }> = {
@@ -7,23 +9,46 @@ export const providers: Record<Provider, { name: string; tier: string; endpoint:
   custom: { name: 'Custom endpoint', tier: 'Custom', endpoint: '', models: [] },
 };
 const profiles = new Map<Provider, Connection>();
+const MODES: InferenceMode[] = ['free', 'credits', 'byok'];
 export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: providers[provider].models[0] || '', token: '', maxTokens: 1024, saveKey: false }; }
+
+/**
+ * How a given model gets paid for. A zero-config model always routes through the free tier so
+ * a visitor's key is never spent on something the deployment already covers; anything else
+ * keeps whatever the visitor chose, falling back to their own key.
+ */
+export function inferenceFor(model: string, current?: InferenceMode): InferenceMode {
+  if (isZeroConfig(model)) return 'free';
+  return current && current !== 'free' ? current : 'byok';
+}
+
+/** The connection a first-time visitor gets: a free model, streaming, with nothing to set up. */
+export function zeroConfigConnection(): Connection {
+  return { ...defaultConnection('groq'), mode: 'remote', model: DEFAULT_FREE_MODEL, inference: 'free' };
+}
 export function loadConnection(provider: Provider): Connection {
   if (profiles.has(provider)) return { ...profiles.get(provider)! };
   const base = defaultConnection(provider);
   try {
     const stored = JSON.parse(localStorage.getItem(`ft-provider-${provider}`) || '{}');
-    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model: typeof stored.model === 'string' ? stored.model : base.model, maxTokens: [512,1024,2048,4096].includes(stored.maxTokens) ? stored.maxTokens : 1024, inference: stored.inference === 'credits' ? 'credits' : 'byok', token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
+    const model = typeof stored.model === 'string' ? stored.model : base.model;
+    const inference = MODES.includes(stored.inference) ? stored.inference as InferenceMode : 'byok';
+    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: [512,1024,2048,4096].includes(stored.maxTokens) ? stored.maxTokens : 1024, inference: inferenceFor(model, inference), token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
   } catch { return base; }
 }
+/**
+ * The connection the app opens with. A returning visitor gets whatever they last saved; a new
+ * one gets the zero-config free tier, already on a live model, so the very first message
+ * streams without a trip through Settings.
+ */
 export function initialProvider(): Connection {
   try { const p = localStorage.getItem('ft-active-provider') as Provider; if (Object.hasOwn(providers, p)) return loadConnection(p); } catch { /* storage unavailable */ }
-  return { ...defaultConnection(), mode: 'demo' };
+  return zeroConfigConnection();
 }
 export function switchProvider(current: Connection, provider: Provider): Connection { profiles.set(current.provider || 'custom', { ...current }); return { ...loadConnection(provider), mode: 'remote' }; }
 export function persistConnection(c: Connection): void {
   const provider = c.provider || 'custom';
-  localStorage.setItem(`ft-provider-${provider}`, JSON.stringify({ endpoint: c.endpoint, model: c.model, maxTokens: c.maxTokens, inference: c.inference === 'credits' ? 'credits' : 'byok', saveKey: Boolean(c.saveKey), ...(c.saveKey ? { token: c.token } : {}) }));
+  localStorage.setItem(`ft-provider-${provider}`, JSON.stringify({ endpoint: c.endpoint, model: c.model, maxTokens: c.maxTokens, inference: MODES.includes(c.inference as InferenceMode) ? c.inference : 'byok', saveKey: Boolean(c.saveKey), ...(c.saveKey ? { token: c.token } : {}) }));
   localStorage.setItem('ft-active-provider', provider); profiles.set(provider, { ...c });
 }
 export function forgetKeys(): void {

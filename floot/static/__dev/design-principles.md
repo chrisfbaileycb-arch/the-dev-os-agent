@@ -1,9 +1,0 @@
-Hey Buddy. Design principles.
-
-Distinctive thread: a dispatch board. The app is a control room for a five-agent team, so every surface reads like a well-kept operations desk: hairline rules instead of boxes, tabular numerals for counts and tokens, monospace for agent output, stages laid out as a rail of tickets that light up in order. One signal colour only, a warm amber, reserved for what is live right now: the running stage, the active provider dot, the focus ring. Everything else is graphite-blue ink on warm paper. Engineered and calm, never playful, never a generic SaaS dashboard.
-
-Modes: light and dark, both first-class. Light is warm paper with ink; dark is deep slate with paper-coloured type. The amber signal is identical in both.
-
-Pacing register: tight. This is a working tool. Compact vertical rhythm, dense but breathable panels, generous only around the goal composer, which is the one place the user writes.
-
-Global character. Surfaces are flat and tinted, separated by hairline borders rather than shadows; shadows appear only on floating layers (sheet, dialog, popover). Radius is small and consistent (0.375rem controls, 0.75rem panels), never pill-shaped except the live dot. Display type is Bricolage Grotesque with tight tracking for headings and eyebrow labels in small caps spacing; body and UI type is IBM Plex Sans; JetBrains Mono carries agent output, model IDs, token counts and endpoint URLs. Icons are lucide only, stroke 1.75, sized to the text they sit beside. No emoji anywhere, including provider names and status labels. Status is always shown as a word plus an icon or position, never colour alone. The primary button is ink-filled with paper text; the secondary is an outline; destructive actions are the only use of red. Demo mode is labelled Scripted preview in every place it appears so nobody mistakes it for inference.

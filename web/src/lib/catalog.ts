@@ -1,28 +1,47 @@
 import type { Provider } from './providers';
 
-// The model catalog: what a new user sees before typing anything. Two tiers, two ways to pay.
-// Free tier models run on the provider's free allowance; you still need a key (free Groq or
-// OpenRouter account) or platform credits. Pro tier models draw credits at a higher weight.
+// The model catalog: what a visitor sees in the dock dropdown before typing anything.
+//
+// Two tiers, three ways to pay:
+//   zero-config  a free model this deployment funds from its own Groq or OpenRouter key. No
+//                account, no key, nothing to configure. Metered against a free credit pool.
+//   platform     the deployment's keys unlocked by an administrator access token.
+//   BYOK         the visitor's own key, billed by their provider, never metered here.
+//
+// The zeroConfig ids below must match FREE_MODELS in server/freetier.mjs exactly. The server is
+// the authority: it refuses to fund anything not on its own list, and tests/freetier.test.mjs
+// fails the build if the two lists drift, so the dropdown can never promise what the server
+// will not pay for.
 
 export type Tier = 'free' | 'pro';
-export type InferenceMode = 'credits' | 'byok';
-export interface CatalogModel { id: string; provider: Provider; label: string; tier: Tier; weight: number; note: string; }
+export type InferenceMode = 'free' | 'credits' | 'byok';
+export interface CatalogModel { id: string; provider: Provider; label: string; tier: Tier; weight: number; note: string; zeroConfig?: boolean; }
 
 /** Credits charged per 1,000 tokens by model class. A BYOK run is never charged. */
 export const CREDIT_WEIGHTS = { fast: 0.5, standard: 3, reasoning: 15 } as const;
 export const DEFAULT_MONTHLY_POOL = 100_000;
+/** Mirrors FREE_CREDIT_MONTHLY_POOL in server/freetier.mjs; the server's number wins once it answers. */
+export const DEFAULT_FREE_POOL = 400;
 
 export const catalog: CatalogModel[] = [
-  { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', label: 'Llama 3.3 70B Versatile', tier: 'free', weight: CREDIT_WEIGHTS.fast, note: 'Fast, capable default on Groq.' },
-  { id: 'groq/llama-3.1-8b-instant', provider: 'groq', label: 'Llama 3.1 8B Instant', tier: 'free', weight: CREDIT_WEIGHTS.fast, note: 'Quickest replies; good for short questions.' },
-  { id: 'meta-llama/llama-3.2-3b-instruct:free', provider: 'openrouter', label: 'Llama 3.2 3B (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, note: 'OpenRouter free pool; availability varies by day.' },
-  { id: 'mistralai/mistral-nemo:free', provider: 'openrouter', label: 'Mistral Nemo (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, note: 'OpenRouter free pool; availability varies by day.' },
-  { id: 'qwen/qwen-2.5-72b-instruct:free', provider: 'openrouter', label: 'Qwen 2.5 72B (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, note: 'OpenRouter free pool; availability varies by day.' },
+  // Zero-config: streams with no key on a deployment that has provider keys configured.
+  { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', label: 'Llama 3.3 70B Versatile', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Fast and capable. The default for a visitor with no key.' },
+  { id: 'groq/llama-3.1-8b-instant', provider: 'groq', label: 'Llama 3.1 8B Instant', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Quickest replies; good for short questions.' },
+  { id: 'openrouter/auto', provider: 'openrouter', label: 'Auto (free pool)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Best free community model available right now: Llama 3.2, Mistral Nemo, or Qwen 2.5.' },
+  { id: 'meta-llama/llama-3.2-3b-instruct:free', provider: 'openrouter', label: 'Llama 3.2 3B (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
+  { id: 'mistralai/mistral-nemo:free', provider: 'openrouter', label: 'Mistral Nemo (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
+  { id: 'qwen/qwen-2.5-72b-instruct:free', provider: 'openrouter', label: 'Qwen 2.5 72B (free)', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'OpenRouter free pool; availability varies by day.' },
+  // Deep reasoning: needs your own key, or platform credits on a deployment that grants them.
   { id: 'deepseek/deepseek-r1', provider: 'openrouter', label: 'DeepSeek R1', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Deliberate reasoning; slow and thorough.' },
   { id: 'anthropic/claude-3.5-sonnet', provider: 'openrouter', label: 'Claude 3.5 Sonnet', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Strong writing and analysis.' },
   { id: 'anthropic/claude-3.5-haiku', provider: 'openrouter', label: 'Claude 3.5 Haiku', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Quick and careful.' },
   { id: 'openai/gpt-4o', provider: 'openrouter', label: 'GPT-4o', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'General purpose flagship.' },
 ];
+
+/** Model ids a visitor can run with no key at all, in dropdown order. */
+export const zeroConfigModels = catalog.filter(m => m.zeroConfig);
+export const DEFAULT_FREE_MODEL = 'groq/llama-3.3-70b-versatile';
+export const isZeroConfig = (id: string): boolean => zeroConfigModels.some(m => m.id.toLowerCase() === id.trim().toLowerCase());
 
 const bare = (id: string) => id.replace(/^groq\//, '').toLowerCase();
 export function findModel(id: string): CatalogModel | undefined { return catalog.find(m => bare(m.id) === bare(id)); }
@@ -37,7 +56,7 @@ export function weightFor(model: string): number {
 export function tierFor(model: string): Tier { return findModel(model)?.tier ?? (weightFor(model) === CREDIT_WEIGHTS.fast ? 'free' : 'pro'); }
 /** Credits for a completed request. Two-decimal precision; nothing for BYOK or the scripted preview. */
 export function creditsFor(model: string, tokens: number, mode: InferenceMode | 'demo'): number {
-  if (mode !== 'credits' || !(tokens > 0)) return 0;
+  if ((mode !== 'credits' && mode !== 'free') || !(tokens > 0)) return 0;
   return Math.ceil((tokens * weightFor(model)) / 10) / 100;
 }
 /** Rough token estimate for counters before a provider reports usage. */

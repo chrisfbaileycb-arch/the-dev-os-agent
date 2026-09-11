@@ -1,6 +1,20 @@
 # Render Blueprint for the Hey Buddy web edition.
 # Create it from the dashboard: New > Blueprint, pick this repo, branch main.
-# Render reads this file and provisions the service, the disk, and the env vars.
+#
+# Two services, which is Render's dual-service shape:
+#
+#   hey-buddy-web     a public HTTP Web Service. Serves the app, streams provider responses as
+#                     Server-Sent Events, owns the SQLite disk, meters the free tier, and hands
+#                     out background jobs. This service is required.
+#
+#   hey-buddy-worker  an optional Background Worker with no public port. It claims heavier
+#                     multi-step agent runs from the web service over the private network and
+#                     posts results back, so a long workflow never occupies a dyno that should
+#                     be streaming. Delete this block if you do not want it: workflows then run
+#                     in the visitor's browser, which is the default either way.
+#
+# A Render disk attaches to exactly one service, so the worker never touches SQLite directly —
+# it talks to the web service over HTTP, authenticated by WORKER_TOKEN.
 
 services:
   - type: web
@@ -16,7 +30,7 @@ services:
     healthCheckPath: /api/providers
     autoDeploy: true
     disk:
-      # Sessions, runs, and the credit ledger live here as SQLite. Without this
+      # Sessions, runs, the credit ledger, and the job queue live here as SQLite. Without this
       # disk the workspace resets on every deploy and restart.
       name: workspace-data
       mountPath: /data
@@ -26,15 +40,90 @@ services:
         value: /data
       - key: CREDIT_MONTHLY_POOL
         value: "100000"
-      # Browser Agent allowlist. Empty keeps the sandbox browser disabled, which
-      # is the safe default. Set hostnames here to switch it on.
+
+      # --- Zero-config free tier -------------------------------------------------------
+      # Set one or both of these and visitors get a live streaming reply with no API key and
+      # no account: the server funds an allowlisted set of free models from its own keys.
+      # Leave them unset and the app still works — it opens in the scripted preview and asks
+      # the visitor for their own key. Both providers offer free accounts.
+      # Add the real values in the dashboard, never in this file.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # Credits a workspace may spend on the free tier per month, at 0.5 credits per 1K tokens.
+      # 400 credits is roughly 800,000 tokens. Metered on the server from the bytes that
+      # actually streamed, so a browser cannot under-report its own usage.
+      - key: FREE_CREDIT_MONTHLY_POOL
+        value: "400"
+      # Per-IP burst cap. The workspace id is minted by the browser and can be rotated, so this
+      # is what bounds how fast one network can spend the deployment's keys.
+      - key: FREE_MAX_PER_HOUR
+        value: "40"
+      - key: FREE_MAX_OUTPUT_TOKENS
+        value: "1024"
+      # Set to "true" to switch the free tier off entirely without removing the provider keys.
+      - key: FREE_TIER_DISABLED
+        value: "false"
+
+      # --- Connectors ------------------------------------------------------------------
+      # URL crawler (/api/fetch). Open to any public host by default: it issues a plain GET and
+      # runs no JavaScript. Set a comma-separated host list to narrow it.
+      - key: FETCH_ALLOWED_HOSTS
+        value: ""
+      - key: FETCH_MAX_PER_HOUR
+        value: "60"
+      # GitHub connector (/api/github). Read-only. A server token is optional; visitors may
+      # supply their own in the Connectors hub.
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_MAX_PER_HOUR
+        value: "120"
+      # Browser Agent allowlist. Empty keeps the sandbox browser disabled, which is the safe
+      # default. Set hostnames here to switch it on.
       - key: BROWSE_ALLOWED_HOSTS
         value: ""
       - key: BROWSE_MAX_PER_HOUR
         value: "30"
       - key: MCP_MAX_PER_HOUR
         value: "120"
-      # APP_ORIGIN is deliberately unset. The server falls back to matching the
-      # request Origin against its own Host, which is correct on Render. Set it
-      # only to pin a single external origin, and never to a guessed URL: a wrong
-      # value makes every API call fail with 403.
+
+      # --- Background worker hand-off ---------------------------------------------------
+      # Shared secret for /api/jobs/claim, /api/jobs/update, and /api/jobs/finish. Render
+      # generates it once and the worker below reads the same value. With no worker deployed
+      # this is unused and the browser runs workflows itself.
+      - key: WORKER_TOKEN
+        generateValue: true
+
+      # APP_ORIGIN is deliberately unset. The server falls back to matching the request Origin
+      # against its own Host, which is correct on Render. Set it only to pin a single external
+      # origin, and never to a guessed URL: a wrong value makes every API call fail with 403.
+
+  - type: worker
+    name: hey-buddy-worker
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    rootDir: web
+    buildCommand: npm ci
+    startCommand: npm run worker
+    autoDeploy: true
+    envVars:
+      # Chromium is only needed by the web service's Browser Agent, not by the worker.
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"
+      # The web service's internal address. Render resolves the service name on the private
+      # network, so this never leaves the datacentre.
+      - key: WEB_SERVICE_URL
+        fromService:
+          name: hey-buddy-web
+          type: web
+          property: hostport
+      - key: WORKER_TOKEN
+        fromService:
+          name: hey-buddy-web
+          type: web
+          envVarKey: WORKER_TOKEN
+      - key: WORKER_POLL_MS
+        value: "3000"

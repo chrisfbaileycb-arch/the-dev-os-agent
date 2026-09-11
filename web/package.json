@@ -9,7 +9,8 @@
     "preview": "node server/index.mjs",
     "test": "vitest run",
     "start": "node server/index.mjs",
-    "test:server": "node --test tests/*.test.mjs"
+    "test:server": "node --test tests/*.test.mjs",
+    "worker": "node server/worker.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
