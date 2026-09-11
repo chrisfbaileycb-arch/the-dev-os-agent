@@ -1,9 +1,10 @@
-import { Database, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings2, Users } from 'lucide-react';
-export type Page = 'workspace' | 'roster' | 'knowledge' | 'settings';
+import { CreditCard, Database, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings2, Users } from 'lucide-react';
+export type Page = 'workspace' | 'roster' | 'knowledge' | 'pricing' | 'settings';
 const items: { id: Page; label: string; icon: typeof MessageSquare }[] = [
   { id: 'workspace', label: 'Workspace', icon: MessageSquare },
   { id: 'roster', label: 'Agent roster', icon: Users },
   { id: 'knowledge', label: 'Knowledge hub', icon: Database },
+  { id: 'pricing', label: 'Plans', icon: CreditCard },
   { id: 'settings', label: 'Settings and model hub', icon: Settings2 },
 ];
 export default function Rail({ page, setPage, collapsed, toggle, badge }: { page: Page; setPage: (p: Page) => void; collapsed: boolean; toggle: () => void; badge: Partial<Record<Page, number>> }) {

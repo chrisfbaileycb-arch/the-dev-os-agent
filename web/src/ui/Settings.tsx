@@ -1,9 +1,10 @@
-import { Check, Coins, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wallet } from 'lucide-react';
+import { Check, Coins, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wallet } from 'lucide-react';
 import { catalog, findModel, weightFor, type CatalogModel, type InferenceMode, type Tier } from '../lib/catalog';
 import { inferenceFor, providers, switchProvider, type Provider } from '../lib/providers';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
+import { REFERRAL_ALLOWANCE, REFERRAL_DISCLOSURE, referralEnabled, referralLink } from '../lib/referral';
 
 export interface SettingsProps {
   connection: Connection; setConnection: (c: Connection) => void;
@@ -85,6 +86,13 @@ export default function Settings(p: SettingsProps) {
               <label>{providers[provider].name} API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.token} placeholder="Your provider key" onChange={e => set({ token: e.target.value })} /></label>
               <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember this key in this browser</label>
               <p className="help">Saved keys live in localStorage, unencrypted, readable by any script on this origin. Use a restricted key on a device you trust. Keys are never exported and never stored on the server.</p>
+              {referralEnabled() && <p className="help referral-note">
+                <ExternalLink size={12} strokeWidth={1.75} />
+                <span>
+                  <a {...referralLink()}>Get an API key with {REFERRAL_ALLOWANCE} via xKiro</a>
+                  {' — '}{REFERRAL_DISCLOSURE} A Groq or OpenRouter key works here just as well.
+                </span>
+              </p>}
             </> : <>
               <label>Deployment access token<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.serverAccessToken ?? ''} placeholder="Given to you by the administrator" onChange={e => set({ serverAccessToken: e.target.value })} /></label>
               <p className="help">Platform credits route through the deployment's own provider keys and need this token. It stays in memory for the session. Each request draws credits from the monthly allowance shown to the right; your own key is not used.</p>

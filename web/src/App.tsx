@@ -7,6 +7,7 @@ import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
+import Pricing from './ui/Pricing';
 import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
 import { iconFor } from './ui/icons';
@@ -377,6 +378,7 @@ export default function App() {
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>Business agents lead a chat and set the focus for a workflow. Work skills run the stages. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
+        {page === 'pricing' && <Pricing free={deployment.free} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
         {page === 'settings' && <Settings connection={connection} setConnection={setConnection} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference, demo)} stats={stats} balance={activeBalance} freeTier={inference === 'free' && !demo} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />

@@ -155,6 +155,27 @@ input:not([type=checkbox]), select, textarea { border: 1px solid var(--line-stro
 .drawer-head { display: flex; align-items: center; justify-content: space-between; } .drawer-head h2 { font-size: 15px; }
 .modal { margin: auto; width: min(460px, calc(100% - 32px)); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); } .modal h2 { font-size: 15px; } .modal p { color: var(--muted); }
 
+/* Plans — three cards on the same tokens as every other surface, so it reads as part of the app
+   rather than a marketing page bolted on. The featured card is marked with the accent only;
+   no gradients, no second palette. */
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; align-items: stretch; }
+.plan { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 16px; position: relative; }
+.plan.featured { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.plan-flag { position: absolute; top: -9px; left: 16px; background: var(--accent); color: #fff; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; border-radius: 999px; padding: 2px 9px; }
+.plan-head { display: flex; align-items: center; gap: 8px; } .plan-head h2 { font-size: 15px; }
+.plan-icon { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.plan.featured .plan-icon { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.plan-price { display: flex; align-items: baseline; gap: 6px; } .plan-price strong { font-size: 24px; font-weight: 650; letter-spacing: -0.5px; } .plan-price small { color: var(--muted); }
+.plan-billed { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.plan-blurb { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.plan-features { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.plan-features li { display: flex; align-items: flex-start; gap: 7px; font-size: 12.5px; line-height: 1.45; } .plan-features svg { margin-top: 2px; color: var(--ok); }
+.plan-cta { justify-content: center; margin-top: 10px; text-decoration: none; }
+a.plan-cta { color: var(--ink); }
+a.plan-cta:hover { border-color: var(--accent); color: var(--accent-ink); background: var(--panel-2); }
+.plan-disclosure { display: block; margin-top: 6px; color: var(--muted); font-size: 10.5px; line-height: 1.4; text-align: center; }
+.referral-note { display: flex; align-items: flex-start; gap: 6px; } .referral-note svg { margin-top: 3px; } .referral-note a { color: var(--accent-ink); }
+
 /* Connectors hub */
 .connector-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .connector-tab { display: flex; align-items: center; gap: 8px; text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 10px; color: var(--ink); min-width: 0; }
@@ -187,6 +208,7 @@ input:not([type=checkbox]), select, textarea { border: 1px solid var(--line-stro
   .model-menu { position: fixed; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 70vh; }
   .dock-counters { width: 100%; margin-left: 0; order: 9; text-align: center; }
   .connector-tabs { grid-template-columns: minmax(0, 1fr); }
+  .plan-grid { grid-template-columns: minmax(0, 1fr); }
   .page { padding: 12px 12px 24px; }
   .mode-picker, .mode-picker.three { grid-template-columns: minmax(0, 1fr); }
   .status-metrics span:nth-child(2) { display: none; }
