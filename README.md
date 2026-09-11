@@ -47,6 +47,26 @@ npm run worker     # optional background worker (needs WEB_SERVICE_URL and WORKE
 
 Export a real `GROQ_API_KEY` or `OPENROUTER_API_KEY` before `npm run dev` to see the zero-config tier: open the app in a private window, type a prompt, and it should stream without anything entered in Settings.
 
+## Live deployment
+
+**https://hey-buddy-web.onrender.com** — Render service `hey-buddy-web`, auto-deploying from `main`.
+
+That service was created directly rather than from the Blueprint, so it differs from `render.yaml`
+in two ways worth knowing:
+
+- **It runs the Node runtime, not Docker**, so Chromium is absent. Everything works except the
+  Browser Agent, whose `/api/browse` answers 503. The URL crawler connector is unaffected — it
+  needs no browser.
+- **It has no persistent disk**, so `DATA_FILE=/tmp/heybuddy.sqlite` is ephemeral. Sessions, the
+  ledger, and the free-tier quota reset on every restart and redeploy. Be aware of what that costs
+  once a provider key is set: a quota that resets is a weaker spend cap than one that persists, and
+  the per-IP hourly limit (`FREE_MAX_PER_HOUR`, in memory) resets with it. To get the durable
+  version, replace the service with a Blueprint from `render.yaml`, which provisions the Docker
+  runtime and a 1 GB disk at `/data`.
+
+The zero-config free tier is off until `GROQ_API_KEY` or `OPENROUTER_API_KEY` is set in the Render
+dashboard. Until then the app opens in the scripted preview and asks each visitor for their own key.
+
 ## Hosting
 
 The server streams provider responses as Server-Sent Events and keeps a SQLite file for sessions and the credit ledger, so the host must run a long-lived Node process with a writable disk and must not buffer responses. Static-only hosting and buffered serverless routers cannot serve `/api/chat`.
