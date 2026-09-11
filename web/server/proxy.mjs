@@ -3,7 +3,7 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest } from './freetier.mjs';
+import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, xkiroBase } from './freetier.mjs';
 import { createMeter } from './meter.mjs';
 
 export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
@@ -13,9 +13,26 @@ export function publicAddress(ip) {
   const [a,b] = ip.split('.').map(Number);
   return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 168 || b === 0)) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)));
 }
+/**
+ * Where each named provider lives. Fixed on the server on purpose: the browser sends a base URL
+ * for display, and taking it on trust would make this proxy a forwarder to anywhere, with the
+ * visitor's key attached. Only `custom` may steer the destination, and then only to an origin
+ * the operator listed in CUSTOM_API_ORIGINS.
+ *
+ * Google publishes an OpenAI-compatible surface for Gemini, so it needs nothing special.
+ * Anthropic and Cohere do not, and are translated below.
+ */
 export async function resolveTarget(provider, baseUrl, env = process.env, resolve = lookup) {
-  const fixed = { openrouter: 'https://openrouter.ai/api/v1', groq: 'https://api.groq.com/openai/v1', cohere: 'https://api.cohere.com/v2' };
-  if (fixed[provider]) return { base: fixed[provider], nativeCohere: provider === 'cohere' };
+  const fixed = {
+    openrouter: 'https://openrouter.ai/api/v1',
+    groq: 'https://api.groq.com/openai/v1',
+    openai: 'https://api.openai.com/v1',
+    anthropic: 'https://api.anthropic.com/v1',
+    google: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    cohere: 'https://api.cohere.com/v2',
+    xkiro: xkiroBase(env),
+  };
+  if (fixed[provider]) return { base: fixed[provider], nativeCohere: provider === 'cohere', nativeAnthropic: provider === 'anthropic' };
   if (provider !== 'custom') throw new HttpError(400, 'Unsupported provider.');
   let url; try { url = new URL(baseUrl); } catch { throw new HttpError(400, 'Invalid custom baseUrl.'); }
   if (url.username || url.password || url.search || url.hash) throw new HttpError(400, 'Custom URLs cannot contain credentials, queries, or fragments.');
@@ -40,7 +57,7 @@ export function keyFor(body, env = process.env) {
   const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
   if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
-  return env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]] || '';
+  return env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]] || '';
 }
 /**
  * Who pays for this request, decided entirely on the server.
@@ -58,7 +75,7 @@ export function fundingFor(body, env = process.env) {
   const supplied = keyFor(body, env);
   if (supplied) return { mode: typeof body.apiKey === 'string' && body.apiKey.trim() ? 'byok' : 'credits', apiKey: supplied };
   if (env.FREE_TIER_DISABLED === 'true') return { mode: 'none', apiKey: '' };
-  const entry = freeModel(body.model);
+  const entry = freeModel(body.model, env);
   const key = entry && env[entry.envKey];
   return key ? { mode: 'free', apiKey: key, entry } : { mode: 'none', apiKey: '' };
 }
@@ -102,6 +119,52 @@ function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'appl
  */
 export const FREE_TIER_UNAVAILABLE = 'Public free tier warming up — enter your own key in Settings or try again shortly.';
 
+/** Pinned so a future Anthropic API revision cannot change the wire format under a live deploy. */
+export const ANTHROPIC_VERSION = '2023-06-01';
+
+/**
+ * OpenAI's reasoning models and the GPT-5 line reject `max_tokens` and require
+ * `max_completion_tokens` instead; everything else still wants the original name. Sending the
+ * wrong one is a hard 400 with an opaque message, so the choice is made here from the model id.
+ */
+export function outputLimit(provider, model, max) {
+  const reasoning = provider === 'openai' && /^(o[134]|gpt-5)/i.test(model);
+  return reasoning ? { max_completion_tokens: max } : { max_tokens: max };
+}
+
+/**
+ * Whether to ask for a usage block on the stream. Not universal: a provider that does not know
+ * `stream_options` rejects the whole request rather than ignoring the field, which would turn a
+ * token count into a failed run. Requested only where it is known to be supported.
+ */
+export const usageReportable = (provider, target) =>
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xkiro'].includes(provider);
+
+/**
+ * An OpenAI-shaped chat request as Anthropic's /v1/messages wants it.
+ *
+ * Two differences matter. The system prompt is a top-level field there rather than a message
+ * with role "system" — left in the array it is rejected outright. And image parts are named
+ * differently: `image_url` with a data URL becomes a `source` block of base64 plus media type.
+ * Everything else is close enough to pass through.
+ */
+export function anthropicPayload(model, messages, max) {
+  const system = messages.filter(m => m.role === 'system').map(m => typeof m.content === 'string' ? m.content : '').filter(Boolean).join('\n\n');
+  const turns = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: anthropicContent(m.content) }));
+  return { model, messages: turns, stream: true, max_tokens: max, ...(system ? { system } : {}) };
+}
+function anthropicContent(content) {
+  if (typeof content === 'string') return content;
+  return content.map(part => {
+    if (part.type === 'text') return part;
+    const url = part.image_url?.url || '';
+    const match = /^data:(image\/[a-z]+);base64,(.+)$/i.exec(url);
+    // A remote image URL has no Anthropic equivalent that does not involve this server fetching
+    // it, which is an SSRF hole for a feature nobody asked for. Only inline data is translated.
+    return match ? { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } } : { type: 'text', text: '' };
+  }).filter(part => part.type !== 'text' || part.text !== '');
+}
+
 const windows = new Map();
 export function createProxy({ env = process.env, transport = upstream, resolve = lookup, db = null } = {}) {
   const takeBurst = createBurstLimiter(env);
@@ -135,7 +198,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (!apiKey && provider !== 'custom' && !(path === '/api/models' && provider === 'openrouter')) {
         // A model on the free allowlist that is simply not funded right now reads as a warming-up
         // tier, not as the visitor's mistake; anything else genuinely needs their own key.
-        throw freeModel(body.model)
+        throw freeModel(body.model, env)
           ? new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable')
           : new HttpError(401, 'That model needs a key. Pick a free model, or add your own OpenRouter or Groq key in Settings.', 'key_required');
       }
@@ -147,7 +210,9 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
         const used = db ? db.usedThisMonth(workspace, new Date(), 'free') : 0;
         if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own OpenRouter or Groq key in Settings — both offer free accounts — or wait for the monthly reset.`, 'free_tier_exhausted');
       }
-      const headers = { 'Content-Type': 'application/json', Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) };
+      // Anthropic authenticates with x-api-key and a pinned API version rather than a bearer
+      // token; every other provider here takes Authorization.
+      const headers = { 'Content-Type': 'application/json', Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? (target.nativeAnthropic ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION } : { Authorization: `Bearer ${apiKey}` }) : {}) };
       if (provider === 'openrouter') { headers['HTTP-Referer'] = env.APP_ORIGIN || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
       let payload; let suffix;
       if (path === '/api/chat') {
@@ -158,10 +223,13 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
         // Server-funded output is capped regardless of what the browser asked for.
         const max = funding.mode === 'free' ? Math.min(requested, freeOutputCap) : requested;
         const routed = funding.mode === 'free' ? routeFreeRequest(funding.entry) : { model: normalizeModel(provider, body.model) };
-        payload = JSON.stringify({ model: routed.model, ...(routed.models ? { models: routed.models } : {}), messages: body.messages, stream: true, max_tokens: max, ...(!target.nativeCohere && provider !== 'custom' ? { stream_options: { include_usage: true } } : {}) });
-        suffix = target.nativeCohere ? '/chat' : '/chat/completions';
+        payload = target.nativeAnthropic
+          ? JSON.stringify(anthropicPayload(routed.model, body.messages, max))
+          : JSON.stringify({ model: routed.model, ...(routed.models ? { models: routed.models } : {}), messages: body.messages, stream: true, ...outputLimit(provider, routed.model, max), ...(usageReportable(provider, target) ? { stream_options: { include_usage: true } } : {}) });
+        suffix = target.nativeCohere ? '/chat' : target.nativeAnthropic ? '/messages' : '/chat/completions';
       } else suffix = '/models';
       const upstreamUrl = path === '/api/models' && target.nativeCohere ? 'https://api.cohere.com/v1/models' : target.base + suffix;
+      if (target.nativeAnthropic && path === '/api/models') headers.Accept = 'application/json';
       const response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
       const status = response.statusCode || 502;
       if (status < 200 || status >= 300) {
@@ -182,7 +250,8 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       }
       if (!String(response.headers['content-type']).includes('text/event-stream')) { response.destroy(); throw new HttpError(502, 'The provider did not return an SSE stream.'); }
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-store, no-transform', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' }); res.flushHeaders();
-      // Cohere native events are passed through unchanged; the browser normalizes them. A
+      // Cohere and Anthropic native events are passed through unchanged; the browser normalizes
+      // all three shapes in one place rather than this proxy rewriting a stream mid-flight. A
       // free-tier stream additionally runs through a read-only meter so its real cost is
       // recorded from the bytes that crossed the wire, never from a client-reported number.
       const meter = funding.mode === 'free' ? createMeter({ promptChars: payload.length }) : null;

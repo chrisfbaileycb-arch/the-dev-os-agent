@@ -26,25 +26,103 @@ export const OPENROUTER_FREE_POOL = [
   'qwen/qwen-2.5-72b-instruct:free',
 ];
 
-/** Exact model ids a visitor may run without a key, with the provider that funds each. */
-export const FREE_MODELS = [
-  { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', envKey: 'GROQ_API_KEY' },
-  { id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' },
-  { id: 'openrouter/auto', provider: 'openrouter', envKey: 'OPENROUTER_API_KEY', pool: OPENROUTER_FREE_POOL },
-  ...OPENROUTER_FREE_POOL.map(id => ({ id, provider: 'openrouter', envKey: 'OPENROUTER_API_KEY' })),
+/**
+ * xKiro is a unified gateway: one OpenAI-compatible endpoint fronting many model families
+ * (DeepSeek, GLM, Qwen, Kimi and others). Its catalogue moves faster than this file can, and
+ * the exact ids are the gateway's to define, so the default list below is only a seed —
+ * XKIRO_FREE_MODELS overrides it wholesale, and /api/models reads the real list from the
+ * gateway. A model id that turns out to be wrong is therefore a dashboard fix, not a deploy.
+ */
+export const XKIRO_DEFAULT_BASE = 'https://api.xkiro.com/v1';
+
+/**
+ * The gateway's base URL. Operator-set, like OLLAMA_BRIDGE_URL, so it is trusted the way the
+ * deployment's own configuration is — but still checked, because a typo here would otherwise
+ * surface as a puzzling network error rather than a clear one. HTTPS only; anything malformed
+ * falls back to the default rather than taking the service down.
+ */
+export function xkiroBase(env = process.env) {
+  const configured = (env.XKIRO_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (!configured) return XKIRO_DEFAULT_BASE;
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return XKIRO_DEFAULT_BASE;
+    return configured;
+  } catch { return XKIRO_DEFAULT_BASE; }
+}
+
+// What the gateway offers, which is not the same as what this deployment funds: deepseek-r1 is
+// a reasoning model, so FRONTIER drops it from the funded pool and it is reachable on a key
+// instead. A deployment whose xKiro plan covers it sets FREE_TIER_ALLOW_FRONTIER=true and this
+// list is then taken as written.
+const XKIRO_DEFAULT_POOL = [
+  'deepseek/deepseek-chat',
+  'deepseek/deepseek-r1',
+  'z-ai/glm-5.2',
+  'z-ai/glm-5.3-flash',
+  'qwen/qwen-2.5-72b-instruct',
+  'moonshotai/kimi-k2.7-code',
 ];
 
-const byId = new Map(FREE_MODELS.map(m => [m.id.toLowerCase(), m]));
+/** The xKiro ids this deployment offers free, from XKIRO_FREE_MODELS or the seed above. */
+export function xkiroPool(env = process.env) {
+  const configured = (env.XKIRO_FREE_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
+  return configured.length ? configured : XKIRO_DEFAULT_POOL;
+}
+
+/**
+ * Frontier models, which this deployment never funds from its own key.
+ *
+ * The zero-config tier exists so a stranger can type one sentence and get an answer. It is paid
+ * for out of the operator's pocket, at a flat rate, by anyone who finds the URL — so what it
+ * offers has to be cheap per token and bounded in output. A reasoning or flagship model is
+ * neither: an extended chain of thought can cost fifty times a short chat completion for the
+ * same visible answer, and the credit ledger here meters both at FREE_WEIGHT. One afternoon of
+ * traffic on those models drains a month of allowance.
+ *
+ * So they stay behind a key the visitor brings. That is not a downgrade of the product — the
+ * models are all still in the dropdown and all still one paste away — it is the difference
+ * between the operator paying for a stranger's reasoning run and the stranger paying for it.
+ *
+ * This matches on the id, not on a curated list, because the ids come from gateways whose
+ * catalogues change without asking us. A pattern still covers a model added tomorrow.
+ */
+export const FRONTIER = /claude|opus|sonnet|gpt-[45]|(^|[/_.-])o[134](?![0-9a-z])|(^|[/_.-])r1(?![0-9a-z])|grok|gemini-[0-9.]*-(pro|ultra)|reason|thinking/i;
+export const isFrontier = id => typeof id === 'string' && FRONTIER.test(id);
+
+/**
+ * Exact model ids a visitor may run without a key, with the provider that funds each.
+ *
+ * Frontier ids are dropped, including from an operator's own XKIRO_FREE_MODELS: pasting a
+ * gateway's full catalogue into that variable is the likeliest way to open the pool by
+ * accident, and the cost of that mistake lands on the operator, not on whoever made it. An
+ * operator who does mean it sets FREE_TIER_ALLOW_FRONTIER=true and gets the list they asked for.
+ */
+export function freeModels(env = process.env) {
+  const all = [
+    { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', envKey: 'GROQ_API_KEY' },
+    { id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' },
+    { id: 'openrouter/auto', provider: 'openrouter', envKey: 'OPENROUTER_API_KEY', pool: OPENROUTER_FREE_POOL },
+    ...OPENROUTER_FREE_POOL.map(id => ({ id, provider: 'openrouter', envKey: 'OPENROUTER_API_KEY' })),
+    ...xkiroPool(env).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
+  ];
+  return env.FREE_TIER_ALLOW_FRONTIER === 'true' ? all : all.filter(m => !isFrontier(m.id));
+}
+
+/** The static list, for callers that only need the shape (tests, the catalog parity check). */
+export const FREE_MODELS = freeModels({});
 
 /** The free entry for a model id, or undefined. Exact match only — no normalisation, no prefixes. */
-export function freeModel(id) {
-  return typeof id === 'string' ? byId.get(id.trim().toLowerCase()) : undefined;
+export function freeModel(id, env = process.env) {
+  if (typeof id !== 'string') return undefined;
+  const wanted = id.trim().toLowerCase();
+  return freeModels(env).find(m => m.id.toLowerCase() === wanted);
 }
 
 /** Free models this deployment can actually fund, i.e. the ones whose provider key is set. */
 export function fundedModels(env = process.env) {
   if (env.FREE_TIER_DISABLED === 'true') return [];
-  return FREE_MODELS.filter(m => Boolean(env[m.envKey]));
+  return freeModels(env).filter(m => Boolean(env[m.envKey]));
 }
 
 /**
@@ -56,6 +134,10 @@ export function freeTierStatus(env = process.env) {
   return {
     enabled: funded.length > 0,
     models: funded.map(m => m.id),
+    // Which provider funds each id. The browser used to infer this from the id prefix, which
+    // sent every non-Groq free model to the OpenRouter endpoint the moment a visitor added
+    // their own key. The server already knows; saying so costs one field.
+    providers: Object.fromEntries(funded.map(m => [m.id, m.provider])),
     monthlyCredits: monthlyPool(env),
     perHour: burstLimit(env),
     weight: FREE_WEIGHT,
@@ -76,6 +158,7 @@ export const creditsForTokens = tokens => Math.ceil((Math.max(0, tokens) * FREE_
 export function routeFreeRequest(entry) {
   if (entry.provider === 'groq') return { model: entry.id.replace(/^groq\//, '') };
   if (entry.pool) return { model: entry.pool[0], models: [...entry.pool] };
+  // xKiro and the OpenRouter :free ids are passed through exactly as the gateway names them.
   return { model: entry.id };
 }
 

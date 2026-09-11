@@ -66,3 +66,75 @@ test('accepts text and bounded image parts, and refuses images for native Cohere
     assert.equal((await post(url, { ...base, provider: 'cohere', model: 'command-a-03-2025', messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: image } }] }] })).status, 400);
   });
 });
+
+test('the major vendors route to their own APIs on the visitor key', async () => {
+  // Point 2 of the brief: a key the visitor supplies bills the visitor's account, so each
+  // vendor is reached at its own endpoint rather than through an aggregator that would bill
+  // somewhere else. The browser sends a base URL for display; the server ignores it for every
+  // named provider and uses its own fixed map, or this proxy would forward keys anywhere.
+  assert.equal((await resolveTarget('openai')).base, 'https://api.openai.com/v1');
+  assert.equal((await resolveTarget('anthropic')).base, 'https://api.anthropic.com/v1');
+  assert.equal((await resolveTarget('google')).base, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal((await resolveTarget('anthropic')).nativeAnthropic, true);
+  assert.equal((await resolveTarget('openai')).nativeAnthropic, false);
+  assert.equal((await resolveTarget('openai', 'https://attacker.example/v1', {})).base, 'https://api.openai.com/v1', 'a supplied base URL is ignored, not honoured');
+
+  for (const [provider, model, host] of [['openai', 'gpt-4o', 'https://api.openai.com/v1'], ['google', 'gemini-2.5-flash', 'https://generativelanguage.googleapis.com/v1beta/openai']]) {
+    let captured;
+    await withProxy({ env: {}, transport: async (url, options) => { captured = { url, ...options }; return stream('data: [DONE]\n\n'); } }, async url => {
+      assert.equal((await post(url, { ...base, provider, model, baseUrl: 'https://attacker.example/v1' })).status, 200);
+    });
+    assert.equal(captured.url, `${host}/chat/completions`);
+    assert.equal(captured.headers.Authorization, 'Bearer test-key-not-real');
+    assert.equal(JSON.parse(captured.body).model, model);
+  }
+});
+
+test('Anthropic is translated to /v1/messages, headers and all', async () => {
+  // Anthropic does not speak the OpenAI protocol: x-api-key rather than a bearer token, a
+  // pinned API version, and a system prompt that is a top-level field. Left in the messages
+  // array as role "system" it is rejected outright, so the translation is not cosmetic.
+  let captured;
+  await withProxy({ env: {}, transport: async (url, options) => { captured = { url, ...options }; return stream('event: message_stop\ndata: {"type":"message_stop"}\n\n'); } }, async url => {
+    assert.equal((await post(url, { ...base, provider: 'anthropic', model: 'claude-sonnet-4-5', messages: [{ role: 'system', content: 'be brief' }, { role: 'user', content: 'hello' }] })).status, 200);
+  });
+  assert.equal(captured.url, 'https://api.anthropic.com/v1/messages');
+  assert.equal(captured.headers['x-api-key'], 'test-key-not-real');
+  assert.equal(captured.headers['anthropic-version'], '2023-06-01');
+  assert.equal(captured.headers.Authorization, undefined, 'the bearer header would be ignored and leaks the key twice');
+  const payload = JSON.parse(captured.body);
+  assert.equal(payload.system, 'be brief');
+  assert.deepEqual(payload.messages, [{ role: 'user', content: 'hello' }]);
+  assert.equal(payload.max_tokens, 1024);
+  assert.equal(payload.stream_options, undefined, 'an unknown field is a 400 there, not an ignored hint');
+});
+
+test('an inline image survives the Anthropic translation and a remote one is dropped', async () => {
+  const { anthropicPayload } = await import('../server/proxy.mjs');
+  const data = 'iVBORw0KGgo=';
+  const inline = anthropicPayload('claude-sonnet-4-5', [{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image_url', image_url: { url: `data:image/png;base64,${data}` } }] }], 512);
+  assert.deepEqual(inline.messages[0].content, [{ type: 'text', text: 'what is this' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }]);
+  // A hosted image URL would mean this server fetching an arbitrary address on the visitor's
+  // behalf, which is an SSRF hole for a feature nobody asked for.
+  const remote = anthropicPayload('claude-sonnet-4-5', [{ role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: 'https://example.com/cat.png' } }] }], 512);
+  assert.deepEqual(remote.messages[0].content, [{ type: 'text', text: 'look' }]);
+});
+
+test('OpenAI reasoning models get max_completion_tokens, not max_tokens', async () => {
+  // Sending the wrong one is a hard 400 with an opaque message on the o-series and GPT-5.
+  const { outputLimit } = await import('../server/proxy.mjs');
+  assert.deepEqual(outputLimit('openai', 'o3-mini', 800), { max_completion_tokens: 800 });
+  assert.deepEqual(outputLimit('openai', 'gpt-5.1', 800), { max_completion_tokens: 800 });
+  assert.deepEqual(outputLimit('openai', 'gpt-4o', 800), { max_tokens: 800 });
+  assert.deepEqual(outputLimit('groq', 'o3-mini', 800), { max_tokens: 800 }, 'the rule is OpenAI-specific');
+});
+
+test('a vendor model with no key is refused before anything is sent', async () => {
+  await withProxy({ env: {}, transport: async () => { throw new Error('must not reach the provider'); } }, async url => {
+    for (const [provider, model] of [['openai', 'gpt-4o'], ['anthropic', 'claude-sonnet-4-5'], ['google', 'gemini-2.5-pro']]) {
+      const response = await post(url, { provider, model, messages: [{ role: 'user', content: 'hi' }] });
+      assert.equal(response.status, 401);
+      assert.equal((await response.json()).error.code, 'key_required');
+    }
+  });
+});

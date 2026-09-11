@@ -7,14 +7,15 @@ import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
+import Pricing from './ui/Pricing';
 import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
 import { iconFor } from './ui/icons';
 import { chatTurn } from './lib/chat';
-import { estimateTokens, isZeroConfig, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel } from './lib/catalog';
+import { estimateTokens, findModel, isZeroConfig, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel } from './lib/catalog';
 import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, forgetKeys, inferenceFor, initialProvider, persistConnection, providers, zeroConfigConnection } from './lib/providers';
+import { clearProviderStorage, forgetKeys, inferenceFor, initialProvider, persistConnection, providers, zeroConfigConnection, type Provider } from './lib/providers';
 import { defaultPersonaId, personaById, workflows } from './lib/roster';
 import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, storage, sync, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
@@ -137,11 +138,22 @@ export default function App() {
   function choosePersona(id: string) { setPersonaId(id); if (active) patchSession(active.id, s => ({ ...s, persona: id }), true); }
   function updateRun(run: Run) { const next = runsRef.current.some(r => r.id === run.id) ? runsRef.current.map(r => r.id === run.id ? run : r) : [run, ...runsRef.current]; runsRef.current = next; setRuns(next); }
 
-  /** Pick a model from the dock. A zero-config id switches the run onto the free tier by itself. */
+  /**
+   * Pick a model from the dock. A funded id switches the run onto the free tier by itself.
+   *
+   * Which provider serves it is the server's answer where it has one, then the catalog's, and
+   * only then a guess from the id. That order matters the moment a visitor adds their own key:
+   * the free tier ignores the provider field entirely and routes from its own allowlist, but a
+   * keyed request goes to whatever endpoint is set here, and a gateway model sent to OpenRouter
+   * fails with a puzzling 404 rather than a useful error.
+   */
   function pickModel(id: string) {
-    const entry = isZeroConfig(id);
+    const served = deployment.free.providers[id];
     setConnection(c => {
-      const provider = entry ? (id.startsWith('groq/') ? 'groq' : 'openrouter') : c.provider ?? 'openrouter';
+      const known = (served ?? findModel(id)?.provider) as Provider | undefined;
+      const provider = known && Object.hasOwn(providers, known)
+        ? known
+        : isZeroConfig(id) ? (id.startsWith('groq/') ? 'groq' : 'openrouter') : c.provider ?? 'openrouter';
       return { ...c, mode: 'remote', model: id, provider, endpoint: providers[provider].endpoint, inference: inferenceFor(id, c.inference, deployment.free.models) };
     });
     setNotice('');
@@ -303,7 +315,7 @@ export default function App() {
 
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
   async function discover() { setChecking(true); try { const ids = await listModels(requestConnection(connection), new AbortController().signal); setModels(ids); if (ids.length && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
-  function saveSettingsForm() { try { if (connection.mode === 'remote') validateConnection(connection); persistConnection(connection); setNotice(connection.saveKey && inference === 'byok' ? 'Connection saved, including your key in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.'); } catch (e) { setNotice(errorText(e)); } }
+  function saveSettingsForm() { try { if (connection.mode === 'remote') validateConnection(connection); persistConnection(connection); setNotice(connection.saveKey && inference === 'byok' ? 'Connection saved, including your provider keys in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.'); } catch (e) { setNotice(errorText(e)); } }
   function forget() { try { forgetKeys(); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
   async function clearAll() {
     setConfirm(null);
@@ -377,6 +389,7 @@ export default function App() {
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>Business agents lead a chat and set the focus for a workflow. Work skills run the stages. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
+        {page === 'pricing' && <Pricing free={deployment.free} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
         {page === 'settings' && <Settings connection={connection} setConnection={setConnection} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference, demo)} stats={stats} balance={activeBalance} freeTier={inference === 'free' && !demo} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />

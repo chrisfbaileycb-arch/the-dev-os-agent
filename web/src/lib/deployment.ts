@@ -26,10 +26,20 @@ const WARMING_CODES = new Set(['free_tier_unavailable', 'free_tier_busy']);
 export const isFreeTierWarming = (code?: string): boolean => Boolean(code && WARMING_CODES.has(code));
 
 export const offlineDeployment: Deployment = {
-  free: { enabled: false, models: [], monthlyCredits: DEFAULT_FREE_POOL, perHour: 0 },
+  free: { enabled: false, models: [], providers: {}, monthlyCredits: DEFAULT_FREE_POOL, perHour: 0 },
   ollamaBridge: null,
   reachable: false,
 };
+
+/**
+ * Which provider funds each free model, as the server reports it. Filtered rather than trusted:
+ * this lands in a Connection and decides which endpoint a request goes to, so a malformed or
+ * unexpected value should leave the browser guessing rather than pointed somewhere arbitrary.
+ */
+function providerMap(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
+}
 
 export async function loadDeployment(signal?: AbortSignal): Promise<Deployment> {
   try {
@@ -43,6 +53,7 @@ export async function loadDeployment(signal?: AbortSignal): Promise<Deployment> 
       free: {
         enabled: free.enabled === true && Array.isArray(free.models) && free.models.length > 0,
         models: Array.isArray(free.models) ? free.models.filter((m): m is string => typeof m === 'string') : [],
+        providers: providerMap(free.providers),
         monthlyCredits: Number.isFinite(free.monthlyCredits) ? Number(free.monthlyCredits) : DEFAULT_FREE_POOL,
         perHour: Number.isFinite(free.perHour) ? Number(free.perHour) : 0,
       },
