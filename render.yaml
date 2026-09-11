@@ -65,6 +65,10 @@ services:
       # one OpenAI-compatible endpoint. This key alone is enough to switch the free tier on.
       - key: XKIRO_API_KEY
         sync: false
+      # The gateway's base URL. Defaults to https://api.xkiro.com/v1; set it to move regions or
+      # follow a versioned path. HTTPS only — anything malformed falls back to the default.
+      - key: XKIRO_BASE_URL
+        value: https://api.xkiro.com/v1
       # The xKiro ids offered free, replacing the shipped seed. A gateway's catalogue is its
       # own to define, so set this to what GET /v1/models actually returns; blank keeps the
       # seed. Changing it here beats redeploying when a model id turns out to be wrong.

@@ -35,9 +35,11 @@ export const catalog: CatalogModel[] = [
   // that sets XKIRO_FREE_MODELS gets those ids instead, and the dropdown picks them up from
   // /api/providers without needing an entry here.
   { id: 'deepseek/deepseek-chat', provider: 'xkiro', label: 'DeepSeek Chat', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'General chat through the xKiro gateway.' },
-  { id: 'deepseek-r1', provider: 'xkiro', label: 'DeepSeek R1', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Reasoning model; thorough, and spends the free allowance faster.' },
-  { id: 'glm-5.2', provider: 'xkiro', label: 'GLM 5.2', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Strong all-rounder through the xKiro gateway.' },
-  { id: 'glm-5.3-flash', provider: 'xkiro', label: 'GLM 5.3 Flash', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Quickest of the GLM line; good for short questions.' },
+  { id: 'deepseek/deepseek-r1', provider: 'xkiro', label: 'DeepSeek R1', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Reasoning model; thorough, and spends the free allowance faster.' },
+  { id: 'z-ai/glm-5.2', provider: 'xkiro', label: 'GLM 5.2', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Strong all-rounder through the xKiro gateway.' },
+  { id: 'z-ai/glm-5.3-flash', provider: 'xkiro', label: 'GLM 5.3 Flash', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Quickest of the GLM line; good for short questions.' },
+  { id: 'qwen/qwen-2.5-72b-instruct', provider: 'xkiro', label: 'Qwen 2.5 72B', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Broad general knowledge; strong at structured output.' },
+  { id: 'moonshotai/kimi-k2.7-code', provider: 'xkiro', label: 'Kimi K2.7 Code', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'Tuned for code and long context.' },
   // Deep reasoning: needs your own key, or platform credits on a deployment that grants them.
   { id: 'deepseek/deepseek-r1', provider: 'openrouter', label: 'DeepSeek R1', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Deliberate reasoning; slow and thorough.' },
   { id: 'anthropic/claude-3.5-sonnet', provider: 'openrouter', label: 'Claude 3.5 Sonnet', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Strong writing and analysis.' },
@@ -52,9 +54,18 @@ export const isZeroConfig = (id: string): boolean => zeroConfigModels.some(m => 
 
 const bare = (id: string) => id.replace(/^groq\//, '').toLowerCase();
 export function findModel(id: string): CatalogModel | undefined { return catalog.find(m => bare(m.id) === bare(id)); }
-/** Credit weight per 1K tokens; catalog first, then a conservative guess from the model name. */
+/**
+ * Credit weight per 1K tokens; catalog first, then a conservative guess from the model name.
+ *
+ * One id can appear more than once — a gateway may offer free what another provider bills for,
+ * as xKiro and OpenRouter both do with DeepSeek R1 — so this takes the HIGHEST weight of the
+ * matching entries. Picking the first match instead would let a free listing silently
+ * under-charge the platform credit pool for the paid route. The free tier never consults this:
+ * it meters at its own flat FREE_WEIGHT on the server.
+ */
 export function weightFor(model: string): number {
-  const hit = findModel(model); if (hit) return hit.weight;
+  const hits = catalog.filter(m => bare(m.id) === bare(model));
+  if (hits.length) return Math.max(...hits.map(m => m.weight));
   const id = bare(model);
   if (/(^|[/:-])(r1|o1|o3|o4)(?![0-9a-z])|opus|reason|think/.test(id)) return CREDIT_WEIGHTS.reasoning;
   if (/:free|instant|mini|haiku|flash|nano|(^|[/-])(1|3|7|8)b(?![0-9])/.test(id)) return CREDIT_WEIGHTS.fast;

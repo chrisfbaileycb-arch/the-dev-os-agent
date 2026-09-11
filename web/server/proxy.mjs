@@ -3,7 +3,7 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { XKIRO_BASE, createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest } from './freetier.mjs';
+import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, xkiroBase } from './freetier.mjs';
 import { createMeter } from './meter.mjs';
 
 export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
@@ -14,7 +14,7 @@ export function publicAddress(ip) {
   return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 168 || b === 0)) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)));
 }
 export async function resolveTarget(provider, baseUrl, env = process.env, resolve = lookup) {
-  const fixed = { openrouter: 'https://openrouter.ai/api/v1', groq: 'https://api.groq.com/openai/v1', cohere: 'https://api.cohere.com/v2', xkiro: XKIRO_BASE };
+  const fixed = { openrouter: 'https://openrouter.ai/api/v1', groq: 'https://api.groq.com/openai/v1', cohere: 'https://api.cohere.com/v2', xkiro: xkiroBase(env) };
   if (fixed[provider]) return { base: fixed[provider], nativeCohere: provider === 'cohere' };
   if (provider !== 'custom') throw new HttpError(400, 'Unsupported provider.');
   let url; try { url = new URL(baseUrl); } catch { throw new HttpError(400, 'Invalid custom baseUrl.'); }

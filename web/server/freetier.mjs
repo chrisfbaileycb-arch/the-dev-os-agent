@@ -33,12 +33,31 @@ export const OPENROUTER_FREE_POOL = [
  * XKIRO_FREE_MODELS overrides it wholesale, and /api/models reads the real list from the
  * gateway. A model id that turns out to be wrong is therefore a dashboard fix, not a deploy.
  */
-export const XKIRO_BASE = 'https://api.xkiro.com/v1';
+export const XKIRO_DEFAULT_BASE = 'https://api.xkiro.com/v1';
+
+/**
+ * The gateway's base URL. Operator-set, like OLLAMA_BRIDGE_URL, so it is trusted the way the
+ * deployment's own configuration is — but still checked, because a typo here would otherwise
+ * surface as a puzzling network error rather than a clear one. HTTPS only; anything malformed
+ * falls back to the default rather than taking the service down.
+ */
+export function xkiroBase(env = process.env) {
+  const configured = (env.XKIRO_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (!configured) return XKIRO_DEFAULT_BASE;
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return XKIRO_DEFAULT_BASE;
+    return configured;
+  } catch { return XKIRO_DEFAULT_BASE; }
+}
+
 const XKIRO_DEFAULT_POOL = [
   'deepseek/deepseek-chat',
-  'deepseek-r1',
-  'glm-5.2',
-  'glm-5.3-flash',
+  'deepseek/deepseek-r1',
+  'z-ai/glm-5.2',
+  'z-ai/glm-5.3-flash',
+  'qwen/qwen-2.5-72b-instruct',
+  'moonshotai/kimi-k2.7-code',
 ];
 
 /** The xKiro ids this deployment offers free, from XKIRO_FREE_MODELS or the seed above. */

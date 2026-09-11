@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CREDIT_WEIGHTS, creditsFor, estimateTokens, tierFor, weightFor } from '../src/lib/catalog';
+import { CREDIT_WEIGHTS, catalog, creditsFor, estimateTokens, tierFor, weightFor } from '../src/lib/catalog';
 import { computeBalance, makeEntry, merge, type LedgerEntry, type Session } from '../src/lib/store';
 import { SAFETY_BASELINE, composePrompt, personaById, personas, skills } from '../src/lib/roster';
 import { inspectPageSpec, parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
@@ -45,6 +45,23 @@ describe('ledger and workspace merge', () => {
     expect(merged.sessions.map(x => x.title).sort()).toEqual(['local newer', 'local only', 'server only']); expect(merged.ledger).toHaveLength(2);
     expect(merged.toPush.sessions.map(x => x.id)).toEqual(['a', 'c']); expect(merged.toPush.ledger).toHaveLength(0);
     expect(merge(local, null).toPush.sessions).toHaveLength(0);
+  });
+});
+
+describe('duplicate model ids across providers', () => {
+  it('charges the highest weight when one id is both free and paid', () => {
+    // xKiro offers DeepSeek R1 free; OpenRouter bills it as a reasoning model. Taking the first
+    // catalog match would under-charge the platform credit pool 30x for the paid route.
+    const entries = catalog.filter(m => m.id === 'deepseek/deepseek-r1');
+    expect(entries.length).toBe(2);
+    expect(entries.map(e => e.provider).sort()).toEqual(['openrouter', 'xkiro']);
+    expect(weightFor('deepseek/deepseek-r1')).toBe(CREDIT_WEIGHTS.reasoning);
+    expect(creditsFor('deepseek/deepseek-r1', 1000, 'credits')).toBe(15);
+  });
+  it('leaves single-listed models exactly as before', () => {
+    expect(weightFor('z-ai/glm-5.2')).toBe(CREDIT_WEIGHTS.fast);
+    expect(weightFor('openai/gpt-4o')).toBe(CREDIT_WEIGHTS.reasoning);
+    expect(weightFor('vendor/mystery-model')).toBe(CREDIT_WEIGHTS.standard);
   });
 });
 

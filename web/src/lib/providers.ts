@@ -9,7 +9,7 @@ export const providers: Record<Provider, { name: string; tier: string; endpoint:
   // A unified gateway fronting many model families through one OpenAI-compatible endpoint.
   // Its catalogue is the gateway's to define, so these ids are a seed: Discover reads the real
   // list from /v1/models, and /api/providers reports which of them this deployment funds.
-  xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: ['deepseek/deepseek-chat', 'deepseek-r1', 'glm-5.2', 'glm-5.3-flash'] },
+  xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: ['deepseek/deepseek-chat', 'deepseek/deepseek-r1', 'z-ai/glm-5.2', 'z-ai/glm-5.3-flash', 'qwen/qwen-2.5-72b-instruct', 'moonshotai/kimi-k2.7-code'] },
   custom: { name: 'Custom endpoint', tier: 'Custom', endpoint: '', models: [] },
 };
 const profiles = new Map<Provider, Connection>();
