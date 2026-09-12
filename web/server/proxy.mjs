@@ -149,6 +149,38 @@ function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'appl
  */
 export const FREE_TIER_UNAVAILABLE = 'Public free tier warming up — enter your own key in Settings or try again shortly.';
 
+/**
+ * How this proxy identifies itself upstream.
+ *
+ * Node's HTTP client sends no User-Agent at all, and a request carrying none is the shape a
+ * generic bot filter in front of an API is likeliest to refuse — which surfaces as a 403 that
+ * looks like a rejected key and is not one. Saying plainly who is calling is both the honest
+ * thing and the thing that gets served.
+ */
+export const USER_AGENT = 'HeyBuddy/1.0 (+https://github.com/chrisfbaileycb-arch/the-dev-os-agent)';
+
+/**
+ * The first line of an error response, for the log. Reads a bounded prefix and then abandons the
+ * rest of the stream, so a provider that answers an error with a megabyte of HTML costs nothing.
+ *
+ * JSON errors are unwrapped to their message because that is the sentence worth having; anything
+ * else is collapsed to single-spaced text, since an HTML error page in a log line is noise. Never
+ * throws: a diagnostic that can fail the request it is diagnosing is worse than no diagnostic.
+ */
+export async function peek(response, limit = 400) {
+  try {
+    let text = '';
+    for await (const chunk of response) { text += chunk.toString('utf8'); if (text.length >= limit * 4) break; }
+    response.destroy();
+    try {
+      const data = JSON.parse(text);
+      const message = data?.error?.message ?? data?.error ?? data?.message ?? data?.detail;
+      if (typeof message === 'string' && message.trim()) text = message;
+    } catch { /* not JSON; fall through to the raw text */ }
+    return text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit);
+  } catch { response.destroy(); return ''; }
+}
+
 /** The host a URL points at, for an error a person can act on. Never the path or the query. */
 export function hostOf(url) { try { return new URL(url).host; } catch { return 'the provider'; } }
 
@@ -268,7 +300,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       }
       // Anthropic authenticates with x-api-key and a pinned API version rather than a bearer
       // token; every other provider here takes Authorization.
-      const headers = { 'Content-Type': 'application/json', Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? (target.nativeAnthropic ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION } : { Authorization: `Bearer ${apiKey}` }) : {}) };
+      const headers = { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT, Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? (target.nativeAnthropic ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION } : { Authorization: `Bearer ${apiKey}` }) : {}) };
       // APP_ORIGIN is operator-set and also becomes a header, so it gets the same treatment.
       if (provider === 'openrouter') { headers['HTTP-Referer'] = cleanKey(env.APP_ORIGIN) || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
       let payload; let suffix;
@@ -304,8 +336,12 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       }
       const status = response.statusCode || 502;
       if (status < 200 || status >= 300) {
-        response.destroy();
-        logUpstream(provider, upstreamUrl, `HTTP ${status}`, log);
+        // Read what it said before discarding it. A bare status is not a diagnosis: 403 from an
+        // API gateway may be a rejected key, a plan that does not cover the model, or a bot
+        // filter in front of the API, and those are three different fixes. The provider's own
+        // words separate them in one line. Bounded hard, because this is a log, not a mirror.
+        const detail = await peek(response);
+        logUpstream(provider, upstreamUrl, `HTTP ${status}${detail ? ` — ${detail}` : ''}`, log);
         // On a free-tier request the credential is the deployment's, so "invalid API key" would
         // send the visitor hunting for a problem that is not theirs. Report it as a tier that is
         // not answering, and leave the real status for the operator's logs.

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { FREE_TIER_UNAVAILABLE, HEADER_SAFE, cleanKey, createProxy, malformed, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent } from '../server/proxy.mjs';
 const NL = String.fromCharCode(10);
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
 async function withProxy(options, fn) { const handler = createProxy(options); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
@@ -280,4 +280,45 @@ test('an operator origin with a stray newline cannot break an OpenRouter call ei
   });
   assert.equal(captured.headers['HTTP-Referer'], 'https://app.example.com');
   for (const value of Object.values(captured.headers)) assert.match(String(value), HEADER_SAFE);
+});
+
+test('the provider gets told who is calling', async () => {
+  // Node sends no User-Agent at all. A request carrying none is the shape a generic bot filter
+  // in front of an API is likeliest to refuse, and that refusal arrives as a 403 that looks
+  // exactly like a rejected key.
+  let captured;
+  await withProxy({ env: {}, transport: async (url, options) => { captured = options; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await post(url, base)).status, 200);
+  });
+  assert.match(captured.headers['User-Agent'], /^HeyBuddy\/[0-9.]+ \(\+https:\/\//);
+  assert.match(captured.headers['User-Agent'], HEADER_SAFE);
+});
+
+test('an error response is read, not discarded', async () => {
+  // A bare status is not a diagnosis. 403 from a gateway may be a rejected key, a plan that does
+  // not cover the model, or a bot filter — three different fixes, separated by the provider's
+  // own words.
+  const cases = [
+    ['{"error":{"message":"Invalid API key provided"}}', /HTTP 403 — Invalid API key provided/],
+    ['{"message":"model not available on your plan"}', /HTTP 403 — model not available on your plan/],
+    ['<html><head><title>Attention Required!</title></head><body><h1>Sorry, you have been blocked</h1></body></html>', /HTTP 403 — Attention Required! Sorry, you have been blocked/],
+    ['', /HTTP 403$/],
+  ];
+  for (const [body, expected] of cases) {
+    const lines = [];
+    await withProxy({ env: { XKIRO_API_KEY: 'k' }, log: l => lines.push(l), transport: async () => { const s = Readable.from([Buffer.from(body)]); s.statusCode = 403; s.headers = {}; return s; } }, async url => {
+      const response = await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] });
+      assert.equal(response.status, 503, 'the visitor still sees warming up, whatever the cause');
+    });
+    assert.match(lines[0], expected, `body ${JSON.stringify(body).slice(0, 40)}`);
+  }
+});
+
+test('reading the error body is bounded and can never fail the request', async () => {
+  // A provider that answers an error with a megabyte of HTML must cost one log line, not memory,
+  // and a diagnostic that throws would take down the request it exists to explain.
+  assert.equal((await peek(Readable.from([Buffer.from('y'.repeat(900_000))]))).length, 400);
+  assert.equal(await peek(Readable.from([Buffer.from('')])), '');
+  const broken = new Readable({ read() { this.destroy(new Error('socket died mid-body')); } });
+  assert.equal(await peek(broken), '', 'a stream that dies while being read yields nothing, not a throw');
 });
