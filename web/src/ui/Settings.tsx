@@ -123,31 +123,7 @@ export default function Settings(p: SettingsProps) {
     <div className="two-col wide">
       <div className="stack">
         <section className="panel">
-          <div className="panel-head"><h2>Free models</h2><label className="switch"><input type="checkbox" checked={c.mode === 'demo'} disabled={p.busy} onChange={e => set({ mode: e.target.checked ? 'demo' : 'remote' })} />Scripted preview (no AI, no network)</label></div>
-          {p.free.enabled ? <>
-            <div className="form-grid">
-              <label className="grow">Model
-                <select value={freeSelection} disabled={p.busy || c.mode === 'demo'} onChange={e => pickFree(e.target.value)}>
-                  <option value="">Choose a free model…</option>
-                  {freeGroups.map(([vendor, models]) => <optgroup key={vendor} label={vendor}>
-                    {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-                  </optgroup>)}
-                </select>
-              </label>
-            </div>
-            <p className="help">
-              {p.free.models.length} model{p.free.models.length === 1 ? '' : 's'} this deployment funds from its own provider keys, at {p.free.monthlyCredits.toLocaleString()} credits a month and {p.free.perHour} requests an hour. Nothing to enter and no account: pick one and send.
-              {p.gatewayCatalog.discovered && ` Read live from ${p.gatewayCatalog.url ?? 'the gateway'} — ${p.gatewayCatalog.free} of ${p.gatewayCatalog.count} models there are free — so this list is what the gateway serves today, not what was compiled into this build.`}
-            </p>
-            {onFreeTier && !freeSelection && <p className="help">Nothing selected yet. The dock uses <strong className="mono">{c.model || 'no model'}</strong>, which this deployment does not fund — choose one above.</p>}
-          </> : <>
-            <p className="help">No free models are available on this deployment right now. Bring your own key below and everything still works — Groq, OpenRouter and xKiro all have free accounts.</p>
-            {p.gatewayCatalog.error && <p className="help">Discovery reported: <strong className="mono">{p.gatewayCatalog.error}</strong>. That is a server-side cause, not something to fix in this browser.</p>}
-          </>}
-        </section>
-
-        <section className="panel">
-          <h2>Bring your own model</h2>
+          <div className="panel-head"><h2>Model</h2><label className="switch"><input type="checkbox" checked={c.mode === 'demo'} disabled={p.busy} onChange={e => set({ mode: e.target.checked ? 'demo' : 'remote' })} />Scripted preview (no AI, no network)</label></div>
           <p className="help">Type any model id your provider serves, pick one of the suggestions, or point at an OpenAI-compatible endpoint this deployment approves. Anything chosen here is paid for by your own key or by platform credits, never by the free tier.</p>
           <div className="form-grid">
             <label>Provider<select value={provider} disabled={p.busy || c.mode === 'demo'} onChange={e => pickProvider(e.target.value as Provider)}>{(Object.keys(providers) as Provider[]).map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>

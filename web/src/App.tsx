@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, Download, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
+import { CircleAlert, Download, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
 import Rail, { type Page } from './ui/Rail';
 import Dock, { type Attached, type RunMode } from './ui/Dock';
 import RunCard from './ui/RunCard';
@@ -31,14 +31,10 @@ const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something we
 const now = () => new Date().toISOString();
 type Recognition = { lang: string; interimResults: boolean; continuous: boolean; start(): void; stop(): void; onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
 const recognitionCtor = () => (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => Recognition }).webkitSpeechRecognition;
-// Openers, led by what the default agent is actually for. These used to be four business tasks
-// pinned to four business personas, which told a visitor the product was a small-business console
-// and nothing else — so someone who came to write code had to guess it was allowed.
+// Openers that show the range of what agents can do — code, analysis, and general questions.
 const starters: { text: string; persona: string; mode: RunMode }[] = [
   { text: 'Write a TypeScript function that retries a fetch with exponential backoff and a hard timeout. Include the types and one usage example.', persona: 'coder', mode: 'chat' },
-  { text: 'This throws "Cannot read properties of undefined (reading \'map\')" on first render but works after a refresh. What are the likely causes, most likely first?', persona: 'coder', mode: 'chat' },
   { text: 'Explain the difference between a database index and a materialised view, with one example where the wrong choice hurts.', persona: 'assistant', mode: 'chat' },
-  { text: 'Here are last month\'s totals: sales 18,420, card fees 512, payroll 7,900, rent 2,400, supplies 4,100. What does the month look like and what should I double check?', persona: 'auditor', mode: 'chat' },
 ];
 /**
  * The connection as it goes over the wire. A zero-config run carries no secret at all — the
@@ -57,7 +53,7 @@ async function readTextFile(file: File): Promise<Attached> {
 
 export default function App() {
   const [page, setPage] = useState<Page>('workspace');
-  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('hb-rail') === 'collapsed'; } catch { return false; } });
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('hb-rail') !== 'expanded'; } catch { return true; } });
   const canInstall = useInstallAvailable(); const online = useOnline();
   const [connection, setConnection] = useState<Connection>(initialProvider);
   /**
@@ -87,6 +83,7 @@ export default function App() {
   const [custom, setCustom] = useState<Persona[]>(customAgents);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [mcp, setMcpState] = useState<McpConnection[]>(loadConnections);
   const [settings, setSettingsState] = useState<ConnectorSettings>(loadSettings);
   const [stats, setStats] = useState<Stats | null>(null); const [listening, setListening] = useState(false);
@@ -387,6 +384,7 @@ export default function App() {
     } catch (e) { setNotice(errorText(e)); }
   }
   function toggleRail() { setCollapsed(c => { try { localStorage.setItem('hb-rail', c ? 'expanded' : 'collapsed'); } catch { /* storage unavailable */ } return !c; }); }
+
   function download(name: string, body: string) { const url = URL.createObjectURL(new Blob([body], { type: 'text/markdown' })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
   function openConnectors(tab?: ConnectorTab) { if (tab) setConnectorTab(tab); setConnectorsOpen(true); }
 
@@ -399,7 +397,7 @@ export default function App() {
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
       </div>}
       <div className="content">
-        {page === 'workspace' && <div className="workspace">
+        {page === 'workspace' && <div className={previewOpen ? 'workspace with-preview' : 'workspace'}>
           <aside className="sessions">
             <div className="sessions-head"><strong>Sessions</strong><button className="icon-button" aria-label="New session" title="New session" disabled={busy} onClick={newSession}><Plus size={14} /></button></div>
             {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => { setActiveId(s.id); setPersonaId(s.persona); }}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
@@ -409,7 +407,10 @@ export default function App() {
             <header className="canvas-head">
               <select className="session-select" aria-label="Session" value={activeId ?? ''} disabled={busy} onChange={e => { if (e.target.value === '__new') newSession(); else { setActiveId(e.target.value); const s = sessionsRef.current.find(x => x.id === e.target.value); if (s) setPersonaId(s.persona); } }}><option value="__new">New session</option>{sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select>
               <span className="canvas-title"><PersonaIcon size={14} strokeWidth={1.75} />{active ? active.title : 'New session'}<small>{persona.name}</small></span>
-              {active && <span className="row gap"><button className="icon-button" title="Export session" aria-label="Export session" onClick={() => download('heybuddy-session.md', exportSession(active))}><Download size={14} /></button><button className="icon-button" title="Delete session" aria-label="Delete session" disabled={busy} onClick={() => void deleteSession(active.id)}><Trash2 size={14} /></button></span>}
+              <span className="row gap">
+                {active && <><button className="icon-button" title="Export session" aria-label="Export session" onClick={() => download('heybuddy-session.md', exportSession(active))}><Download size={14} /></button><button className="icon-button" title="Delete session" aria-label="Delete session" disabled={busy} onClick={() => void deleteSession(active.id)}><Trash2 size={14} /></button></>}
+                <button className={previewOpen ? 'icon-button live' : 'icon-button'} title={previewOpen ? 'Hide output panel' : 'Show output panel'} aria-label={previewOpen ? 'Hide output panel' : 'Show output panel'} onClick={() => setPreviewOpen(p => !p)}>{previewOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}</button>
+              </span>
             </header>
             <div className="messages">
               {!active?.messages.length && <div className="starter">
@@ -444,6 +445,19 @@ export default function App() {
               tokens={tokens}
             />
           </section>
+          {previewOpen && <aside className="preview-panel">
+            <div className="preview-head">
+              <span>Output</span>
+              <button className="icon-button" aria-label="Close output panel" onClick={() => setPreviewOpen(false)}><PanelRightClose size={14} /></button>
+            </div>
+            <div className="preview-content">
+              {(() => {
+                const lastReply = active?.messages.slice().reverse().find(m => m.role === 'assistant');
+                if (!lastReply?.content) return <div className="preview-empty"><PanelRightOpen size={22} strokeWidth={1.25} /><span>Agent output will appear here</span></div>;
+                return <pre className="preview-body">{lastReply.content}</pre>;
+              })()}
+            </div>
+          </aside>}
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}

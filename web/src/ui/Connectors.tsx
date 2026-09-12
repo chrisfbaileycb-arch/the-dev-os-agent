@@ -125,7 +125,7 @@ export default function Connectors(p: ConnectorsProps) {
       {p.tab === 'mcp' && <>
         <section className="panel">
           <h3>Add a Model Context Protocol server</h3>
-          <p className="help">Connect a remote MCP server over Streamable HTTP and its tools become available to the agent you are chatting with. Local servers on your own machine are not reachable from a hosted app; use a hosted endpoint or a tunnel with a token.</p>
+          <p className="help">Connect a remote MCP server over Streamable HTTP (MCP 2025-06-18). Its tools become available to the agent you are chatting with. Requirements: the server must be reachable over <strong>https://</strong> on a public host — local servers and <code>localhost</code> are not reachable from a hosted app. Use a tunnel (e.g. ngrok) with a bearer token for local development, or connect a cloud-hosted MCP server.</p>
           <div className="form-grid">
             <label>Name<input value={name} maxLength={40} placeholder="Shop orders" onChange={e => setName(e.target.value)} /></label>
             <label className="grow">Server URL<input type="url" value={url} placeholder="https://mcp.example.com/mcp" onChange={e => setUrl(e.target.value)} /></label>
