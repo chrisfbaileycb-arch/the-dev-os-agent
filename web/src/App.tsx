@@ -12,13 +12,13 @@ import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
 import { iconFor } from './ui/icons';
 import { chatTurn } from './lib/chat';
-import { estimateTokens, findModel, isZeroConfig, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel } from './lib/catalog';
+import { estimateTokens, findModel, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel, type InferenceMode } from './lib/catalog';
 import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, forgetKeys, inferenceFor, initialProvider, persistConnection, providers, zeroConfigConnection, type Provider } from './lib/providers';
 import { defaultPersonaId, personaById, workflows } from './lib/roster';
 import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, storage, sync, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
-import { FREE_TIER_WARMING, isFreeTierWarming, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
+import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
@@ -85,7 +85,9 @@ export default function App() {
   const persona = personaById(active?.persona ?? personaId);
   const demo = connection.mode === 'demo';
   const inference = connection.inference ?? 'byok';
-  const label = modelLabel(connection.model, demo);
+  // Gateway labels, so a discovered id reads as a model name everywhere it is shown.
+  const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog), [deployment.gatewayCatalog]);
+  const label = modelLabel(connection.model, demo, labels);
   const tierLabel = demo ? 'no model' : tierFor(connection.model || '');
   const hasKey = Boolean(connection.token?.trim());
   const connectorCount = activeCount(settings, mcp);
@@ -102,7 +104,15 @@ export default function App() {
       setConnection(c => {
         if (c.inference !== 'free') return c;
         if (d.free.enabled && d.free.models.includes(c.model)) return c;
-        if (d.free.enabled) return { ...c, model: d.free.models[0] };
+        // A fresh visitor arrives with no model at all, and a returning one may hold an id this
+        // deployment has stopped funding. Either way the funded list is the authority, and it is
+        // reconciled here rather than left to fail on the first send.
+        if (d.free.enabled) {
+          const id = d.free.models[0];
+          const served = d.free.providers[id];
+          const chosen = (served && Object.hasOwn(providers, served) ? served : c.provider ?? 'xkiro') as Provider;
+          return { ...c, model: id, provider: chosen, endpoint: providers[chosen].endpoint };
+        }
         // Nothing is funded here: fall back to the scripted preview rather than a failing send.
         return { ...c, mode: 'demo' };
       });
@@ -147,22 +157,20 @@ export default function App() {
    * keyed request goes to whatever endpoint is set here, and a gateway model sent to OpenRouter
    * fails with a puzzling 404 rather than a useful error.
    */
-  function pickModel(id: string) {
+  function pickModel(id: string, mode?: InferenceMode) {
     const served = deployment.free.providers[id];
     setConnection(c => {
       const known = (served ?? findModel(id)?.provider) as Provider | undefined;
-      const provider = known && Object.hasOwn(providers, known)
-        ? known
-        : isZeroConfig(id) ? (id.startsWith('groq/') ? 'groq' : 'openrouter') : c.provider ?? 'openrouter';
-      return { ...c, mode: 'remote', model: id, provider, endpoint: providers[provider].endpoint, inference: inferenceFor(id, c.inference, deployment.free.models) };
+      const provider = known && Object.hasOwn(providers, known) ? known : c.provider ?? 'openrouter';
+      // `mode` is the group the visitor picked from, which is a statement of intent and is taken
+      // as one. Without it, inferenceFor decides — and now leaves a deliberate choice alone.
+      return { ...c, mode: 'remote', model: id, provider, endpoint: providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models) };
     });
     setNotice('');
   }
   function modelNeedsKey(m: CatalogModel) {
     setPage('settings');
-    setNotice(m.zeroConfig
-      ? `${m.label} is not funded on this deployment. Add a ${providers[m.provider].name} key below — free accounts work — or pick another free model.`
-      : `${m.label} needs your own ${providers[m.provider].name} key. Add it below and it unlocks straight away.`);
+    setNotice(`${m.label} needs your own ${providers[m.provider].name} key. Add it below and it unlocks straight away.`);
   }
 
   /**
@@ -203,8 +211,8 @@ export default function App() {
     if (!online) return 'You are offline. Hosted models need a connection; the scripted preview still works.';
     if (inference === 'free') {
       if (!deployment.free.enabled) return FREE_TIER_WARMING;
-      if (!deployment.free.models.includes(connection.model)) return `${connection.model} is not on this deployment's free list. Pick another free model from the dropdown.`;
-      if (freeBalance.remaining <= 0) return `The free allowance for ${freeBalance.month} is used up. Add your own OpenRouter or Groq key in Settings — both offer free accounts — or wait for the monthly reset.`;
+      if (!deployment.free.models.includes(connection.model)) return `${connection.model || 'No model'} is not on this deployment's free list. Pick a free model from the dropdown.`;
+      if (freeBalance.remaining <= 0) return `The free allowance for ${freeBalance.month} is used up. Add your own key in Settings — Groq, OpenRouter and xKiro all offer free accounts — or wait for the monthly reset.`;
       return null;
     }
     if (inference === 'credits') {
@@ -379,7 +387,7 @@ export default function App() {
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
               openConnectors={() => openConnectors()} connectorCount={connectorCount}
-              model={connection.model} inference={inference} demo={demo} free={deployment.free} hasKey={hasKey}
+              model={connection.model} inference={inference} demo={demo} free={deployment.free} labels={labels} hasKey={hasKey}
               pickModel={pickModel} pickPreview={() => setConnection(c => ({ ...c, mode: 'demo' }))} modelNeedsKey={modelNeedsKey}
               busy={busy} ready={ready} send={send} stop={stop}
               listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice}
@@ -390,7 +398,7 @@ export default function App() {
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>Business agents lead a chat and set the focus for a workflow. Work skills run the stages. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings gateway={deployment.gateway} connection={connection} setConnection={setConnection} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
+        {page === 'settings' && <Settings gateway={deployment.gateway} gatewayCatalog={deployment.gatewayCatalog} connection={connection} setConnection={setConnection} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference, demo)} stats={stats} balance={activeBalance} freeTier={inference === 'free' && !demo} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>

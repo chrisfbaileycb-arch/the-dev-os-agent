@@ -3,9 +3,16 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { FREE_TIER_UNAVAILABLE, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent } from '../server/proxy.mjs';
+import { setXkiroCatalog } from '../server/freetier.mjs';
 const NL = String.fromCharCode(10);
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
-async function withProxy(options, fn) { const handler = createProxy(options); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
+// A gateway id that really is free upstream, used wherever a test needs the free tier to cover an
+// xKiro model. The old `deepseek/deepseek-chat` was fiction: the gateway answers 404 for it.
+const FREE_GATEWAY_MODEL = 'deepseek/deepseek-v4-flash';
+// Discovery is stubbed and the pool is seeded, so these tests never reach a live gateway. The real
+// catalogue is exercised in tests/discovery.test.mjs, which is the only place that should be.
+setXkiroCatalog([FREE_GATEWAY_MODEL]);
+async function withProxy(options, fn) { const handler = createProxy({ discover: async () => {}, ...options }); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
 function stream(text, status = 200, type = 'text/event-stream') { const s = Readable.from([Buffer.from(text)]); s.statusCode = status; s.headers = { 'content-type': type }; return s; }
 const post = (url, body, route = '/api/chat', headers = {}) => fetch(url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
 // A keyless request, so the server funds it from its own key and the free-tier paths apply.
@@ -183,7 +190,7 @@ test('a connection that never lands is reported, not swallowed', async () => {
 
   // Free tier: the deployment's own key and endpoint failed, which is not the visitor's problem.
   await withProxy({ env: { XKIRO_API_KEY: 'k' }, transport: dead, log: l => lines.push(l) }, async url => {
-    const response = await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] });
+    const response = await chatFree(url, { provider: 'xkiro', model: FREE_GATEWAY_MODEL, messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(response.status, 503);
     const body = await response.json();
     assert.equal(body.error.code, 'free_tier_unavailable');
@@ -208,7 +215,7 @@ test('an upstream that answers badly logs the status it answered with', async ()
   // operator too, or "warming up" becomes unfalsifiable.
   const lines = [];
   await withProxy({ env: { XKIRO_API_KEY: 'k' }, log: l => lines.push(l), transport: async () => { const s = Readable.from([Buffer.from('{"error":"no such model"}')]); s.statusCode = 404; s.headers = {}; return s; } }, async url => {
-    const response = await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] });
+    const response = await chatFree(url, { provider: 'xkiro', model: FREE_GATEWAY_MODEL, messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(response.status, 503, 'the visitor still sees warming up');
     assert.equal((await response.json()).error.code, 'free_tier_unavailable');
   });
@@ -235,7 +242,7 @@ test('a key pasted with a trailing newline still works', async () => {
   // the two takes the whole free tier down when it is wrong.
   let captured;
   await withProxy({ env: { XKIRO_API_KEY: 'sk-live-key' + NL }, transport: async (url, options) => { captured = options; return stream('data: [DONE]\n\n'); } }, async url => {
-    assert.equal((await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] })).status, 200);
+    assert.equal((await chatFree(url, { provider: 'xkiro', model: FREE_GATEWAY_MODEL, messages: [{ role: 'user', content: 'hi' }] })).status, 200);
   });
   assert.equal(captured.headers.Authorization, 'Bearer sk-live-key', 'trimmed, and nothing else changed');
   for (const value of Object.values(captured.headers)) assert.match(String(value), HEADER_SAFE, `unsendable header: ${value}`);
@@ -263,7 +270,7 @@ test('a key that cannot be repaired names its own variable in the log', async ()
   // one is a typo to fix in the dashboard, the other is a tier that was never configured.
   const lines = [];
   await withProxy({ env: { XKIRO_API_KEY: 'sk-live' + NL + 'key' }, log: l => lines.push(l), transport: async () => { throw new Error('must not reach the provider'); } }, async url => {
-    const response = await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] });
+    const response = await chatFree(url, { provider: 'xkiro', model: FREE_GATEWAY_MODEL, messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(response.status, 503);
     assert.equal((await response.json()).error.code, 'free_tier_unavailable');
   });
@@ -307,7 +314,7 @@ test('an error response is read, not discarded', async () => {
   for (const [body, expected] of cases) {
     const lines = [];
     await withProxy({ env: { XKIRO_API_KEY: 'k' }, log: l => lines.push(l), transport: async () => { const s = Readable.from([Buffer.from(body)]); s.statusCode = 403; s.headers = {}; return s; } }, async url => {
-      const response = await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] });
+      const response = await chatFree(url, { provider: 'xkiro', model: FREE_GATEWAY_MODEL, messages: [{ role: 'user', content: 'hi' }] });
       assert.equal(response.status, 503, 'the visitor still sees warming up, whatever the cause');
     });
     assert.match(lines[0], expected, `body ${JSON.stringify(body).slice(0, 40)}`);

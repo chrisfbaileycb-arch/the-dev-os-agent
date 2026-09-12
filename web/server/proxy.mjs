@@ -4,6 +4,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
 import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, xkiroBase } from './freetier.mjs';
+import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog } from './discovery.mjs';
 import { billingStatus } from './billing.mjs';
 import { createMeter } from './meter.mjs';
 
@@ -149,15 +150,8 @@ function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'appl
  */
 export const FREE_TIER_UNAVAILABLE = 'Public free tier warming up — enter your own key in Settings or try again shortly.';
 
-/**
- * How this proxy identifies itself upstream.
- *
- * Node's HTTP client sends no User-Agent at all, and a request carrying none is the shape a
- * generic bot filter in front of an API is likeliest to refuse — which surfaces as a 403 that
- * looks like a rejected key and is not one. Saying plainly who is calling is both the honest
- * thing and the thing that gets served.
- */
-export const USER_AGENT = 'HeyBuddy/1.0 (+https://github.com/chrisfbaileycb-arch/the-dev-os-agent)';
+// USER_AGENT lives in discovery.mjs, which is the module that makes the first outbound request of
+// the process and so needs it before this one loads. Imported at the top; not redeclared here.
 
 /**
  * The first line of an error response, for the log. Reads a bounded prefix and then abandons the
@@ -248,7 +242,11 @@ function anthropicContent(content) {
 }
 
 const windows = new Map();
-export function createProxy({ env = process.env, transport = upstream, resolve = lookup, db = null, log = console.error } = {}) {
+/**
+ * `discover` is injectable so tests stay hermetic: the real one reaches the gateway over the
+ * network, and a unit test asserting how a Groq request is funded has no business doing that.
+ */
+export function createProxy({ env = process.env, transport = upstream, resolve = lookup, db = null, log = console.error, discover = ensureCatalog } = {}) {
   const takeBurst = createBurstLimiter(env);
   const freeOutputCap = Math.min(4096, Math.max(64, Number(env.FREE_MAX_OUTPUT_TOKENS ?? 1024) || 1024));
   return async function handler(req, res) {
@@ -264,7 +262,24 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       // well-formed but wrong host is the one misconfiguration that survives every check here and
       // surfaces only as a connection failure; publishing it costs nothing, since it is a public
       // API hostname and never the key.
-      if (path === '/api/providers' && req.method === 'GET') { json(res, 200, { ollamaBridge: env.OLLAMA_BRIDGE_URL || null, gateway: xkiroBase(env), free: freeTierStatus(env), billing: billingStatus(env) }); return true; }
+      //
+      // Discovery is awaited here, and only here, so the very first page load already knows the
+      // real free list rather than an empty one it would have to poll for. It is cached, so this
+      // is a no-op on every request but the first of the hour.
+      if (path === '/api/providers' && req.method === 'GET') {
+        await discover(env, { log });
+        json(res, 200, {
+          ollamaBridge: env.OLLAMA_BRIDGE_URL || null,
+          gateway: xkiroBase(env),
+          // Everything the gateway serves, with the tier it reported for each. The free half funds
+          // the free tier; the paid half is what a visitor picks from on their own key, which is
+          // why the whole catalogue is published rather than only the part this deployment pays for.
+          gatewayCatalog: { url: xkiroBase(env), models: catalogModels(), ...catalogStatus() },
+          free: freeTierStatus(env),
+          billing: billingStatus(env),
+        });
+        return true;
+      }
       if (req.method !== 'POST') throw new HttpError(405, 'Use POST.');
       const origin = req.headers.origin;
       const expectedOrigin = env.APP_ORIGIN;
@@ -276,6 +291,9 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (window.count > 60) throw new HttpError(429, 'Proxy request limit reached. Wait one minute.');
       const body = await readBody(req, path === '/api/chat' ? 12_000_000 : 256_000);
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Expected an object.');
+      // A keyless request can only be funded from the discovered pool, so the pool has to exist
+      // before the funding decision is made. A request carrying its own key never waits for this.
+      if (!(typeof body.apiKey === 'string' && body.apiKey.trim())) await discover(env, { log });
       const funding = fundingFor(body, env);
       // A zero-config request is funded per model, so the provider comes from the allowlist
       // entry rather than from the request body.

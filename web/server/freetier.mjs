@@ -7,9 +7,10 @@
 //   2. the deployment actually holds the provider key for it,
 //   3. the workspace still has free credits this month, and the caller is under the IP burst cap.
 //
-// The catalog in src/lib/catalog.ts mirrors these ids for the model dropdown. tests/freetier
-// asserts the two lists stay identical, so a model can never appear in the UI as free while the
-// server refuses to fund it.
+// The gateway half of the pool is discovered rather than declared: server/discovery.mjs reads
+// GET {base}/models and hands back the ids the gateway itself reports as free at zero cost. The
+// browser is told the resulting list by /api/providers and renders exactly that, so there is one
+// source of truth and nothing for a UI catalogue to drift away from.
 
 /** Credits per 1,000 tokens. Mirrors CREDIT_WEIGHTS.fast in src/lib/catalog.ts. */
 export const FREE_WEIGHT = 0.5;
@@ -27,11 +28,9 @@ export const OPENROUTER_FREE_POOL = [
 ];
 
 /**
- * xKiro is a unified gateway: one OpenAI-compatible endpoint fronting many model families
- * (DeepSeek, GLM, Qwen, Kimi and others). Its catalogue moves faster than this file can, and
- * the exact ids are the gateway's to define, so the default list below is only a seed —
- * XKIRO_FREE_MODELS overrides it wholesale, and /api/models reads the real list from the
- * gateway. A model id that turns out to be wrong is therefore a dashboard fix, not a deploy.
+ * xKiro is a unified gateway: one OpenAI-compatible endpoint fronting many model families. Its
+ * catalogue is the gateway's to define and moves faster than this file ever could, so this file
+ * no longer tries to name any of it. server/discovery.mjs asks.
  */
 export const XKIRO_DEFAULT_BASE = 'https://api.xkiro.com/v1';
 
@@ -51,23 +50,43 @@ export function xkiroBase(env = process.env) {
   } catch { return XKIRO_DEFAULT_BASE; }
 }
 
-// What the gateway offers, which is not the same as what this deployment funds: deepseek-r1 is
-// a reasoning model, so FRONTIER drops it from the funded pool and it is reachable on a key
-// instead. A deployment whose xKiro plan covers it sets FREE_TIER_ALLOW_FRONTIER=true and this
-// list is then taken as written.
-const XKIRO_DEFAULT_POOL = [
-  'deepseek/deepseek-chat',
-  'deepseek/deepseek-r1',
-  'z-ai/glm-5.2',
-  'z-ai/glm-5.3-flash',
-  'qwen/qwen-2.5-72b-instruct',
-  'moonshotai/kimi-k2.7-code',
-];
+/**
+ * The gateway ids discovered as free, as reported by server/discovery.mjs.
+ *
+ * Module state rather than a parameter on every call because the funding decision in the proxy is
+ * synchronous and must stay that way: it runs before a single upstream byte is sent, on a path
+ * where an await would be one more place for a request to hang. Discovery writes here; everything
+ * else reads. Every exported function below still accepts the list explicitly so tests never have
+ * to reason about the order they ran in.
+ */
+let discoveredXkiro = [];
 
-/** The xKiro ids this deployment offers free, from XKIRO_FREE_MODELS or the seed above. */
-export function xkiroPool(env = process.env) {
+/** Publish a discovered free list. Ids only; the gateway's own labels live in discovery.mjs. */
+export function setXkiroCatalog(ids) {
+  const clean = (Array.isArray(ids) ? ids : [])
+    .filter(id => typeof id === 'string' && id.trim() && id.length <= 200)
+    .map(id => id.trim());
+  discoveredXkiro = [...new Set(clean)];
+}
+export const xkiroCatalog = () => [...discoveredXkiro];
+
+/**
+ * The xKiro ids this deployment offers free.
+ *
+ * XKIRO_FREE_MODELS used to replace the pool wholesale, which meant a typo in a dashboard field
+ * could point the free tier at a model nobody had checked the price of. It is now an intersection:
+ * an operator can narrow what the gateway offers, never widen it or invent an id. Narrowing is the
+ * real use — "fund only these two of the forty" — and inventing was only ever a way to get billed.
+ *
+ * Before discovery has answered there is nothing to intersect with, so a configured list is taken
+ * as given; that window is one HTTP request wide at boot, and /api/providers waits for it.
+ */
+export function xkiroPool(env = process.env, discovered = discoveredXkiro) {
   const configured = (env.XKIRO_FREE_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
-  return configured.length ? configured : XKIRO_DEFAULT_POOL;
+  if (!configured.length) return [...discovered];
+  if (!discovered.length) return configured;
+  const live = new Set(discovered.map(id => id.toLowerCase()));
+  return configured.filter(id => live.has(id.toLowerCase()));
 }
 
 /**
@@ -86,51 +105,69 @@ export function xkiroPool(env = process.env) {
  *
  * This matches on the id, not on a curated list, because the ids come from gateways whose
  * catalogues change without asking us. A pattern still covers a model added tomorrow.
+ *
+ * It applies only to the static Groq and OpenRouter entries below. A discovered gateway id needs
+ * no name guard and must not get one: it is on the list because the gateway reported zero input
+ * and output pricing, which is a fact about the bill, where this regex is a guess about the name.
+ * The guess was also wrong — `openai/gpt-5.3-codex-spark` is free on the gateway at $0/$0 and
+ * `gpt-[45]` matched it, so the tier refused to serve a model that costs nothing.
  */
 export const FRONTIER = /claude|opus|sonnet|gpt-[45]|(^|[/_.-])o[134](?![0-9a-z])|(^|[/_.-])r1(?![0-9a-z])|grok|gemini-[0-9.]*-(pro|ultra)|reason|thinking/i;
 export const isFrontier = id => typeof id === 'string' && FRONTIER.test(id);
 
 /**
+ * Groq and OpenRouter free entries, which are still declared here.
+ *
+ * Neither provider publishes a machine-readable "this is free" flag the way the gateway does —
+ * Groq's catalogue says nothing about price at all — so there is nothing to discover and these
+ * stay an allowlist. They are short, they are cheap-by-construction, and the FRONTIER guard
+ * covers them. A deployment holding neither key never sees them at all.
+ */
+const STATIC_FREE = [
+  { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', envKey: 'GROQ_API_KEY' },
+  { id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' },
+  { id: 'openrouter/auto', provider: 'openrouter', envKey: 'OPENROUTER_API_KEY', pool: OPENROUTER_FREE_POOL },
+  ...OPENROUTER_FREE_POOL.map(id => ({ id, provider: 'openrouter', envKey: 'OPENROUTER_API_KEY' })),
+];
+
+/**
  * Exact model ids a visitor may run without a key, with the provider that funds each.
  *
- * Frontier ids are dropped, including from an operator's own XKIRO_FREE_MODELS: pasting a
- * gateway's full catalogue into that variable is the likeliest way to open the pool by
- * accident, and the cost of that mistake lands on the operator, not on whoever made it. An
- * operator who does mean it sets FREE_TIER_ALLOW_FRONTIER=true and gets the list they asked for.
+ * Two halves with two different guarantees. The static entries are guarded by name, because a
+ * name is all we know about them. The gateway entries are guarded by the gateway's own reported
+ * price, which is a stronger claim than any pattern — so they are taken as discovered, and
+ * FREE_TIER_ALLOW_FRONTIER no longer has anything to unlock among them.
  */
-export function freeModels(env = process.env) {
-  const all = [
-    { id: 'groq/llama-3.3-70b-versatile', provider: 'groq', envKey: 'GROQ_API_KEY' },
-    { id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' },
-    { id: 'openrouter/auto', provider: 'openrouter', envKey: 'OPENROUTER_API_KEY', pool: OPENROUTER_FREE_POOL },
-    ...OPENROUTER_FREE_POOL.map(id => ({ id, provider: 'openrouter', envKey: 'OPENROUTER_API_KEY' })),
-    ...xkiroPool(env).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
+export function freeModels(env = process.env, discovered = discoveredXkiro) {
+  const guarded = env.FREE_TIER_ALLOW_FRONTIER === 'true' ? STATIC_FREE : STATIC_FREE.filter(m => !isFrontier(m.id));
+  return [
+    ...guarded,
+    ...xkiroPool(env, discovered).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
   ];
-  return env.FREE_TIER_ALLOW_FRONTIER === 'true' ? all : all.filter(m => !isFrontier(m.id));
 }
 
-/** The static list, for callers that only need the shape (tests, the catalog parity check). */
-export const FREE_MODELS = freeModels({});
+/** The static half on its own, for callers that only need the shape (tests, documentation). */
+export const FREE_MODELS = freeModels({}, []);
 
 /** The free entry for a model id, or undefined. Exact match only — no normalisation, no prefixes. */
-export function freeModel(id, env = process.env) {
+export function freeModel(id, env = process.env, discovered = discoveredXkiro) {
   if (typeof id !== 'string') return undefined;
   const wanted = id.trim().toLowerCase();
-  return freeModels(env).find(m => m.id.toLowerCase() === wanted);
+  return freeModels(env, discovered).find(m => m.id.toLowerCase() === wanted);
 }
 
 /** Free models this deployment can actually fund, i.e. the ones whose provider key is set. */
-export function fundedModels(env = process.env) {
+export function fundedModels(env = process.env, discovered = discoveredXkiro) {
   if (env.FREE_TIER_DISABLED === 'true') return [];
-  return freeModels(env).filter(m => Boolean(env[m.envKey]));
+  return freeModels(env, discovered).filter(m => Boolean(env[m.envKey]));
 }
 
 /**
  * What the browser is told at load time, so the dropdown can mark models live or locked and
  * the first message never fails with a surprise. Provider keys themselves are never included.
  */
-export function freeTierStatus(env = process.env) {
-  const funded = fundedModels(env);
+export function freeTierStatus(env = process.env, discovered = discoveredXkiro) {
+  const funded = fundedModels(env, discovered);
   return {
     enabled: funded.length > 0,
     models: funded.map(m => m.id),

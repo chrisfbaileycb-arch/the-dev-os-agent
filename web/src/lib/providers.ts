@@ -1,4 +1,3 @@
-import { DEFAULT_FREE_MODEL, isZeroConfig } from './catalog';
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
 export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'custom';
@@ -21,10 +20,11 @@ export const providers: Record<Provider, { name: string; tier: string; endpoint:
   // Google publishes an OpenAI-compatible surface for Gemini, so it needs no translation.
   google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
   cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
-  // A unified gateway fronting many model families through one OpenAI-compatible endpoint.
-  // Its catalogue is the gateway's to define, so these ids are a seed: Discover reads the real
-  // list from /v1/models, and /api/providers reports which of them this deployment funds.
-  xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: ['deepseek/deepseek-chat', 'deepseek/deepseek-r1', 'z-ai/glm-5.2', 'z-ai/glm-5.3-flash', 'qwen/qwen-2.5-72b-instruct', 'moonshotai/kimi-k2.7-code'] },
+  // A unified gateway fronting many model families through one OpenAI-compatible endpoint. No
+  // seed ids: this is the one provider whose catalogue the server discovers for us, so the model
+  // list comes from /api/providers and the six ids that used to sit here — three of which the
+  // gateway had never heard of — are gone.
+  xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: [] },
   custom: { name: 'Custom endpoint', tier: 'Custom', endpoint: '', models: [] },
 };
 const profiles = new Map<Provider, Connection>();
@@ -32,28 +32,41 @@ const MODES: InferenceMode[] = ['free', 'credits', 'byok'];
 export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: providers[provider].models[0] || '', token: '', maxTokens: 1024, saveKey: false }; }
 
 /**
- * How a given model gets paid for.
+ * How a given model gets paid for, when the app has to decide for itself.
  *
- * A zero-config model routes through the free tier so a visitor's key is never spent on
- * something the deployment already covers — but only if the deployment actually funds *that*
- * model. A free model this host cannot fund is still perfectly runnable on the visitor's own
- * key, and routing it through the free tier would strip that key and fail the request.
+ * This used to return 'free' for any funded model unconditionally, which meant it overrode the
+ * visitor. Choose "Bring your own key", pick a model the deployment happens to fund, and your key
+ * was silently stripped and the request rerouted through the host's account — the opposite of what
+ * you asked for, with no way to say otherwise. The reasoning behind it was that spending someone's
+ * key on something the host already pays for is the worse mistake. It is not: quietly ignoring an
+ * explicit instruction is, and a developer testing their own key against a specific provider has a
+ * perfectly good reason for the choice. Their key, their call.
  *
- * `funded` is the list from /api/providers, and where it is known it decides — not the compiled
- * catalog. A deployment can fund a model this build has never heard of, and billing the
- * visitor's key for something the host is already paying for is the worse of the two mistakes.
- * Omit it before the answer arrives, when assuming the free tier covers a free model is the
- * right guess and keeps a returning free-tier visitor on the free tier across a reload.
+ * So a deliberate 'byok' or 'credits' is now returned untouched, and this function only decides
+ * what was never decided — no mode yet, or a 'free' mode whose model has stopped being funded and
+ * would otherwise send a request the server will refuse.
+ *
+ * `funded` is the list from /api/providers. Undefined means it has not answered yet, in which case
+ * whatever the connection already had is kept: flipping a returning free-tier visitor to BYOK for
+ * one frame would ask them for a key they never needed.
  */
 export function inferenceFor(model: string, current?: InferenceMode, funded?: string[]): InferenceMode {
+  if (current === 'byok' || current === 'credits') return current;
+  if (!Array.isArray(funded)) return current ?? 'byok';
   const id = model.trim().toLowerCase();
-  if (funded ? funded.some(f => f.toLowerCase() === id) : isZeroConfig(model)) return 'free';
-  return current && current !== 'free' ? current : 'byok';
+  return funded.some(f => f.toLowerCase() === id) ? 'free' : 'byok';
 }
 
-/** The connection a first-time visitor gets: a free model, streaming, with nothing to set up. */
+/**
+ * The connection a first-time visitor gets: the free tier, streaming, with nothing to set up.
+ *
+ * No model id. There is no longer a hardcoded free model to name, and naming one was how a fresh
+ * visitor ended up pointed at `groq/llama-3.3-70b-versatile` on a deployment that funds only the
+ * gateway — a first message that failed before it was sent. App.tsx fills this in from the funded
+ * list the moment /api/providers answers, which is before the dock is usable.
+ */
 export function zeroConfigConnection(): Connection {
-  return { ...defaultConnection('groq'), mode: 'remote', model: DEFAULT_FREE_MODEL, inference: 'free' };
+  return { ...defaultConnection('xkiro'), mode: 'remote', model: '', inference: 'free' };
 }
 export function loadConnection(provider: Provider): Connection {
   if (profiles.has(provider)) return { ...profiles.get(provider)! };
@@ -62,7 +75,8 @@ export function loadConnection(provider: Provider): Connection {
     const stored = JSON.parse(localStorage.getItem(`ft-provider-${provider}`) || '{}');
     const model = typeof stored.model === 'string' ? stored.model : base.model;
     const inference = MODES.includes(stored.inference) ? stored.inference as InferenceMode : 'byok';
-    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: [512,1024,2048,4096].includes(stored.maxTokens) ? stored.maxTokens : 1024, inference: inferenceFor(model, inference), token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
+    // The funded list is unknown here, so the stored mode is kept as saved rather than re-derived.
+    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: [512,1024,2048,4096].includes(stored.maxTokens) ? stored.maxTokens : 1024, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
   } catch { return base; }
 }
 /**

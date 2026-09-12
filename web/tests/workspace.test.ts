@@ -15,10 +15,13 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('catalog and credit weights', () => {
   it('maps catalog models and guesses unknown ones conservatively', () => {
-    expect(weightFor('groq/llama-3.1-8b-instant')).toBe(CREDIT_WEIGHTS.fast); expect(weightFor('llama-3.3-70b-versatile')).toBe(CREDIT_WEIGHTS.fast);
+    expect(weightFor('groq/llama-3.1-8b-instant')).toBe(CREDIT_WEIGHTS.fast); expect(weightFor('vendor/model-flash')).toBe(CREDIT_WEIGHTS.fast);
     expect(weightFor('deepseek/deepseek-r1')).toBe(CREDIT_WEIGHTS.reasoning); expect(weightFor('anthropic/claude-3.5-haiku')).toBe(CREDIT_WEIGHTS.standard);
     expect(weightFor('vendor/mystery-model')).toBe(CREDIT_WEIGHTS.standard); expect(weightFor('vendor/tiny-3b')).toBe(CREDIT_WEIGHTS.fast); expect(weightFor('vendor/o3-pro')).toBe(CREDIT_WEIGHTS.reasoning);
-    expect(tierFor('groq/llama-3.3-70b-versatile')).toBe('free'); expect(tierFor('openai/gpt-4o')).toBe('pro'); expect(tierFor('vendor/mystery-model')).toBe('pro');
+    // Weights matter only for platform credits. A free-tier run is metered on the server at its
+    // own flat rate, so an unlisted gateway model reading as 'pro' here costs a free visitor
+    // nothing — which is why the catalog no longer needs an entry per discovered model.
+    expect(tierFor('openai/gpt-4o')).toBe('pro'); expect(tierFor('vendor/mystery-model')).toBe('pro'); expect(tierFor('vendor/model-flash')).toBe('free');
   });
   it('charges credits only in platform mode', () => {
     expect(creditsFor('groq/llama-3.1-8b-instant', 2000, 'credits')).toBe(1); expect(creditsFor('deepseek/deepseek-r1', 1000, 'credits')).toBe(15);
@@ -56,60 +59,62 @@ describe('duplicate model ids across providers', () => {
     // twice until the frontier guard took it out of the free pool. Taking the first catalog
     // match rather than the dearest would under-charge the credit pool 30x for the paid route,
     // so the guarantee is pinned here against a duplicate injected on purpose.
-    catalog.push({ id: 'deepseek/deepseek-r1', provider: 'xkiro', label: 'DeepSeek R1', tier: 'free', weight: CREDIT_WEIGHTS.fast, zeroConfig: true, note: 'test fixture' });
+    catalog.push({ id: 'deepseek/deepseek-r1', provider: 'xkiro', label: 'DeepSeek R1', tier: 'free', weight: CREDIT_WEIGHTS.fast, note: 'test fixture' });
     try {
       expect(catalog.filter(m => m.id === 'deepseek/deepseek-r1').length).toBe(2);
       expect(weightFor('deepseek/deepseek-r1')).toBe(CREDIT_WEIGHTS.reasoning);
       expect(creditsFor('deepseek/deepseek-r1', 1000, 'credits')).toBe(15);
     } finally { catalog.pop(); }
   });
-  it('keeps every frontier model out of the shipped free group', () => {
-    // The server refuses to fund these; the dropdown must not offer them as free either.
-    for (const m of catalog.filter(m => m.zeroConfig)) {
-      expect(m.tier).toBe('free');
-      expect(m.weight).toBe(CREDIT_WEIGHTS.fast);
-      expect(/claude|opus|sonnet|gpt-[45]|[/_.-]r1$/i.test(m.id)).toBe(false);
-    }
-    for (const id of ['deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'openai/gpt-4o']) {
-      expect(catalog.find(m => m.id === id)?.zeroConfig).toBeFalsy();
+  it('names no free models at all, so it cannot promise one the server will not fund', () => {
+    // The whole class of bug this replaces: a compiled list claiming six models were free, none
+    // of which the gateway served free, cross-checked only against another copy of itself. The
+    // free list now comes from /api/providers and nothing here is allowed to compete with it.
+    for (const m of catalog) expect(m.tier).toBe('pro');
+    for (const id of ['deepseek/deepseek-chat', 'z-ai/glm-5.2', 'moonshotai/kimi-k2.7-code', 'groq/llama-3.3-70b-versatile', 'openrouter/auto']) {
+      expect(catalog.find(m => m.id === id)).toBeUndefined();
     }
   });
   it('leaves single-listed models exactly as before', () => {
-    expect(weightFor('z-ai/glm-5.2')).toBe(CREDIT_WEIGHTS.fast);
     expect(weightFor('openai/gpt-4o')).toBe(CREDIT_WEIGHTS.reasoning);
     expect(weightFor('vendor/mystery-model')).toBe(CREDIT_WEIGHTS.standard);
   });
 });
 
 describe('payment routing', () => {
-  const funded = ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'];
-  it('routes a funded free model through the free tier and never spends the visitor key on it', () => {
-    expect(inferenceFor('groq/llama-3.3-70b-versatile', 'byok', funded)).toBe('free');
-    expect(inferenceFor('GROQ/LLAMA-3.3-70B-VERSATILE', 'byok', funded)).toBe('free');
-  });
-  it('routes a free model this host does not fund to the visitor own key', () => {
-    // Otherwise the browser would strip the key the request actually needs and the send fails.
-    expect(inferenceFor('mistralai/mistral-nemo:free', 'byok', funded)).toBe('byok');
-    expect(inferenceFor('mistralai/mistral-nemo:free', 'free', funded)).toBe('byok');
-  });
-  it('keeps a free model on the free tier before the funded list is known', () => {
-    // On first paint /api/providers has not answered; flipping a returning free-tier visitor to
-    // BYOK for a frame would ask them for a key they never needed.
-    expect(inferenceFor('mistralai/mistral-nemo:free', 'free')).toBe('free');
-    expect(inferenceFor('groq/llama-3.1-8b-instant', undefined)).toBe('free');
-  });
-  it('leaves a pro model on whatever the visitor chose, defaulting to their own key', () => {
-    expect(inferenceFor('openai/gpt-4o', 'free', funded)).toBe('byok');
+  const funded = ['deepseek/deepseek-v4-flash', 'qwen/qwen3.8-max:free'];
+  it('never overrides a mode the visitor chose on purpose', () => {
+    // The bug this pins: choosing "Bring your own key" and then picking a model the deployment
+    // happens to fund used to strip the key and reroute the request through the host's account.
+    // An explicit instruction is not a hint, and a developer testing their own key against a
+    // specific provider has a good reason for it.
+    expect(inferenceFor('deepseek/deepseek-v4-flash', 'byok', funded)).toBe('byok');
+    expect(inferenceFor('DEEPSEEK/DEEPSEEK-V4-FLASH', 'byok', funded)).toBe('byok');
+    expect(inferenceFor('deepseek/deepseek-v4-flash', 'credits', funded)).toBe('credits');
     expect(inferenceFor('openai/gpt-4o', 'credits', funded)).toBe('credits');
+  });
+  it('picks the free tier only when nothing has been chosen yet', () => {
+    expect(inferenceFor('deepseek/deepseek-v4-flash', undefined, funded)).toBe('free');
     expect(inferenceFor('anthropic/claude-3.5-sonnet', undefined, funded)).toBe('byok');
   });
-  it('follows the server, not the compiled catalog, when the two disagree', () => {
-    // A deployment can fund a model this build never compiled in, and one it lists as key-only
-    // (FREE_TIER_ALLOW_FRONTIER). Billing the visitor for what the host already pays for is the
-    // worse of the two errors, so the funded list wins in both directions.
-    expect(inferenceFor('vendor/brand-new-model', 'byok', ['vendor/brand-new-model'])).toBe('free');
-    expect(inferenceFor('deepseek/deepseek-r1', 'byok', ['deepseek/deepseek-r1'])).toBe('free');
-    expect(inferenceFor('groq/llama-3.3-70b-versatile', 'byok', [])).toBe('byok');
+  it('moves a free-tier run off a model the deployment has stopped funding', () => {
+    // Otherwise the browser sends a keyless request the server will refuse, and the visitor is
+    // told the tier is warming up when the real answer is that this model is not on the list.
+    expect(inferenceFor('deepseek/deepseek-chat', 'free', funded)).toBe('byok');
+    expect(inferenceFor('deepseek/deepseek-v4-flash', 'free', funded)).toBe('free');
+    expect(inferenceFor('deepseek/deepseek-v4-flash', 'free', [])).toBe('byok');
+  });
+  it('changes nothing before the funded list has arrived', () => {
+    // On first paint /api/providers has not answered; flipping a returning free-tier visitor to
+    // BYOK for a frame would ask them for a key they never needed.
+    expect(inferenceFor('deepseek/deepseek-v4-flash', 'free')).toBe('free');
+    expect(inferenceFor('anything-at-all', undefined)).toBe('byok');
+  });
+  it('follows the server rather than any compiled list', () => {
+    // A deployment can fund a model this build has never heard of. That is now the normal case:
+    // every gateway model is discovered at runtime and none of them appear in the catalog.
+    expect(inferenceFor('vendor/brand-new-model', undefined, ['vendor/brand-new-model'])).toBe('free');
+    expect(inferenceFor('vendor/brand-new-model', undefined, [])).toBe('byok');
   });
 });
 

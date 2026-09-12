@@ -1,16 +1,31 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Check, Coins, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wallet } from 'lucide-react';
-import { catalog, findModel, weightFor, type CatalogModel, type InferenceMode, type Tier } from '../lib/catalog';
+import { catalog, findModel, weightFor, type CatalogModel, type InferenceMode } from '../lib/catalog';
 import { emptyKeyring, inferenceFor, loadKeyring, providers, saveKeyring, switchProvider, type Keyring, type Provider } from '../lib/providers';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
+import type { GatewayCatalog } from '../lib/deployment';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
 import { REFERRAL_ALLOWANCE, REFERRAL_BREADTH, REFERRAL_DISCLOSURE, referralEnabled, referralLink } from '../lib/referral';
 
+// Settings and model hub.
+//
+// This page used to be a wall of model cards: two tiers, eighteen cards, each with a name, a
+// provider, a credit weight and a sentence of prose. Six of those cards were free models, and on
+// this deployment every one of them read "not funded here" — so the largest, most prominent block
+// on the page was a list of things that did not work, and finding the five that did meant reading
+// all eighteen. A card grid is the right shape for a handful of curated choices and the wrong one
+// for a list the server decides and can hold forty entries.
+//
+// So the free tier is a dropdown, built from what this deployment actually funds, and it sits on
+// its own with nothing else in it. Bringing your own key is a separate block below, which is where
+// arbitrary model ids and provider keys belong. The two are never mixed, because they answer two
+// different questions: "what can I use right now for nothing" and "what do I want to pay for".
+
 export interface SettingsProps {
   connection: Connection; setConnection: (c: Connection) => void;
   models: string[]; checking: boolean; discover: () => void; save: () => void; forget: () => void;
-  balance: Balance; freeBalance: Balance; free: FreeTier; gateway: string | null;
+  balance: Balance; freeBalance: Balance; free: FreeTier; gateway: string | null; gatewayCatalog: GatewayCatalog;
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
 }
 
@@ -31,10 +46,11 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
   cohere: 'From dashboard.cohere.com',
 };
 
-const tiers: { id: Tier; title: string; blurb: string }[] = [
-  { id: 'free', title: 'Free and instant', blurb: 'No key, no account. This deployment funds these from its own provider keys, metered against a monthly free allowance.' },
-  { id: 'pro', title: 'Pro and reasoning', blurb: 'Deliberate models for hard problems. Your own key bills your provider; platform credits draw three to fifteen credits per 1K tokens.' },
-];
+/** The vendor an id belongs to, for grouping a long list into readable sections. */
+function family(id: string): string {
+  const prefix = id.includes('/') ? id.slice(0, id.indexOf('/')) : 'other';
+  return prefix.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
 
 export default function Settings(p: SettingsProps) {
   const c = p.connection;
@@ -65,46 +81,103 @@ export default function Settings(p: SettingsProps) {
     p.save();
   }
   function forgetAll() { setKeys(emptyKeyring()); p.forget(); }
-  const funded = (m: CatalogModel) => Boolean(m.zeroConfig && p.free.enabled && p.free.models.includes(m.id));
 
-  function pick(m: CatalogModel) {
-    const base = m.provider === provider ? c : switchProvider(c, m.provider);
-    p.setConnection({ ...base, mode: 'remote', model: m.id, inference: inferenceFor(m.id, base.inference, p.free.models) });
+  /** The free list, grouped by vendor and labelled by the gateway. Nothing here is hardcoded. */
+  const freeGroups = useMemo(() => {
+    const labels = new Map(p.gatewayCatalog.models.map(m => [m.id, m.label]));
+    const groups = new Map<string, { id: string; label: string }[]>();
+    for (const id of p.free.models) {
+      const key = family(id);
+      const label = labels.get(id) ?? findModel(id)?.label ?? id;
+      groups.set(key, [...(groups.get(key) ?? []), { id, label }]);
+    }
+    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [p.free.models, p.gatewayCatalog.models]);
+
+  /**
+   * Model ids worth suggesting for a key-funded run: the compiled key-only catalog, plus whatever
+   * the gateway serves beyond its free tier. Suggestions, not a catalogue — the field below still
+   * accepts anything typed, because the visitor's provider decides what it serves, not this build.
+   */
+  const paidGateway = useMemo(() => p.gatewayCatalog.models.filter(m => !m.free), [p.gatewayCatalog.models]);
+
+  const onFreeTier = inference === 'free';
+  const freeSelection = onFreeTier && p.free.models.includes(c.model) ? c.model : '';
+
+  /** Pick a free model. This block only ever funds through the free tier, so it says so outright. */
+  function pickFree(id: string) {
+    if (!id) return;
+    const served = p.free.providers[id];
+    const next = (served && Object.hasOwn(providers, served) ? served : 'xkiro') as Provider;
+    p.setConnection({ ...switchProvider(c, next), mode: 'remote', model: id, inference: 'free' });
+  }
+  /** Pick a suggested key-funded model. The visitor's chosen payment mode is left alone. */
+  function pickKeyed(id: string, forProvider: Provider) {
+    if (!id) return;
+    const base = forProvider === provider ? c : switchProvider(c, forProvider);
+    p.setConnection({ ...base, mode: 'remote', model: id, inference: inferenceFor(id, base.inference === 'free' ? undefined : base.inference, p.free.models) });
   }
   function pickProvider(id: Provider) { if (id === provider) { set({ mode: 'remote' }); return; } p.setConnection({ ...switchProvider(c, id), mode: 'remote' }); }
   function pickInference(next: InferenceMode) {
-    // Leaving the free tier on a free-only model would send a request the server will not fund.
-    if (next !== 'free' && current?.zeroConfig) { p.setConnection({ ...c, inference: next, model: c.model }); return; }
+    // Switching onto the free tier with a model it does not cover would send a request the server
+    // refuses, so the first funded model comes along with the switch.
+    if (next === 'free' && !p.free.models.includes(c.model)) { p.setConnection({ ...c, inference: 'free', model: p.free.models[0] ?? c.model }); return; }
     set({ inference: next });
   }
   const recent = p.ledger.slice().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8);
-  const meter = inference === 'free' ? p.freeBalance : p.balance;
+  const meter = onFreeTier ? p.freeBalance : p.balance;
 
   return <div className="page">
     <div className="page-head"><div><h1>Settings and model hub</h1><p>Pick a model, decide how it is paid for, and keep your keys where you want them. Nothing here needs an account.</p></div></div>
     <div className="two-col wide">
       <div className="stack">
         <section className="panel">
-          <div className="panel-head"><h2>Model hub</h2><label className="switch"><input type="checkbox" checked={c.mode === 'demo'} disabled={p.busy} onChange={e => set({ mode: e.target.checked ? 'demo' : 'remote' })} />Scripted preview (no AI, no network)</label></div>
-          {tiers.map(t => <div key={t.id} className="tier">
-            <h3>{t.title}<small>{t.blurb}</small></h3>
-            <div className="model-grid">{catalog.filter(m => m.tier === t.id).map(m => <button key={m.id} className={c.mode === 'remote' && current?.id === m.id ? 'model-card active' : 'model-card'} disabled={p.busy} onClick={() => pick(m)} aria-pressed={current?.id === m.id}>
-              <strong>{m.label}{current?.id === m.id && c.mode === 'remote' && <Check size={12} />}</strong>
-              <small>{providers[m.provider].name} · {m.zeroConfig ? (funded(m) ? 'free here' : 'not funded here') : `${m.weight} cr/1K`}</small>
-              <span>{m.note}</span>
-            </button>)}</div>
-          </div>)}
-          <div className="tier"><h3>Any model, any endpoint<small>Type a model ID your provider serves, or point at an OpenAI-compatible endpoint approved by this deployment.</small></h3>
+          <div className="panel-head"><h2>Free models</h2><label className="switch"><input type="checkbox" checked={c.mode === 'demo'} disabled={p.busy} onChange={e => set({ mode: e.target.checked ? 'demo' : 'remote' })} />Scripted preview (no AI, no network)</label></div>
+          {p.free.enabled ? <>
             <div className="form-grid">
-              <label>Provider<select value={provider} disabled={p.busy || c.mode === 'demo'} onChange={e => pickProvider(e.target.value as Provider)}>{(Object.keys(providers) as Provider[]).map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
-              {provider === 'custom' && <label>API base URL<input type="url" disabled={p.busy || c.mode === 'demo'} value={c.endpoint} placeholder="https://your-inference.example/v1" onChange={e => set({ endpoint: e.target.value })} /></label>}
-              <label className="grow">Model ID<span className="row"><input list="model-catalog" disabled={p.busy || c.mode === 'demo'} value={c.model} placeholder="Model served by your provider" onChange={e => set({ model: e.target.value, inference: inferenceFor(e.target.value, c.inference, p.free.models) })} /><datalist id="model-catalog">{p.models.map(m => <option key={m} value={m} />)}</datalist><button className="button small" disabled={p.busy || p.checking || c.mode === 'demo' || (provider === 'custom' && !c.endpoint)} onClick={p.discover}>{p.checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover</button></span></label>
-              <label>Output limit<select disabled={p.busy} value={c.maxTokens} onChange={e => set({ maxTokens: Number(e.target.value) })}>{[512, 1024, 2048, 4096].map(n => <option key={n} value={n}>{n.toLocaleString()} tokens</option>)}</select></label>
+              <label className="grow">Model
+                <select value={freeSelection} disabled={p.busy || c.mode === 'demo'} onChange={e => pickFree(e.target.value)}>
+                  <option value="">Choose a free model…</option>
+                  {freeGroups.map(([vendor, models]) => <optgroup key={vendor} label={vendor}>
+                    {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                  </optgroup>)}
+                </select>
+              </label>
             </div>
-            {c.mode === 'remote' && c.model && !current && <p className="help">Unlisted model: charged at {weightFor(c.model)} credits per 1K tokens on platform credits, judged from its name. Free-tier funding covers listed models only.</p>}
-            {provider === 'xkiro' && p.gateway && <p className="help">This deployment reaches xKiro at <strong className="mono">{p.gateway}</strong>. That is the resolved value of XKIRO_BASE_URL — if it is not the address you expect, the variable is the thing to correct, and a wrong-but-valid host shows up only as a failed connection.</p>}
-            {provider === 'custom' && <p className="help">HTTPS only, and the origin must be listed in CUSTOM_API_ORIGINS on the server. A home PC running Ollama or LM Studio is reached through an administrator bridge, never through localhost on a hosted server.</p>}
+            <p className="help">
+              {p.free.models.length} model{p.free.models.length === 1 ? '' : 's'} this deployment funds from its own provider keys, at {p.free.monthlyCredits.toLocaleString()} credits a month and {p.free.perHour} requests an hour. Nothing to enter and no account: pick one and send.
+              {p.gatewayCatalog.discovered && ` Read live from ${p.gatewayCatalog.url ?? 'the gateway'} — ${p.gatewayCatalog.free} of ${p.gatewayCatalog.count} models there are free — so this list is what the gateway serves today, not what was compiled into this build.`}
+            </p>
+            {onFreeTier && !freeSelection && <p className="help">Nothing selected yet. The dock uses <strong className="mono">{c.model || 'no model'}</strong>, which this deployment does not fund — choose one above.</p>}
+          </> : <>
+            <p className="help">No free models are available on this deployment right now. Bring your own key below and everything still works — Groq, OpenRouter and xKiro all have free accounts.</p>
+            {p.gatewayCatalog.error && <p className="help">Discovery reported: <strong className="mono">{p.gatewayCatalog.error}</strong>. That is a server-side cause, not something to fix in this browser.</p>}
+          </>}
+        </section>
+
+        <section className="panel">
+          <h2>Bring your own model</h2>
+          <p className="help">Type any model id your provider serves, pick one of the suggestions, or point at an OpenAI-compatible endpoint this deployment approves. Anything chosen here is paid for by your own key or by platform credits, never by the free tier.</p>
+          <div className="form-grid">
+            <label>Provider<select value={provider} disabled={p.busy || c.mode === 'demo'} onChange={e => pickProvider(e.target.value as Provider)}>{(Object.keys(providers) as Provider[]).map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
+            {provider === 'custom' && <label>API base URL<input type="url" disabled={p.busy || c.mode === 'demo'} value={c.endpoint} placeholder="https://your-inference.example/v1" onChange={e => set({ endpoint: e.target.value })} /></label>}
+            <label className="grow">Model ID<span className="row"><input list="model-catalog" disabled={p.busy || c.mode === 'demo'} value={c.model} placeholder="Model served by your provider" onChange={e => set({ model: e.target.value, inference: inferenceFor(e.target.value, c.inference, p.free.models) })} /><datalist id="model-catalog">{p.models.map(m => <option key={m} value={m} />)}</datalist><button className="button small" disabled={p.busy || p.checking || c.mode === 'demo' || (provider === 'custom' && !c.endpoint)} onClick={p.discover}>{p.checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover</button></span></label>
+            <label className="grow">Suggestions
+              <select value="" disabled={p.busy || c.mode === 'demo'} onChange={e => { const [id, forProvider] = e.target.value.split('\u0000'); pickKeyed(id, forProvider as Provider); }}>
+                <option value="">Pick a known model…</option>
+                <optgroup label="On your own key">
+                  {catalog.map((m: CatalogModel) => <option key={m.id} value={`${m.id}\u0000${m.provider}`}>{m.label} · {providers[m.provider].name} · {m.weight} cr/1K</option>)}
+                </optgroup>
+                {paidGateway.length > 0 && <optgroup label={`xKiro gateway · ${paidGateway.length} paid models`}>
+                  {paidGateway.map(m => <option key={m.id} value={`${m.id}\u0000xkiro`}>{m.label} · {m.tier}</option>)}
+                </optgroup>}
+              </select>
+            </label>
+            <label>Output limit<select disabled={p.busy} value={c.maxTokens} onChange={e => set({ maxTokens: Number(e.target.value) })}>{[512, 1024, 2048, 4096].map(n => <option key={n} value={n}>{n.toLocaleString()} tokens</option>)}</select></label>
           </div>
+          {c.mode === 'remote' && c.model && !current && !p.free.models.includes(c.model) && <p className="help">Unlisted model: charged at {weightFor(c.model)} credits per 1K tokens on platform credits, judged from its name. Free-tier funding covers the models in the list above only.</p>}
+          {provider === 'xkiro' && p.gateway && <p className="help">This deployment reaches xKiro at <strong className="mono">{p.gateway}</strong>. That is the resolved value of XKIRO_BASE_URL — if it is not the address you expect, the variable is the thing to correct, and a wrong-but-valid host shows up only as a failed connection.</p>}
+          {provider === 'custom' && <p className="help">HTTPS only, and the origin must be listed in CUSTOM_API_ORIGINS on the server. A home PC running Ollama or LM Studio is reached through an administrator bridge, never through localhost on a hosted server.</p>}
         </section>
 
         <section className="panel">
@@ -112,7 +185,7 @@ export default function Settings(p: SettingsProps) {
           <div className="mode-picker three">
             <button className={inference === 'free' ? 'mode selected' : 'mode'} disabled={p.busy || !p.free.enabled} aria-pressed={inference === 'free'} onClick={() => pickInference('free')}>
               <Sparkles size={16} strokeWidth={1.75} /><strong>Free tier</strong>
-              <small>{p.free.enabled ? `No key at all. ${p.free.monthlyCredits.toLocaleString()} credits a month, ${p.free.perHour} requests an hour.` : 'Not available: this deployment has no server provider keys.'}</small>
+              <small>{p.free.enabled ? `No key at all. ${p.free.monthlyCredits.toLocaleString()} credits a month, ${p.free.perHour} requests an hour.` : 'Not available: this deployment funds no free models right now.'}</small>
             </button>
             <button className={inference === 'byok' ? 'mode selected' : 'mode'} disabled={p.busy} aria-pressed={inference === 'byok'} onClick={() => pickInference('byok')}>
               <KeyRound size={16} strokeWidth={1.75} /><strong>Bring your own key</strong>
@@ -123,9 +196,9 @@ export default function Settings(p: SettingsProps) {
               <small>This deployment's full model pool, unlocked by an administrator token.</small>
             </button>
           </div>
-          {inference === 'free' ? <p className="help">Nothing to enter. Requests route through this deployment's own Groq and OpenRouter keys, restricted to the free models above, and every request is metered on the server against the allowance shown to the right. When the allowance runs out, add your own key here and the same models keep working — free accounts at either provider are enough.</p>
+          {inference === 'free' ? <p className="help">Nothing to enter. Requests route through this deployment's own provider keys, restricted to the free models listed above, and every request is metered on the server against the allowance shown to the right. This is a deliberate choice and it stays chosen: picking a model here will not move you off the free tier, and picking one in the section above will not move you onto it. When the allowance runs out, add your own key here and the same models keep working — free accounts at any of these providers are enough.</p>
             : inference === 'byok' ? <>
-              <p className="help">One key per provider. The model you pick decides which one is used, so a key you already hold works straight away — you do not need an account at all of them.</p>
+              <p className="help">One key per provider. The model you pick decides which one is used, so a key you already hold works straight away — you do not need an account at all of them. Choosing a model the deployment happens to fund no longer switches you back to the free tier; if that is what you want, say so with the Free tier button.</p>
               <div className="key-grid">
                 {KEYED.map(id => <label key={id} className={id === provider ? 'key-field active' : 'key-field'}>
                   <span>{providers[id].name}{id === provider && <em>in use</em>}</span>
@@ -152,9 +225,9 @@ export default function Settings(p: SettingsProps) {
 
       <div className="stack">
         <section className="panel">
-          <div className="panel-head"><h2>{inference === 'free' ? 'Free allowance' : 'Credits'}</h2><span className="pill">{inference === 'free' ? <Sparkles size={12} /> : <Coins size={12} />}{meter.remaining.toLocaleString()} of {meter.pool.toLocaleString()} left</span></div>
+          <div className="panel-head"><h2>{onFreeTier ? 'Free allowance' : 'Credits'}</h2><span className="pill">{onFreeTier ? <Sparkles size={12} /> : <Coins size={12} />}{meter.remaining.toLocaleString()} of {meter.pool.toLocaleString()} left</span></div>
           <div className="meter" role="progressbar" aria-valuemin={0} aria-valuemax={meter.pool} aria-valuenow={meter.used} aria-label="Credits used this month"><span style={{ width: `${meter.pool ? Math.min(100, (meter.used / meter.pool) * 100) : 0}%` }} /></div>
-          <p className="help">{meter.used.toLocaleString()} credits used in {meter.month}. {inference === 'free'
+          <p className="help">{meter.used.toLocaleString()} credits used in {meter.month}. {onFreeTier
             ? 'Free-tier usage is measured on the server from the tokens that actually streamed, at 0.5 credits per 1K, so this number is the deployment\'s own record rather than an estimate made here.'
             : `Balance ${p.serverReachable ? 'is stored on the server' : 'is computed in this browser; the server was not reachable'}. Weights: fast models 0.5, standard 3, reasoning 15 credits per 1K tokens.`} Requests on your own key are logged at zero.</p>
           {recent.length > 0 && <div className="ledger-wrap"><table className="ledger"><thead><tr><th>When</th><th>Model</th><th>Mode</th><th className="num">Tokens</th><th className="num">Credits</th></tr></thead><tbody>{recent.map(e => <tr key={e.id}><td>{new Date(e.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td><td className="mono">{e.model}</td><td>{e.mode}</td><td className="num">{e.tokens.toLocaleString()}</td><td className="num">{e.credits.toLocaleString()}</td></tr>)}</tbody></table></div>}
@@ -162,7 +235,7 @@ export default function Settings(p: SettingsProps) {
 
         <section className="panel">
           <h2><ShieldCheck size={15} strokeWidth={1.75} /> Where things run</h2>
-          <p className="help"><strong>In your tab:</strong> the interface, the agent team, keyword retrieval, and your notes.<br /><strong>On this server:</strong> the streaming proxy, the free-tier meter, the URL crawler, the GitHub and MCP connectors, the sandbox browser, and a copy of your sessions and ledger keyed by an anonymous workspace id.<br /><strong>On your provider:</strong> model inference. Provider usage may cost money on your own key.<br /><strong>Not included:</strong> shell access, code changes, logins on other sites, vector embeddings, model hosting.</p>
+          <p className="help"><strong>In your tab:</strong> the interface, the agent team, keyword retrieval, and your notes.<br /><strong>On this server:</strong> the streaming proxy, the free-tier meter, gateway model discovery, the URL crawler, the GitHub and MCP connectors, the sandbox browser, and a copy of your sessions and ledger keyed by an anonymous workspace id.<br /><strong>On your provider:</strong> model inference. Provider usage may cost money on your own key.<br /><strong>Not included:</strong> shell access, code changes, logins on other sites, vector embeddings, model hosting.</p>
         </section>
 
         <section className="panel">
