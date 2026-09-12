@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CREDIT_WEIGHTS, catalog, creditsFor, estimateTokens, tierFor, weightFor } from '../src/lib/catalog';
 import { computeBalance, makeEntry, merge, type LedgerEntry, type Session } from '../src/lib/store';
-import { SAFETY_BASELINE, composePrompt, personaById, personas, skills } from '../src/lib/roster';
+import { DIRECT_MODE_LABEL, SAFETY_BASELINE, businessPersonas, composePrompt, defaultPersonaId, generalPersonas, personaById, personas, skills, workflows } from '../src/lib/roster';
+import { clearCustomAgents, createCustomAgent, customAgents, removeCustomAgent, validateDraft } from '../src/lib/customAgents';
 import { inspectPageSpec, parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
 import { mcpToolSpecs, slug, type McpConnection } from '../src/lib/mcp';
 import { activeTools, defaultSettings, parseRepo } from '../src/lib/connectors';
@@ -171,12 +172,88 @@ describe('what a visitor can pay for', () => {
   });
 });
 
+describe('a roster that is not opinionated by default', () => {
+  it('opens on a general agent, not a business specialist', () => {
+    // The workspace used to default to the Operational Executive, so asking for a function got a
+    // plan with owners and dates. The neutral agent has to be the one you land on.
+    expect(defaultPersonaId).toBe('assistant');
+    expect(personaById(defaultPersonaId).group).toBe('general');
+    expect(personas[0].group).toBe('general');
+    expect(generalPersonas.map(p => p.id)).toEqual(['assistant', 'coder', 'chat']);
+  });
+  it('tells the general agents not to answer with a plan', () => {
+    for (const p of generalPersonas) {
+      expect(p.tools ?? []).toEqual([]);
+      expect(p.role).toBeUndefined();
+    }
+    for (const id of ['assistant', 'coder']) {
+      const prompt = personaById(id).prompt;
+      expect(prompt).toContain('Answer directly');
+      expect(prompt).toMatch(/Do not produce a plan/);
+    }
+    // The Coder must not claim to have run anything, since it cannot.
+    expect(personaById('coder').prompt).toMatch(/Never claim to have run, tested, or verified/);
+  });
+  it('keeps every specialist and every workflow available', () => {
+    // Nothing was removed; the ordering changed. A visitor who wants the Financial Auditor still
+    // has it, and the five-stage workflows still exist behind the mode selector.
+    expect(businessPersonas.map(p => p.id)).toEqual(['operator', 'auditor', 'reputation', 'browser']);
+    expect(skills).toHaveLength(5);
+    expect(Object.keys(workflows)).toEqual(['build', 'research', 'review']);
+    expect(DIRECT_MODE_LABEL).toBe('Direct chat');
+  });
+});
+
+describe('custom agents', () => {
+  afterEach(() => clearCustomAgents());
+
+  it('round-trips a written agent and makes it resolvable by id', () => {
+    const created = createCustomAgent({ name: 'Rust reviewer', prompt: 'You review Rust for lifetimes.', role: 'Code review' });
+    expect(created.id.startsWith('custom:')).toBe(true);
+    expect(created.group).toBe('custom');
+    expect(created.custom).toBe(true);
+    expect(created.tagline).toBe('Code review');
+    // The whole point: every caller holding an id resolves it without being rewired.
+    expect(personaById(created.id).name).toBe('Rust reviewer');
+    expect(composePrompt(personaById(created.id))).toContain('You review Rust for lifetimes.');
+    expect(composePrompt(personaById(created.id)).startsWith(SAFETY_BASELINE)).toBe(true);
+    expect(customAgents()).toHaveLength(1);
+  });
+  it('cannot collide with or shadow a built-in agent', () => {
+    const created = createCustomAgent({ name: 'Assistant', prompt: 'Impersonator.', role: '' });
+    expect(created.id).not.toBe('assistant');
+    // A built-in id still resolves to the built-in, whatever a custom agent calls itself.
+    expect(personaById('assistant').group).toBe('general');
+    expect(personaById('assistant').prompt).not.toContain('Impersonator');
+  });
+  it('refuses a draft that is missing the two fields that matter', () => {
+    expect(validateDraft({ name: '', prompt: 'x', role: '' })).toMatch(/name/);
+    expect(validateDraft({ name: ' ', prompt: 'x', role: '' })).toMatch(/name/);
+    expect(validateDraft({ name: 'A', prompt: '  ', role: '' })).toMatch(/system prompt/);
+    // A role is a label, so an agent without one still works.
+    expect(validateDraft({ name: 'A', prompt: 'Be terse.', role: '' })).toBeNull();
+    expect(createCustomAgent({ name: 'A', prompt: 'Be terse.', role: '' }).tagline).toBe('Custom agent');
+  });
+  it('bounds what it stores, because the prompt reaches a model and the name reaches the screen', () => {
+    const created = createCustomAgent({ name: 'N'.repeat(200), prompt: 'P'.repeat(9000), role: 'R'.repeat(200) });
+    expect(created.name).toHaveLength(40);
+    expect(created.prompt).toHaveLength(4000);
+    expect(created.tagline).toHaveLength(60);
+  });
+  it('deleting one leaves a session that used it readable', () => {
+    const created = createCustomAgent({ name: 'Temp', prompt: 'Be brief.', role: '' });
+    expect(removeCustomAgent(created.id)).toEqual([]);
+    // The old id now resolves to the default rather than throwing or rendering blank.
+    expect(personaById(created.id).id).toBe(defaultPersonaId);
+  });
+});
+
 describe('roster', () => {
   it('puts the safety baseline first in every prompt and keeps five stage skills', () => {
     for (const p of personas) expect(composePrompt(p).startsWith(SAFETY_BASELINE)).toBe(true);
     expect(skills.map(s => s.role)).toEqual(['planner', 'researcher', 'core-architect', 'reviewer', 'queen-coordinator']);
     expect(composePrompt(personaById('reviewer'), personaById('auditor'))).toContain('started by the Financial Auditor');
-    expect(personaById('nope').id).toBe('operator'); expect(personaById('browser').tools).toEqual(['inspect_page']);
+    expect(personaById('nope').id).toBe(defaultPersonaId); expect(personaById('browser').tools).toEqual(['inspect_page']);
   });
   it('parses only the documented tool call shape', () => {
     const specs = [inspectPageSpec];

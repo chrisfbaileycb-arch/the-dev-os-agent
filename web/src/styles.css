@@ -140,8 +140,21 @@ input:not([type=checkbox]), select, textarea { border: 1px solid var(--line-stro
 .ledger-wrap { overflow-x: auto; } .ledger { width: 100%; border-collapse: collapse; font-size: 11.5px; } .ledger th, .ledger td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; } .ledger th { color: var(--muted); font-weight: 550; } .ledger td.mono { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .group-label { display: flex; align-items: baseline; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-top: 4px; } .group-label small { text-transform: none; letter-spacing: 0; }
 .persona-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
-.persona-card { display: flex; gap: 10px; align-items: flex-start; text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 10px; color: var(--ink); } .persona-card:disabled { opacity: 1; cursor: default; } .persona-card:not(:disabled):hover { border-color: var(--accent); } .persona-card.active { border-color: var(--accent); background: var(--accent-soft); }
-.persona-icon { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.persona-card { position: relative; display: flex; align-items: flex-start; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; color: var(--ink); }
+.persona-card:has(.persona-hit:not(:disabled)):hover { border-color: var(--accent); } .persona-card.active { border-color: var(--accent); background: var(--accent-soft); }
+/* The card body is the hit target; a delete button sits beside it, so the two are separate
+   controls rather than a button nested inside a button. */
+.persona-hit { display: flex; gap: 10px; align-items: flex-start; text-align: left; padding: 10px; color: inherit; flex: 1; min-width: 0; border-radius: 8px; }
+.persona-hit:disabled { opacity: 1; cursor: default; }
+.persona-delete { position: absolute; top: 6px; right: 6px; color: var(--muted); } .persona-delete:hover { color: var(--danger, #b4232a); }
+/* Writing an agent is the first thing offered in the drawer, so it gets a full-width control. */
+.create-agent { width: 100%; justify-content: center; }
+.create-agent-form { gap: 8px; } .create-agent-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; } .create-agent-form textarea { resize: vertical; min-height: 96px; font-family: inherit; }
+/* The workflow machinery, folded away. Present, explained, and not the first thing you read. */
+.roster-advanced { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; display: flex; flex-direction: column; gap: 8px; }
+.roster-advanced > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 2px 0; } .roster-advanced > summary:hover { color: var(--ink); }
+.roster-advanced[open] > summary { margin-bottom: 2px; }
+.persona-icon { flex: none; display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
 .persona-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; } .persona-text strong { display: flex; align-items: center; gap: 4px; font-weight: 600; } .persona-text small { color: var(--muted); font-size: 11.5px; }
 .caps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; } .caps em { font-style: normal; font-size: 10.5px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--muted); } .caps em.tool { border-color: var(--accent); color: var(--accent-ink); }
 .workflow-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); } .workflow-row { display: grid; grid-template-columns: 140px 1fr; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 12px; } .workflow-row:last-child { border-bottom: 0; } .workflow-row span { color: var(--muted); }

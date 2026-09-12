@@ -17,7 +17,8 @@ import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
-import { defaultPersonaId, personaById, workflows } from './lib/roster';
+import { defaultPersonaId, personaById, workflows, type Persona } from './lib/roster';
+import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
 import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, storage, sync, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline } from './pwa';
@@ -30,11 +31,14 @@ const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something we
 const now = () => new Date().toISOString();
 type Recognition = { lang: string; interimResults: boolean; continuous: boolean; start(): void; stop(): void; onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
 const recognitionCtor = () => (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => Recognition }).webkitSpeechRecognition;
+// Openers, led by what the default agent is actually for. These used to be four business tasks
+// pinned to four business personas, which told a visitor the product was a small-business console
+// and nothing else — so someone who came to write code had to guess it was allowed.
 const starters: { text: string; persona: string; mode: RunMode }[] = [
-  { text: 'Plan this week for a two-person diner: staffing, ordering, one marketing push. Keep it to a checklist.', persona: 'operator', mode: 'chat' },
+  { text: 'Write a TypeScript function that retries a fetch with exponential backoff and a hard timeout. Include the types and one usage example.', persona: 'coder', mode: 'chat' },
+  { text: 'This throws "Cannot read properties of undefined (reading \'map\')" on first render but works after a refresh. What are the likely causes, most likely first?', persona: 'coder', mode: 'chat' },
+  { text: 'Explain the difference between a database index and a materialised view, with one example where the wrong choice hurts.', persona: 'assistant', mode: 'chat' },
   { text: 'Here are last month\'s totals: sales 18,420, card fees 512, payroll 7,900, rent 2,400, supplies 4,100. What does the month look like and what should I double check?', persona: 'auditor', mode: 'chat' },
-  { text: 'Draft two replies to a 2-star review that says the wait was long and the coffee was cold. Warm, honest, no excuses.', persona: 'reputation', mode: 'chat' },
-  { text: 'Audit the SEO tags on https://example.com and tell me what is missing.', persona: 'browser', mode: 'chat' },
 ];
 /**
  * The connection as it goes over the wire. A zero-config run carries no secret at all — the
@@ -79,6 +83,8 @@ export default function App() {
   const [draft, setDraft] = useState(''); const [mode, setMode] = useState<RunMode>('chat'); const [attachments, setAttachments] = useState<Attached[]>([]);
   const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false); const [notice, setNotice] = useState('');
   const [rosterOpen, setRosterOpen] = useState(false); const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
+  // Agents the user wrote. Held here because the drawer creates them and the dock displays them.
+  const [custom, setCustom] = useState<Persona[]>(customAgents);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
   const [mcp, setMcpState] = useState<McpConnection[]>(loadConnections);
@@ -157,6 +163,15 @@ export default function App() {
   function ensureSession(): Session { return active ?? newSession(); }
   async function deleteSession(id: string) { try { await storage.removeSession(id); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
   function choosePersona(id: string) { setPersonaId(id); if (active) patchSession(active.id, s => ({ ...s, persona: id }), true); }
+  /** A newly written agent is selected straight away: whoever just wrote it means to use it. */
+  function addCustomAgent(created: Persona) { setCustom(customAgents()); choosePersona(created.id); setNotice(`${created.name} is ready. It is saved in this browser and appears in the agent drawer.`); }
+  /** Deleting the agent in use falls back to the default rather than leaving a dangling id. */
+  function deleteCustomAgent(id: string) {
+    const gone = personaById(id).name;
+    setCustom(removeCustomAgent(id));
+    if (personaId === id) choosePersona(defaultPersonaId);
+    setNotice(`${gone} deleted. Sessions that used it stay readable and fall back to the default agent.`);
+  }
   function updateRun(run: Run) { const next = runsRef.current.some(r => r.id === run.id) ? runsRef.current.map(r => r.id === run.id ? run : r) : [run, ...runsRef.current]; runsRef.current = next; setRuns(next); }
 
   /**
@@ -330,7 +345,9 @@ export default function App() {
           void charge(session.id, done.tokens); patchMessage(session.id, reply.id, { tokens: done.tokens }, true);
         }
       };
-      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, attachments: files });
+      // The lead persona goes over whole, not by id: a custom agent lives in localStorage and the
+      // worker cannot read it, so an id alone would silently lose the lead the user chose.
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files });
     } catch (e) { fail(errorText(e)); }
   }
 
@@ -353,8 +370,8 @@ export default function App() {
   async function clearAll() {
     setConfirm(null);
     try {
-      await clearWorkspaceData(); localStorage.removeItem('hb-rail'); clearProviderStorage(); clearConnections(); clearSettings();
-      setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]);
+      await clearWorkspaceData(); localStorage.removeItem('hb-rail'); clearProviderStorage(); clearConnections(); clearSettings(); clearCustomAgents();
+      setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]); setCustom([]); setPersonaId(defaultPersonaId);
       runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null);
       setBalance(b => computeBalance([], b.pool, b.source)); setFreeBalance(b => computeBalance([], b.pool, 'local', undefined, 'free'));
       setKeys(emptyKeyring()); setConnection(zeroConfigConnection());
@@ -389,9 +406,9 @@ export default function App() {
             <div className="messages">
               {!active?.messages.length && <div className="starter">
                 <h1>Your AI crew. Always in your corner.</h1>
-                <p>Pick an agent, say what you need, and drop in a file if it helps. {deployment.free.enabled ? 'No sign-up and no API key: your first message streams on a free model this deployment funds.' : 'Add a provider key in Settings for real replies, or try the scripted preview.'}</p>
+                <p>Ask a question, paste an error, or ask for code — the Assistant answers directly, with no setup and no connectors to switch on. Drop in a file if it helps, and pick a different agent or write your own whenever you want one. {deployment.free.enabled ? 'No sign-up and no API key: your first message streams on a free model this deployment funds.' : 'Add a provider key in Settings for real replies, or try the scripted preview.'}</p>
                 {deployment.free.enabled && inference === 'free' && <p className="starter-badge"><Sparkles size={13} strokeWidth={2} />Running on {label} · {freeBalance.remaining.toLocaleString()} free credits left this month</p>}
-                <div className="starter-grid">{starters.map(s => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={s.persona} className="starter-card" onClick={() => { choosePersona(s.persona); setMode(s.mode); setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
+                <div className="starter-grid">{starters.map((s, i) => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={i} className="starter-card" onClick={() => { choosePersona(s.persona); setMode(s.mode); setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
               </div>}
               {active?.messages.map(m => {
                 if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}</div>{m.photos && m.photos.length > 0 && <div className="msg-photos">{m.photos.map(ph => <img key={ph.name} src={ph.thumb} alt={ph.name} title={ph.name} />)}</div>}<pre className="msg-body">{m.content}</pre></article>;
@@ -420,14 +437,14 @@ export default function App() {
             />
           </section>
         </div>}
-        {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>Business agents lead a chat and set the focus for a workflow. Work skills run the stages. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} /></div>}
+        {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
         {page === 'settings' && <Settings gateway={deployment.gateway} gatewayCatalog={deployment.gatewayCatalog} connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference, demo)} stats={stats} balance={activeBalance} freeTier={inference === 'free' && !demo} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>
-    <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} />
+    <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
     <Connectors
       open={connectorsOpen} close={() => setConnectorsOpen(false)} tab={connectorTab} setTab={setConnectorTab}
       settings={settings} setSettings={setSettings} mcp={mcp} setMcp={setMcp}

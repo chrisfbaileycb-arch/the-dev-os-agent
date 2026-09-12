@@ -28,7 +28,9 @@ export function wait(ms: number, signal: AbortSignal): Promise<void> {
 export type CompleteFn = typeof complete;
 export async function executeRun(message: StartMessage, signal: AbortSignal, emit: (run: Run) => void, call: CompleteFn = complete): Promise<Run> {
   const { goal, workflow, connection } = message;
-  const lead = message.persona ? personaById(message.persona) : undefined;
+  // The lead as sent, falling back to a lookup by id. A custom agent arrives whole because the
+  // worker has no localStorage to resolve it from.
+  const lead = message.leadPersona ?? (message.persona ? personaById(message.persona) : undefined);
   const attachments = (message.attachments ?? []).map(a => ({ id: `attachment-${a.name}`, title: a.name, content: a.content, createdAt: '' }));
   validateConnection(connection);
   if (!goal.trim() || goal.length > 12_000) throw new Error('Enter a goal between 1 and 12,000 characters.');
