@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Check, Coins, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wallet } from 'lucide-react';
-import { catalog, findModel, weightFor, type CatalogModel, type InferenceMode, type Tier } from '../lib/catalog';
-import { emptyKeyring, inferenceFor, loadKeyring, providers, saveKeyring, switchProvider, type Keyring, type Provider } from '../lib/providers';
+import { findModel, weightFor, type CatalogModel, type InferenceMode } from '../lib/catalog';
+import { GROUPS, emptyReason, reachableModels, unreachableModels, type Reason } from '../lib/availability';
+import { emptyKeyring, inferenceFor, providers, saveKeyring, switchProvider, type Keyring, type Provider } from '../lib/providers';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
@@ -11,6 +12,7 @@ export interface SettingsProps {
   connection: Connection; setConnection: (c: Connection) => void;
   models: string[]; checking: boolean; discover: () => void; save: () => void; forget: () => void;
   balance: Balance; freeBalance: Balance; free: FreeTier; gateway: string | null;
+  keys: Keyring; setKeys: (k: Keyring) => void;
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
 }
 
@@ -31,18 +33,13 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
   cohere: 'From dashboard.cohere.com',
 };
 
-const tiers: { id: Tier; title: string; blurb: string }[] = [
-  { id: 'free', title: 'Free and instant', blurb: 'No key, no account. This deployment funds these from its own provider keys, metered against a monthly free allowance.' },
-  { id: 'pro', title: 'Pro and reasoning', blurb: 'Deliberate models for hard problems. Your own key bills your provider; platform credits draw three to fifteen credits per 1K tokens.' },
-];
-
 export default function Settings(p: SettingsProps) {
   const c = p.connection;
   const provider: Provider = c.provider ?? 'custom';
   const current = findModel(c.model);
   const inference: InferenceMode = c.inference ?? 'byok';
   const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch });
-  const [keys, setKeys] = useState<Keyring>(loadKeyring);
+  const keys = p.keys; const setKeys = p.setKeys;
 
   /**
    * A key belongs to a provider, not to the session, so all of them are editable at once and
@@ -51,7 +48,7 @@ export default function Settings(p: SettingsProps) {
    * waiting for a save.
    */
   function setKey(id: Provider, value: string) {
-    setKeys(k => ({ ...k, [id]: value }));
+    setKeys({ ...keys, [id]: value });
     if (id === provider) set({ token: value });
   }
   /**
@@ -64,12 +61,27 @@ export default function Settings(p: SettingsProps) {
     saveKeyring(c.saveKey ? keys : emptyKeyring());
     p.save();
   }
-  function forgetAll() { setKeys(emptyKeyring()); p.forget(); }
-  const funded = (m: CatalogModel) => Boolean(m.zeroConfig && p.free.enabled && p.free.models.includes(m.id));
+  // Clearing the ring is App's job now that it owns it; this only asks.
+  function forgetAll() { p.forget(); }
+  const [showAll, setShowAll] = useState(false);
+
+  // One rule for what is runnable, shared with the dock's picker so the two can never disagree
+  // about what this visitor can do. Recomputed as keys are typed, so pasting one reveals that
+  // provider's models immediately rather than after a save.
+  const availability = { free: p.free, keys: { ...keys, [provider]: c.token || keys[provider] }, inference, token: c.token, provider };
+  const reachable = reachableModels(availability);
+  const hidden = unreachableModels(availability);
+  const groups = (['free', 'key', 'credits'] as Reason[])
+    .map(reason => ({ reason, items: reachable.filter(r => r.reason === reason) }))
+    .filter(g => g.items.length);
 
   function pick(m: CatalogModel) {
     const base = m.provider === provider ? c : switchProvider(c, m.provider);
     p.setConnection({ ...base, mode: 'remote', model: m.id, inference: inferenceFor(m.id, base.inference, p.free.models) });
+  }
+  function pickById(id: string) {
+    const m = [...reachable.map(r => r.model), ...hidden].find(x => x.id === id);
+    if (m) pick(m); else set({ model: id, inference: inferenceFor(id, c.inference, p.free.models) });
   }
   function pickProvider(id: Provider) { if (id === provider) { set({ mode: 'remote' }); return; } p.setConnection({ ...switchProvider(c, id), mode: 'remote' }); }
   function pickInference(next: InferenceMode) {
@@ -86,14 +98,26 @@ export default function Settings(p: SettingsProps) {
       <div className="stack">
         <section className="panel">
           <div className="panel-head"><h2>Model hub</h2><label className="switch"><input type="checkbox" checked={c.mode === 'demo'} disabled={p.busy} onChange={e => set({ mode: e.target.checked ? 'demo' : 'remote' })} />Scripted preview (no AI, no network)</label></div>
-          {tiers.map(t => <div key={t.id} className="tier">
-            <h3>{t.title}<small>{t.blurb}</small></h3>
-            <div className="model-grid">{catalog.filter(m => m.tier === t.id).map(m => <button key={m.id} className={c.mode === 'remote' && current?.id === m.id ? 'model-card active' : 'model-card'} disabled={p.busy} onClick={() => pick(m)} aria-pressed={current?.id === m.id}>
-              <strong>{m.label}{current?.id === m.id && c.mode === 'remote' && <Check size={12} />}</strong>
-              <small>{providers[m.provider].name} · {m.zeroConfig ? (funded(m) ? 'free here' : 'not funded here') : `${m.weight} cr/1K`}</small>
-              <span>{m.note}</span>
-            </button>)}</div>
-          </div>)}
+          <div className="tier">
+            <h3>Model<small>Only what this deployment funds and what your keys unlock. Add a key below and its models appear here.</small></h3>
+            {reachable.length > 0 ? <>
+              <label className="grow">Available now<select className="model-select" disabled={p.busy || c.mode === 'demo'} value={reachable.some(r => r.model.id === current?.id) ? current?.id : ''} onChange={e => pickById(e.target.value)}>
+                {!reachable.some(r => r.model.id === current?.id) && <option value="">Choose a model…</option>}
+                {groups.map(g => <optgroup key={g.reason} label={GROUPS[g.reason].label}>
+                  {g.items.map(({ model: m }) => <option key={m.id} value={m.id}>{m.label}{m.provider !== 'custom' ? ` · ${providers[m.provider].name}` : ''}</option>)}
+                </optgroup>)}
+              </select></label>
+              <p className="help">{groups.map(g => GROUPS[g.reason].note).join(' ')}</p>
+            </> : <p className="help">{emptyReason(availability)}</p>}
+            {hidden.length > 0 && <p className="help">
+              <button type="button" className="link-button" onClick={() => setShowAll(v => !v)}>{showAll ? 'Hide' : `Show ${hidden.length} more`}</button>
+              {' '}that need a key you have not added. Selecting one asks for that key rather than failing.
+            </p>}
+            {showAll && <div className="model-list">{hidden.map(m => <button key={m.id} type="button" className="model-row" disabled={p.busy} onClick={() => pick(m)}>
+              <strong>{m.label}</strong>
+              <small>{providers[m.provider].name} · needs your {providers[m.provider].name} key</small>
+            </button>)}</div>}
+          </div>
           <div className="tier"><h3>Any model, any endpoint<small>Type a model ID your provider serves, or point at an OpenAI-compatible endpoint approved by this deployment.</small></h3>
             <div className="form-grid">
               <label>Provider<select value={provider} disabled={p.busy || c.mode === 'demo'} onChange={e => pickProvider(e.target.value as Provider)}>{(Object.keys(providers) as Provider[]).map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
@@ -123,7 +147,7 @@ export default function Settings(p: SettingsProps) {
               <small>This deployment's full model pool, unlocked by an administrator token.</small>
             </button>
           </div>
-          {inference === 'free' ? <p className="help">Nothing to enter. Requests route through this deployment's own Groq and OpenRouter keys, restricted to the free models above, and every request is metered on the server against the allowance shown to the right. When the allowance runs out, add your own key here and the same models keep working — free accounts at either provider are enough.</p>
+          {inference === 'free' ? <p className="help">Nothing to enter. Requests route through whichever provider keys this deployment holds, restricted to the models listed above, and every request is metered on the server against the allowance shown to the right. When the allowance runs out, add your own key here and the same models keep working — a free account at any of those providers is enough.</p>
             : inference === 'byok' ? <>
               <p className="help">One key per provider. The model you pick decides which one is used, so a key you already hold works straight away — you do not need an account at all of them.</p>
               <div className="key-grid">

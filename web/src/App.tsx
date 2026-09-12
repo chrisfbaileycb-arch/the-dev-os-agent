@@ -15,7 +15,7 @@ import { chatTurn } from './lib/chat';
 import { estimateTokens, findModel, isZeroConfig, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel } from './lib/catalog';
 import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, forgetKeys, inferenceFor, initialProvider, persistConnection, providers, zeroConfigConnection, type Provider } from './lib/providers';
+import { clearProviderStorage, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { defaultPersonaId, personaById, workflows } from './lib/roster';
 import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, storage, sync, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
@@ -56,6 +56,9 @@ export default function App() {
   const canInstall = useInstallAvailable(); const online = useOnline();
   const [connection, setConnection] = useState<Connection>(initialProvider);
   const [deployment, setDeployment] = useState<Deployment>(offlineDeployment);
+  // The keyring lives here because both the dock's picker and the model hub read it: which
+  // providers hold a key decides which models either one is allowed to offer.
+  const [keys, setKeys] = useState<Keyring>(loadKeyring);
   const [backgroundWorker, setBackgroundWorker] = useState(false);
   const [models, setModels] = useState<string[]>([]); const [checking, setChecking] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]); const sessionsRef = useRef<Session[]>([]);
@@ -316,7 +319,7 @@ export default function App() {
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
   async function discover() { setChecking(true); try { const ids = await listModels(requestConnection(connection), new AbortController().signal); setModels(ids); if (ids.length && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
   function saveSettingsForm() { try { if (connection.mode === 'remote') validateConnection(connection); persistConnection(connection); setNotice(connection.saveKey && inference === 'byok' ? 'Connection saved, including your provider keys in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.'); } catch (e) { setNotice(errorText(e)); } }
-  function forget() { try { forgetKeys(); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
+  function forget() { try { forgetKeys(); setKeys(emptyKeyring()); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
   async function clearAll() {
     setConfirm(null);
     try {
@@ -373,6 +376,7 @@ export default function App() {
               <div ref={endRef} />
             </div>
             <Dock
+              keys={keys}
               draft={draft} setDraft={setDraft} mode={mode} setMode={setMode}
               persona={persona} openRoster={() => setRosterOpen(true)}
               attachments={attachments} photos={photos} addFiles={f => void addFiles(f)}
@@ -390,7 +394,7 @@ export default function App() {
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>Business agents lead a chat and set the focus for a workflow. Work skills run the stages. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings gateway={deployment.gateway} connection={connection} setConnection={setConnection} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
+        {page === 'settings' && <Settings gateway={deployment.gateway} keys={keys} setKeys={setKeys} connection={connection} setConnection={setConnection} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference, demo)} stats={stats} balance={activeBalance} freeTier={inference === 'free' && !demo} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>

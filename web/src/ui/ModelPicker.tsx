@@ -1,25 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, KeyRound, Sparkles, Wallet } from 'lucide-react';
-import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
-import { providers } from '../lib/providers';
+import { findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
+import { providers, type Keyring } from '../lib/providers';
+import { GROUPS, emptyReason, reachableModels, unreachableModels, type Reason } from '../lib/availability';
 import type { FreeTier } from '../lib/store';
 
 // The model dropdown that lives on the prompt dock.
 //
-// It sorts models by what a visitor can actually run *right now*, not by vendor: the zero-config
-// group first, live and needing nothing, then the models that need a key. A locked entry is
-// still shown and still selectable — picking one opens Settings rather than silently failing —
-// because hiding them would make the free tier look like the whole product.
+// It lists what this visitor can run *right now* and nothing else — models the deployment funds,
+// plus models their own key reaches. It used to list the whole compiled catalog with the rest
+// marked "locked", on the reasoning that hiding them would make the free tier look like the
+// whole product. That reasoning was wrong in practice: a menu is read top to bottom, and one
+// where most entries do not work makes a person check every line to find the four that do.
 //
-// The split between the two groups is a shipped default, not a claim. Only the server knows
-// what this deployment funds, and /api/providers is read for that answer: it can add ids this
-// build has never seen, and it can fund one listed below as key-only.
+// The rest are not gone. They are one click away under "more", still selectable, and choosing
+// one opens Settings for the key it needs rather than failing on send.
+//
+// Availability comes from lib/availability, shared with the model hub so the two can never
+// disagree — and the funded half of it comes from the server, because only the deployment knows
+// which provider keys it holds.
 
 export interface ModelPickerProps {
   model: string;
   inference: InferenceMode;
   demo: boolean;
   free: FreeTier;
+  keys: Keyring;
   hasKey: boolean;
   disabled?: boolean;
   onPick: (model: string) => void;
@@ -53,36 +59,20 @@ export default function ModelPicker(p: ModelPickerProps) {
     return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
-  // Live means the server said it funds this exact id — not that this build compiled it in as
-  // free. A deployment that opts into a frontier model with FREE_TIER_ALLOW_FRONTIER funds an
-  // id listed here as key-only, and showing it locked while the host pays for it would send the
-  // visitor to Settings for a key they do not need.
-  const live = (m: CatalogModel) => Boolean(p.free.enabled && p.free.models.some(id => id.toLowerCase() === m.id.toLowerCase()));
-  const inCatalog = new Set(catalog.map(m => m.id.toLowerCase()));
-  const servedBy = (m: CatalogModel) => p.free.providers[m.id] ?? (inCatalog.has(m.id.toLowerCase()) ? providers[m.provider].name : 'this deployment');
-  /**
-   * Models the server says it funds that this build has never heard of — a gateway added a
-   * model, or the operator set their own pool with XKIRO_FREE_MODELS. Showing them keeps the
-   * dropdown honest about what is actually runnable rather than about what was compiled in,
-   * which is the difference between a model list and a hardcoded guess.
-   */
-  const discovered: CatalogModel[] = p.free.models
-    .filter(id => !inCatalog.has(id.toLowerCase()))
-    .map(id => ({ id, provider: 'custom', label: id, tier: 'free', weight: 0.5, zeroConfig: true, note: 'Offered by this deployment.' }));
-  // What this deployment actually funds goes first. A gateway-only deployment funds a handful
-  // of a longer catalogue, and burying those below six locked entries makes a working free tier
-  // look like an empty one. Order is stable within each half, so the list never reshuffles.
-  const zeroConfig = [...catalog.filter(m => m.zeroConfig), ...discovered]
-    .map((m, i) => ({ m, i }))
-    .sort((a, b) => Number(live(b.m)) - Number(live(a.m)) || a.i - b.i)
-    .map(x => x.m);
-  const keyed = catalog.filter(m => !m.zeroConfig);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => { if (!open) setShowAll(false); }, [open]);
 
-  // Reachable now: the deployment funds it, or the visitor's own key can pay for it.
-  const reachable = (m: CatalogModel) => live(m) || p.hasKey || p.inference === 'credits';
-  function choose(m: CatalogModel) {
+  const availability = { free: p.free, keys: p.keys, inference: p.inference };
+  const reachable = reachableModels(availability);
+  const hidden = unreachableModels(availability);
+  const groups = (['free', 'key', 'credits'] as Reason[])
+    .map(reason => ({ reason, items: reachable.filter(r => r.reason === reason) }))
+    .filter(g => g.items.length);
+  const label = (m: CatalogModel) => m.provider === 'custom' ? 'this deployment' : providers[m.provider].name;
+
+  function choose(m: CatalogModel, ok: boolean) {
     setOpen(false);
-    if (reachable(m)) p.onPick(m.id); else p.onNeedsKey(m);
+    if (ok) p.onPick(m.id); else p.onNeedsKey(m);
   }
 
   const badge = p.demo ? 'offline' : p.inference === 'free' ? 'free' : p.inference === 'credits' ? 'credits' : 'your key';
@@ -94,26 +84,26 @@ export default function ModelPicker(p: ModelPickerProps) {
       <ChevronDown size={12} />
     </button>
     {open && <div className="model-menu" role="listbox" aria-label="Model">
-      <div className="model-group">
-        <span className="model-group-label"><Sparkles size={11} strokeWidth={2} />Free · no key needed</span>
-        {p.free.enabled
-          ? <small className="model-group-note">{p.free.monthlyCredits.toLocaleString()} credits a month on this deployment, then bring your own key.</small>
-          : <small className="model-group-note">This deployment has no server keys configured, so free models are unavailable here.</small>}
-        {zeroConfig.map(m => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}${reachable(m) ? '' : ' locked'}`} onClick={() => choose(m)}>
+      {groups.map(g => <div key={g.reason} className="model-group">
+        <span className="model-group-label">{g.reason === 'free' ? <Sparkles size={11} strokeWidth={2} /> : g.reason === 'credits' ? <Wallet size={11} strokeWidth={2} /> : <KeyRound size={11} strokeWidth={2} />}{GROUPS[g.reason].label}</span>
+        <small className="model-group-note">{GROUPS[g.reason].note}</small>
+        {g.items.map(({ model: m }) => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}`} onClick={() => choose(m, true)}>
           <strong>{m.label}{current?.id === m.id && !p.demo && <Check size={12} />}</strong>
-          <small>{servedBy(m)} · {live(m) ? 'ready now' : p.hasKey ? 'on your key' : 'not funded here'}</small>
+          <small>{label(m)} · ready now</small>
           <span>{m.note}</span>
         </button>)}
-      </div>
-      <div className="model-group">
-        <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />Deep reasoning · your key</span>
-        <small className="model-group-note">{p.hasKey ? 'Billed by your provider; no credits are drawn.' : 'Add an OpenRouter, Groq, or custom key in Settings to unlock these.'}</small>
-        {keyed.map(m => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}${reachable(m) ? '' : ' locked'}`} onClick={() => choose(m)}>
-          <strong>{m.label}{current?.id === m.id && !p.demo && <Check size={12} />}</strong>
-          <small>{live(m) ? `${servedBy(m)} · funded here` : `${providers[m.provider].name} · ${m.weight} cr/1K on credits`}</small>
+      </div>)}
+      {!groups.length && <div className="model-group"><small className="model-group-note">{emptyReason(availability)}</small></div>}
+      {hidden.length > 0 && <div className="model-group">
+        <button type="button" className="link-button model-more" onClick={() => setShowAll(v => !v)} aria-expanded={showAll}>
+          {showAll ? 'Hide' : `${hidden.length} more`} that need a key
+        </button>
+        {showAll && hidden.map(m => <button key={m.id} type="button" role="option" aria-selected={false} className="model-option locked" onClick={() => choose(m, false)}>
+          <strong>{m.label}</strong>
+          <small>{label(m)} · add that key to unlock</small>
           <span>{m.note}</span>
         </button>)}
-      </div>
+      </div>}
       <button type="button" role="option" aria-selected={p.demo} className={p.demo ? 'model-option preview active' : 'model-option preview'} value={PREVIEW} onClick={() => { setOpen(false); p.onPreview(); }}>
         <strong>Scripted preview{p.demo && <Check size={12} />}</strong>
         <small>No AI, no network</small>

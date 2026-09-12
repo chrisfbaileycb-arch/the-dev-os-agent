@@ -9,7 +9,9 @@ import { retrieve } from '../src/lib/memory';
 import { chatTurn } from '../src/lib/chat';
 import { complete } from '../src/lib/provider';
 import { loadDeployment } from '../src/lib/deployment';
-import { defaultConnection, inferenceFor } from '../src/lib/providers';
+import { defaultConnection, emptyKeyring, inferenceFor, type Keyring } from '../src/lib/providers';
+import { emptyReason, reachableModels, unreachableModels } from '../src/lib/availability';
+import type { FreeTier } from '../src/lib/store';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -266,5 +268,79 @@ describe('the provider keyring', () => {
     expect(defaultConnection('openai').endpoint).toBe('https://api.openai.com/v1');
     expect(defaultConnection('anthropic').endpoint).toBe('https://api.anthropic.com/v1');
     expect(defaultConnection('google').endpoint).toContain('generativelanguage.googleapis.com');
+  });
+});
+
+
+describe('what a visitor can actually run', () => {
+  // The picker used to render the whole compiled catalog and mark most of it locked. A menu is
+  // read top to bottom, so one where four of sixteen entries work makes a person check every
+  // line. Availability is computed instead, and these cases are the rule.
+  const ring = (over: Partial<Keyring> = {}) => ({ ...emptyKeyring(), ...over });
+  const tier = (over: Partial<FreeTier> = {}): FreeTier => ({ enabled: false, models: [], providers: {}, monthlyCredits: 400, perHour: 40, ...over });
+
+  it('offers nothing but says why when nothing is reachable', () => {
+    const input = { free: tier(), keys: ring(), inference: 'byok' as const };
+    expect(reachableModels(input)).toEqual([]);
+    expect(unreachableModels(input).length).toBe(catalog.length);
+    expect(emptyReason(input)).toMatch(/funds no models and you have not added a key/);
+  });
+
+  it('offers exactly what the server says it funds', () => {
+    const free = tier({ enabled: true, models: ['groq/llama-3.3-70b-versatile', 'z-ai/glm-5.2'] });
+    const got = reachableModels({ free, keys: ring(), inference: 'free' });
+    expect(got.map(r => r.model.id)).toEqual(['groq/llama-3.3-70b-versatile', 'z-ai/glm-5.2']);
+    expect(got.every(r => r.reason === 'free')).toBe(true);
+    // The OpenRouter wall is what this replaced: none of it appears without a key.
+    expect(got.some(r => r.model.provider === 'openrouter')).toBe(false);
+  });
+
+  it('unlocks a provider the moment its key is present', () => {
+    const free = tier();
+    const before = reachableModels({ free, keys: ring(), inference: 'byok' });
+    const after = reachableModels({ free, keys: ring({ anthropic: 'sk-ant' }), inference: 'byok' });
+    expect(before.length).toBe(0);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every(r => r.model.provider === 'anthropic' && r.reason === 'key')).toBe(true);
+    // And only that provider: a key for one vendor does not conjure another vendor's models.
+    expect(after.some(r => r.model.provider === 'openai')).toBe(false);
+  });
+
+  it('counts the key being typed before it is saved', () => {
+    const got = reachableModels({ free: tier(), keys: ring(), inference: 'byok', token: 'sk-openai', provider: 'openai' });
+    expect(got.length).toBeGreaterThan(0);
+    expect(got.every(r => r.model.provider === 'openai')).toBe(true);
+  });
+
+  it('prefers the free tier over spending the visitor key on the same model', () => {
+    // Charging someone for a model the deployment already pays for would be the wrong default.
+    const free = tier({ enabled: true, models: ['groq/llama-3.3-70b-versatile'] });
+    const got = reachableModels({ free, keys: ring({ groq: 'gsk_x' }), inference: 'byok' });
+    expect(got.find(r => r.model.id === 'groq/llama-3.3-70b-versatile')?.reason).toBe('free');
+    expect(got[0].reason).toBe('free');
+  });
+
+  it('opens the whole pool on platform credits', () => {
+    const got = reachableModels({ free: tier(), keys: ring(), inference: 'credits' });
+    expect(got.length).toBe(catalog.length);
+    expect(unreachableModels({ free: tier(), keys: ring(), inference: 'credits' })).toEqual([]);
+  });
+
+  it('offers a funded model this build has never heard of', () => {
+    // A gateway adds a model, or the operator sets their own pool. The picker should offer what
+    // the deployment funds, not what was compiled in months ago.
+    const free = tier({ enabled: true, models: ['vendor/brand-new-model'] });
+    const got = reachableModels({ free, keys: ring(), inference: 'free' });
+    expect(got.map(r => r.model.id)).toEqual(['vendor/brand-new-model']);
+    expect(got[0].model.note).toMatch(/this deployment/i);
+  });
+
+  it('keeps every unreachable model reachable by another route', () => {
+    // Hidden, never dropped: the set always partitions the catalog, so nothing is lost.
+    const input = { free: tier({ enabled: true, models: ['z-ai/glm-5.2'] }), keys: ring({ openai: 'sk-x' }), inference: 'byok' as const };
+    const shown = new Set(reachableModels(input).map(r => r.model.id));
+    const hidden = new Set(unreachableModels(input).map(m => m.id));
+    for (const m of catalog) expect(shown.has(m.id) || hidden.has(m.id)).toBe(true);
+    for (const id of hidden) expect(shown.has(id)).toBe(false);
   });
 });
