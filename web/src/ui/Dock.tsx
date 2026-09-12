@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { ChevronDown, Mic, MicOff, Paperclip, Plug, Send, Square, X } from 'lucide-react';
 import type { Persona } from '../lib/roster';
-import { workflows } from '../lib/roster';
+import { DIRECT_MODE_LABEL, WORKFLOW_GROUP_LABEL, workflows } from '../lib/roster';
 import type { Workflow } from '../lib/types';
 import type { Photo } from '../lib/photos';
 import type { CatalogModel, InferenceMode } from '../lib/catalog';
@@ -73,7 +73,12 @@ export default function Dock(p: DockProps) {
           which keeps the draft field full width and the send button under the thumb. */}
       <div className="dock-bar">
         <button className="chip-button" onClick={p.openRoster} title="Choose an agent" disabled={p.busy}><PersonaIcon size={13} strokeWidth={1.75} /><span className="chip-label">{p.persona.name}</span><ChevronDown size={12} /></button>
-        <label className="chip-select"><select aria-label="Mode" value={p.mode} disabled={p.busy} onChange={e => p.setMode(e.target.value as RunMode)}><option value="chat">Chat</option>{(Object.keys(workflows) as Workflow[]).map(w => <option key={w} value={w}>{workflows[w].label}</option>)}</select><ChevronDown size={12} /></label>
+        {/* Direct chat first and named as such, with the workflows behind a group labelled
+            optional. One agent answering you is the normal case; five in sequence is a request. */}
+        <label className="chip-select"><select aria-label="Mode" title="Direct chat answers with one agent. A workflow runs five in sequence." value={p.mode} disabled={p.busy} onChange={e => p.setMode(e.target.value as RunMode)}>
+          <option value="chat">{DIRECT_MODE_LABEL}</option>
+          <optgroup label={WORKFLOW_GROUP_LABEL}>{(Object.keys(workflows) as Workflow[]).map(w => <option key={w} value={w}>{workflows[w].label}</option>)}</optgroup>
+        </select><ChevronDown size={12} /></label>
         <ModelPicker model={p.model} inference={p.inference} demo={p.demo} free={p.free} labels={p.labels} reach={p.reach} keyed={p.keyed} disabled={p.busy} onPick={p.pickModel} onPreview={p.pickPreview} onNeedsKey={p.modelNeedsKey} />
         <button className={p.connectorCount ? 'chip-button live' : 'chip-button'} title="Connectors: GitHub, web, documents, MCP" onClick={p.openConnectors} disabled={p.busy}><Plug size={13} strokeWidth={1.75} /><span className="chip-label">Connectors</span>{p.connectorCount ? <em>{p.connectorCount}</em> : null}</button>
         <span className="dock-counters" title="Estimated tokens in your message and in the attached context"><em>{p.tokens.draft.toLocaleString()}</em> draft · <em>{p.tokens.context.toLocaleString()}</em> context</span>

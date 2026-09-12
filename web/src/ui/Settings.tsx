@@ -237,7 +237,7 @@ export default function Settings(p: SettingsProps) {
 
         <section className="panel danger">
           <h2>Clear workspace</h2>
-          <p className="help">Deletes sessions, runs, the ledger, notes, connectors, and saved connection details from this browser and from the server copy.</p>
+          <p className="help">Deletes sessions, runs, the ledger, notes, connectors, custom agents you wrote, and saved connection details from this browser and from the server copy.</p>
           <button className="button danger small" disabled={p.busy} onClick={p.requestClear}><Trash2 size={13} />Clear everything</button>
         </section>
       </div>
