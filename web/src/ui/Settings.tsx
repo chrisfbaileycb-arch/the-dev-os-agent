@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Check, Coins, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wallet } from 'lucide-react';
 import { catalog, findModel, weightFor, type CatalogModel, type InferenceMode } from '../lib/catalog';
-import { emptyKeyring, inferenceFor, loadKeyring, providers, saveKeyring, switchProvider, type Keyring, type Provider } from '../lib/providers';
+import { inferenceFor, providers, switchProvider, type Keyring, type Provider } from '../lib/providers';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { GatewayCatalog } from '../lib/deployment';
 import type { Connection } from '../lib/types';
@@ -24,6 +24,8 @@ import { REFERRAL_ALLOWANCE, REFERRAL_BREADTH, REFERRAL_DISCLOSURE, referralEnab
 
 export interface SettingsProps {
   connection: Connection; setConnection: (c: Connection) => void;
+  /** Owned by App, because the dock's model picker reads it too. */
+  keys: Keyring; setKeys: (next: Keyring) => void; keyed: Set<Provider>;
   models: string[]; checking: boolean; discover: () => void; save: () => void; forget: () => void;
   balance: Balance; freeBalance: Balance; free: FreeTier; gateway: string | null; gatewayCatalog: GatewayCatalog;
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
@@ -58,29 +60,18 @@ export default function Settings(p: SettingsProps) {
   const current = findModel(c.model);
   const inference: InferenceMode = c.inference ?? 'byok';
   const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch });
-  const [keys, setKeys] = useState<Keyring>(loadKeyring);
 
   /**
    * A key belongs to a provider, not to the session, so all of them are editable at once and
-   * whichever one the chosen model needs is the one that gets sent. The active provider's field
-   * is the connection's own token, so typing there takes effect on the next message rather than
-   * waiting for a save.
+   * whichever one the chosen model needs is the one that gets sent. The ring lives in App, so a key
+   * typed here unlocks that vendor in the dock's dropdown immediately — no save, and no effect on
+   * any other provider. The active provider's field also writes the connection's own token, so it
+   * takes effect on the next message.
    */
   function setKey(id: Provider, value: string) {
-    setKeys(k => ({ ...k, [id]: value }));
+    p.setKeys({ ...p.keys, [id]: value });
     if (id === provider) set({ token: value });
   }
-  /**
-   * Save. The remember checkbox governs every key, not just the active one — a single honest
-   * switch beats a per-field ambiguity about which of them localStorage ends up holding. Unticked
-   * means nothing is written and anything previously stored is cleared; the keys stay usable in
-   * this tab until it closes.
-   */
-  function saveAll() {
-    saveKeyring(c.saveKey ? keys : emptyKeyring());
-    p.save();
-  }
-  function forgetAll() { setKeys(emptyKeyring()); p.forget(); }
 
   /** The free list, grouped by vendor and labelled by the gateway. Nothing here is hardcoded. */
   const freeGroups = useMemo(() => {
@@ -198,11 +189,11 @@ export default function Settings(p: SettingsProps) {
           </div>
           {inference === 'free' ? <p className="help">Nothing to enter. Requests route through this deployment's own provider keys, restricted to the free models listed above, and every request is metered on the server against the allowance shown to the right. This is a deliberate choice and it stays chosen: picking a model here will not move you off the free tier, and picking one in the section above will not move you onto it. When the allowance runs out, add your own key here and the same models keep working — free accounts at any of these providers are enough.</p>
             : inference === 'byok' ? <>
-              <p className="help">One key per provider. The model you pick decides which one is used, so a key you already hold works straight away — you do not need an account at all of them. Choosing a model the deployment happens to fund no longer switches you back to the free tier; if that is what you want, say so with the Free tier button.</p>
+              <p className="help">One key per provider. The model you pick decides which one is used, so a key you already hold works straight away — you do not need an account at all of them, and each key unlocks its own vendor only. A key takes effect as soon as you type it, in this page and in the dock's model list, without waiting for Save; saving is what decides whether it is still here after you close the tab. Choosing a model the deployment happens to fund no longer switches you back to the free tier; if that is what you want, say so with the Free tier button.</p>
               <div className="key-grid">
                 {KEYED.map(id => <label key={id} className={id === provider ? 'key-field active' : 'key-field'}>
-                  <span>{providers[id].name}{id === provider && <em>in use</em>}</span>
-                  <input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={id === provider ? c.token : keys[id]} placeholder={KEY_HINTS[id] ?? 'Your provider key'} onChange={e => setKey(id, e.target.value)} />
+                  <span>{providers[id].name}{id === provider && <em>in use</em>}{id !== provider && p.keyed.has(id) && <em>unlocked</em>}</span>
+                  <input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={id === provider ? c.token : p.keys[id]} placeholder={KEY_HINTS[id] ?? 'Your provider key'} onChange={e => setKey(id, e.target.value)} />
                 </label>)}
               </div>
               <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember these keys in this browser</label>
@@ -219,7 +210,7 @@ export default function Settings(p: SettingsProps) {
               <label>Deployment access token<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.serverAccessToken ?? ''} placeholder="Given to you by the administrator" onChange={e => set({ serverAccessToken: e.target.value })} /></label>
               <p className="help">Platform credits route through the deployment's own provider keys and need this token. It stays in memory for the session. Each request draws credits from the monthly allowance shown to the right; your own key is not used.</p>
             </>}
-          <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={saveAll}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={forgetAll}><Trash2 size={13} />Forget saved keys</button></div>
+          <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={p.save}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={p.forget}><Trash2 size={13} />Forget saved keys</button></div>
         </section>
       </div>
 
