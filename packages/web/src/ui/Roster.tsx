@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Check, Plus, Trash2, X } from 'lucide-react';
-import { businessPersonas, generalPersonas, skills, workflows, type Persona } from '../lib/roster';
+import { generalPersonas, skills, workflows, type Persona } from '../lib/roster';
 import { MAX_NAME, MAX_PROMPT, MAX_ROLE, createCustomAgent, validateDraft, type CustomAgentDraft } from '../lib/customAgents';
 import type { Workflow } from '../lib/types';
 import { iconFor } from './icons';
@@ -72,8 +72,6 @@ export function RosterList(p: RosterListProps) {
       <h3 className="group-label">Your agents <small>saved in this browser</small></h3>
       <div className="persona-grid">{p.custom.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} onDelete={p.onDelete} />)}</div>
     </>}
-    <h3 className="group-label">Business specialists <small>opinionated on purpose</small></h3>
-    <div className="persona-grid">{businessPersonas.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} />)}</div>
     <details className="roster-advanced">
       <summary>Multi-agent workflows and their stage agents</summary>
       <p className="help">Optional. A workflow hands one goal to five agents in sequence instead of answering you directly, and costs five requests instead of one. Choose one from the mode selector on the dock when you want that; leave it on Direct chat otherwise.</p>
@@ -90,7 +88,7 @@ export default function RosterDrawer({ open, close, ...rest }: RosterListProps &
   if (!open) return null;
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) close(); }}><section className="drawer" role="dialog" aria-modal="true" aria-labelledby="roster-title">
     <div className="drawer-head"><h2 id="roster-title">Choose an agent</h2><button className="icon-button" aria-label="Close" onClick={close} autoFocus><X size={16} /></button></div>
-    <p className="help">One agent answers you directly. The general agents are the plain ones and Assistant is the default; the specialists below take a stronger view, and you can write your own.</p>
+    <p className="help">One agent answers you directly. Assistant is the default — it handles questions, code, and anything else. Coder is the focused build partner. Write your own to match exactly how you want to work.</p>
     {/* Creating an agent selects it, so it closes the drawer for the same reason picking one does:
         the next thing wanted is the prompt box, not another look at the list. */}
     <RosterList {...rest} onPick={id => { rest.onPick(id); close(); }} onCreate={p => { rest.onCreate(p); close(); }} />

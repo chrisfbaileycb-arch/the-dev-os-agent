@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CREDIT_WEIGHTS, catalog, creditsFor, estimateTokens, tierFor, weightFor } from '../src/lib/catalog';
 import { computeBalance, makeEntry, merge, type LedgerEntry, type Session } from '../src/lib/store';
-import { DIRECT_MODE_LABEL, SAFETY_BASELINE, businessPersonas, composePrompt, defaultPersonaId, generalPersonas, personaById, personas, skills, workflows } from '../src/lib/roster';
+import { DIRECT_MODE_LABEL, SAFETY_BASELINE, composePrompt, defaultPersonaId, generalPersonas, personaById, personas, skills, workflows } from '../src/lib/roster';
 import { clearCustomAgents, createCustomAgent, customAgents, removeCustomAgent, validateDraft } from '../src/lib/customAgents';
 import { inspectPageSpec, parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
 import { mcpToolSpecs, slug, type McpConnection } from '../src/lib/mcp';
@@ -194,10 +194,7 @@ describe('a roster that is not opinionated by default', () => {
     // The Coder must not claim to have run anything, since it cannot.
     expect(personaById('coder').prompt).toMatch(/Never claim to have run, tested, or verified/);
   });
-  it('keeps every specialist and every workflow available', () => {
-    // Nothing was removed; the ordering changed. A visitor who wants the Financial Auditor still
-    // has it, and the five-stage workflows still exist behind the mode selector.
-    expect(businessPersonas.map(p => p.id)).toEqual(['operator', 'auditor', 'reputation', 'browser']);
+  it('keeps every workflow and stage agent available', () => {
     expect(skills).toHaveLength(5);
     expect(Object.keys(workflows)).toEqual(['build', 'research', 'review']);
     expect(DIRECT_MODE_LABEL).toBe('Direct chat');
