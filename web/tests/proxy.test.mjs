@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { FREE_TIER_UNAVAILABLE, createProxy, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, HEADER_SAFE, cleanKey, createProxy, malformed, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent } from '../server/proxy.mjs';
+const NL = String.fromCharCode(10);
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
 async function withProxy(options, fn) { const handler = createProxy(options); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
 function stream(text, status = 200, type = 'text/event-stream') { const s = Readable.from([Buffer.from(text)]); s.statusCode = status; s.headers = { 'content-type': type }; return s; }
@@ -223,4 +224,60 @@ test('/api/providers names the gateway it will actually call', async () => {
   await withProxy({ env: { XKIRO_BASE_URL: 'https://gateway.example.com/v1' } }, async url => {
     assert.equal((await (await fetch(url + '/api/providers')).json()).gateway, 'https://gateway.example.com/v1');
   });
+});
+
+test('a key pasted with a trailing newline still works', async () => {
+  // The exact production failure. XKIRO_API_KEY carried a newline from being pasted into a
+  // dashboard field; it went into "Authorization: Bearer <key>" untouched, and Node threw
+  // ERR_INVALID_CHAR while building the request — before a byte reached the network, so it
+  // surfaced as an unreachable host and sent everyone looking at DNS. The visitor's own key
+  // had been trimmed since day one. The deployment's had not, which is backwards: only one of
+  // the two takes the whole free tier down when it is wrong.
+  let captured;
+  await withProxy({ env: { XKIRO_API_KEY: 'sk-live-key' + NL }, transport: async (url, options) => { captured = options; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] })).status, 200);
+  });
+  assert.equal(captured.headers.Authorization, 'Bearer sk-live-key', 'trimmed, and nothing else changed');
+  for (const value of Object.values(captured.headers)) assert.match(String(value), HEADER_SAFE, `unsendable header: ${value}`);
+});
+
+test('every surrounding-whitespace paste of a key is repaired, every unusable one is refused', () => {
+  assert.equal(cleanKey('sk-abc123' + NL), 'sk-abc123');
+  assert.equal(cleanKey('  sk-abc123  '), 'sk-abc123');
+  assert.equal(cleanKey(String.fromCharCode(13) + NL + 'sk-abc123' + String.fromCharCode(9)), 'sk-abc123');
+  // Beyond repair: these cannot be a header value at all, so they read as no key rather than
+  // as a request that throws on its way out.
+  assert.equal(cleanKey('sk-abc' + NL + '123'), '');
+  assert.equal(cleanKey('sk-abc' + String.fromCharCode(8220) + '123'), '', 'a smart quote from a rich-text paste');
+  assert.equal(cleanKey('sk-abc' + String.fromCharCode(0) + '123'), '');
+  assert.equal(cleanKey(undefined), '');
+  assert.equal(cleanKey(42), '');
+  assert.equal(malformed('sk-abc' + NL + '123'), true);
+  assert.equal(malformed('sk-abc123' + NL), false, 'repairable is not malformed');
+  assert.equal(malformed(''), false, 'absent is not malformed');
+  assert.equal(malformed(undefined), false);
+});
+
+test('a key that cannot be repaired names its own variable in the log', async () => {
+  // "Set but unusable" and "not set" look identical to a visitor and must not to an operator:
+  // one is a typo to fix in the dashboard, the other is a tier that was never configured.
+  const lines = [];
+  await withProxy({ env: { XKIRO_API_KEY: 'sk-live' + NL + 'key' }, log: l => lines.push(l), transport: async () => { throw new Error('must not reach the provider'); } }, async url => {
+    const response = await chatFree(url, { provider: 'xkiro', model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, 'free_tier_unavailable');
+  });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /XKIRO_API_KEY is set but holds a character that cannot go in a header/);
+  assert.ok(!lines[0].includes('sk-live'), 'the key itself never reaches the log');
+});
+
+test('an operator origin with a stray newline cannot break an OpenRouter call either', async () => {
+  // APP_ORIGIN is env-sourced and also becomes a header, so it is the same bug in a second place.
+  let captured;
+  await withProxy({ env: { APP_ORIGIN: 'https://app.example.com' + NL }, transport: async (url, options) => { captured = options; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await post(url, { ...base, provider: 'openrouter', model: 'openai/gpt-4o' })).status, 200);
+  });
+  assert.equal(captured.headers['HTTP-Referer'], 'https://app.example.com');
+  for (const value of Object.values(captured.headers)) assert.match(String(value), HEADER_SAFE);
 });
