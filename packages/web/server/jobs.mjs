@@ -37,9 +37,8 @@ CREATE INDEX IF NOT EXISTS jobs_queue ON jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS jobs_workspace ON jobs (workspace_id, created_at);
 `;
 
-/** Job storage on the web service's disk. The worker never touches SQLite; it goes through HTTP. */
-export function openJobs(db) {
-  const handle = db.raw();
+/** Job storage backed by a DatabaseSync handle. Always SQLite — jobs are transient, never credentials. */
+export function openJobs(handle) {
   handle.exec(SCHEMA);
   const statements = {
     insert: handle.prepare('INSERT INTO jobs (id, workspace_id, status, created_at, updated_at, request) VALUES (?, ?, ?, ?, ?, ?)'),

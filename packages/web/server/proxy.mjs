@@ -313,7 +313,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
         const burst = takeBurst(ip);
         if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`, 'free_tier_busy');
         const pool = monthlyPool(env);
-        const used = db ? db.usedThisMonth(workspace, new Date(), 'free') : 0;
+        const used = db ? await db.usedThisMonth(workspace, new Date(), 'free') : 0;
         if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own OpenRouter or Groq key in Settings — both offer free accounts — or wait for the monthly reset.`, 'free_tier_exhausted');
       }
       // Anthropic authenticates with x-api-key and a pinned API version rather than a bearer
@@ -384,7 +384,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (meter) response.pipe(meter).pipe(res); else response.pipe(res);
       await new Promise((resolve, reject) => { response.on('end', resolve); response.on('error', reject); res.on('close', resolve); });
       // Bill even when the visitor navigated away mid-stream: the tokens were still spent.
-      if (meter && db) { try { const tokens = meter.total(); db.recordUsage(workspace, { model: body.model, tier: 'free', mode: 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
+      if (meter && db) { try { const tokens = meter.total(); await db.recordUsage(workspace, { model: body.model, tier: 'free', mode: 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
       return true;
     } catch (error) {
       if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) } });

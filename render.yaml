@@ -26,6 +26,13 @@
 # free-tier quota persist, and a background worker for heavy runs — see "Scaling up" in
 # web/README.md, which describes the Docker-plus-disk topology this file previously declared.
 
+databases:
+  - name: hey-buddy-db
+    plan: free
+    region: oregon
+    databaseName: heybuddy
+    user: heybuddy
+
 services:
   - type: web
     name: hey-buddy-web
@@ -42,6 +49,10 @@ services:
     # Answers 200 with no database and no provider key present, which is why it is the probe.
     healthCheckPath: /api/providers
     envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hey-buddy-db
+          property: connectionString
       - key: NODE_VERSION
         value: "22"
       # node:sqlite needs Node 22+. Chromium is not installed on this runtime, so skip the
