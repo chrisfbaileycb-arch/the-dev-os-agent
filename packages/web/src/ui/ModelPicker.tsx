@@ -64,13 +64,19 @@ export default function ModelPicker(p: ModelPickerProps) {
   const freeModels = useMemo(() => p.free.models.map(id => ({ id, label: p.labels[id] ?? findModel(id)?.label ?? id })), [p.free.models, p.labels]);
   const selected = (id: string) => !p.demo && p.model.toLowerCase() === id.toLowerCase();
   const badge = payLabel(p.inference, p.demo);
-  /**
-   * Reachable per vendor, not per session. This used to be one boolean for the whole list, taken
-   * from the active connection's token, so an Anthropic key unlocked Groq's models and a key typed
-   * for a provider you had not switched to unlocked nothing at all.
-   */
   const payable = (m: CatalogModel) => canPayFor(m.provider, p.reach);
   const nothingOffered = !p.free.enabled && !hasAnyKey(p.reach) && p.inference !== 'credits';
+
+  // Group keyed catalog entries by provider so each vendor's section is visually distinct.
+  const keyedByProvider = useMemo(() => {
+    const order: Provider[] = ['anthropic', 'openai', 'google', 'openrouter'];
+    const groups: { provider: Provider; models: CatalogModel[] }[] = [];
+    for (const provider of order) {
+      const models = catalog.filter(m => m.provider === provider);
+      if (models.length) groups.push({ provider, models });
+    }
+    return groups;
+  }, []);
 
   function chooseKeyed(m: CatalogModel) {
     setOpen(false);
@@ -98,17 +104,19 @@ export default function ModelPicker(p: ModelPickerProps) {
           <small>{p.free.providers[m.id] ?? 'this deployment'} · free here</small>
         </button>)}
       </div>
-      <div className="model-group">
-        <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />Deep reasoning · your key</span>
-        <small className="model-group-note">{p.keyed.size
-          ? `Billed by your provider; no credits are drawn. Keys held for ${[...p.keyed].map(id => providers[id].name).join(', ')}.`
-          : 'Add a provider key in Settings to unlock these. A key unlocks its own vendor as soon as you type it.'}</small>
-        {catalog.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={`model-option${selected(m.id) ? ' active' : ''}${payable(m) ? '' : ' locked'}`} onClick={() => chooseKeyed(m)}>
-          <strong>{m.label}{selected(m.id) && <Check size={12} />}</strong>
-          <small>{providers[m.provider].name} · {payable(m) ? (p.inference === 'credits' ? `${m.weight} cr/1K on credits` : 'on your key') : `${m.weight} cr/1K on credits`}</small>
-          <span>{m.note}</span>
-        </button>)}
-      </div>
+      {keyedByProvider.map(({ provider, models }) => {
+        const providerName = providers[provider].name;
+        const unlocked = canPayFor(provider, p.reach);
+        return <div key={provider} className="model-group">
+          <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {unlocked ? '· key active' : '· bring your key'}</span>
+          {!unlocked && <small className="model-group-note">Add your {providerName} API key in Settings — it unlocks this vendor the moment you type it.</small>}
+          {models.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={`model-option${selected(m.id) ? ' active' : ''}${payable(m) ? '' : ' locked'}`} onClick={() => chooseKeyed(m)}>
+            <strong>{m.label}{selected(m.id) && <Check size={12} />}</strong>
+            <small>{payable(m) ? (p.inference === 'credits' ? `${m.weight} cr/1K on credits` : 'on your key') : `${m.weight} cr/1K on credits`}</small>
+            <span>{m.note}</span>
+          </button>)}
+        </div>;
+      })}
       {nothingOffered && <small className="model-group-note">Nothing here is runnable yet, so the scripted preview below is the one option that works offline.</small>}
       <button type="button" role="option" aria-selected={p.demo} className={p.demo ? 'model-option preview active' : 'model-option preview'} value={PREVIEW} onClick={() => { setOpen(false); p.onPreview(); }}>
         <strong>Scripted preview{p.demo && <Check size={12} />}</strong>

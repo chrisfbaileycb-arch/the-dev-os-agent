@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CREDIT_WEIGHTS, catalog, creditsFor, estimateTokens, tierFor, weightFor } from '../src/lib/catalog';
 import { computeBalance, makeEntry, merge, type LedgerEntry, type Session } from '../src/lib/store';
-import { DIRECT_MODE_LABEL, SAFETY_BASELINE, businessPersonas, composePrompt, defaultPersonaId, generalPersonas, personaById, personas, skills, workflows } from '../src/lib/roster';
+import { DIRECT_MODE_LABEL, SAFETY_BASELINE, composePrompt, defaultPersonaId, generalPersonas, personaById, personas, skills, workflows } from '../src/lib/roster';
 import { clearCustomAgents, createCustomAgent, customAgents, removeCustomAgent, validateDraft } from '../src/lib/customAgents';
 import { inspectPageSpec, parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
 import { mcpToolSpecs, slug, type McpConnection } from '../src/lib/mcp';
@@ -194,10 +194,7 @@ describe('a roster that is not opinionated by default', () => {
     // The Coder must not claim to have run anything, since it cannot.
     expect(personaById('coder').prompt).toMatch(/Never claim to have run, tested, or verified/);
   });
-  it('keeps every specialist and every workflow available', () => {
-    // Nothing was removed; the ordering changed. A visitor who wants the Financial Auditor still
-    // has it, and the five-stage workflows still exist behind the mode selector.
-    expect(businessPersonas.map(p => p.id)).toEqual(['operator', 'auditor', 'reputation', 'browser']);
+  it('keeps every workflow and stage agent available', () => {
     expect(skills).toHaveLength(5);
     expect(Object.keys(workflows)).toEqual(['build', 'research', 'review']);
     expect(DIRECT_MODE_LABEL).toBe('Direct chat');
@@ -252,8 +249,8 @@ describe('roster', () => {
   it('puts the safety baseline first in every prompt and keeps five stage skills', () => {
     for (const p of personas) expect(composePrompt(p).startsWith(SAFETY_BASELINE)).toBe(true);
     expect(skills.map(s => s.role)).toEqual(['planner', 'researcher', 'core-architect', 'reviewer', 'queen-coordinator']);
-    expect(composePrompt(personaById('reviewer'), personaById('auditor'))).toContain('started by the Financial Auditor');
-    expect(personaById('nope').id).toBe(defaultPersonaId); expect(personaById('browser').tools).toEqual(['inspect_page']);
+    expect(composePrompt(personaById('reviewer'), personaById('coder'))).toContain('started by the Coder');
+    expect(personaById('nope').id).toBe(defaultPersonaId);
   });
   it('parses only the documented tool call shape', () => {
     const specs = [inspectPageSpec];
@@ -284,8 +281,8 @@ describe('chat turn', () => {
   });
   it('stays scripted in preview mode and never calls the network', async () => {
     const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
-    const result = await chatTurn({ connection: { mode: 'demo', endpoint: '', model: '', token: '', maxTokens: 512 }, personaId: 'auditor', history: [], input: 'Reconcile March', attachments: [], knowledge: [{ id: 'n', title: 'March ledger', content: 'March totals reconcile to the bank', createdAt: '' }], signal: new AbortController().signal });
-    expect(result.text).toContain('SCRIPTED PREVIEW'); expect(result.text).toContain('Financial Auditor'); expect(result.contextTitles).toEqual(['March ledger']); expect(fetchMock).not.toHaveBeenCalled();
+    const result = await chatTurn({ connection: { mode: 'demo', endpoint: '', model: '', token: '', maxTokens: 512 }, personaId: 'coder', history: [], input: 'Reconcile March', attachments: [], knowledge: [{ id: 'n', title: 'March ledger', content: 'March totals reconcile to the bank', createdAt: '' }], signal: new AbortController().signal });
+    expect(result.text).toContain('SCRIPTED PREVIEW'); expect(result.text).toContain('Coder'); expect(result.contextTitles).toEqual(['March ledger']); expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
