@@ -15,7 +15,8 @@ import { chatTurn } from './lib/chat';
 import { estimateTokens, findModel, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel, type InferenceMode } from './lib/catalog';
 import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, forgetKeys, inferenceFor, initialProvider, persistConnection, providers, zeroConfigConnection, type Provider } from './lib/providers';
+import { clearProviderStorage, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
+import { keyedProviders, type Reach } from './lib/availability';
 import { defaultPersonaId, personaById, workflows } from './lib/roster';
 import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, storage, sync, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
@@ -55,6 +56,14 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('hb-rail') === 'collapsed'; } catch { return false; } });
   const canInstall = useInstallAvailable(); const online = useOnline();
   const [connection, setConnection] = useState<Connection>(initialProvider);
+  /**
+   * One saved key per provider, owned here rather than inside Settings.
+   *
+   * Both the dock's model dropdown and the model hub decide what is reachable from it, and a
+   * component that owned it privately could only tell one of them. Held here, a key typed into the
+   * form unlocks that vendor in both places on the next render, before anything is saved.
+   */
+  const [keys, setKeys] = useState<Keyring>(loadKeyring);
   const [deployment, setDeployment] = useState<Deployment>(offlineDeployment);
   const [backgroundWorker, setBackgroundWorker] = useState(false);
   const [models, setModels] = useState<string[]>([]); const [checking, setChecking] = useState(false);
@@ -89,7 +98,9 @@ export default function App() {
   const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog), [deployment.gatewayCatalog]);
   const label = modelLabel(connection.model, demo, labels);
   const tierLabel = demo ? 'no model' : tierFor(connection.model || '');
-  const hasKey = Boolean(connection.token?.trim());
+  // What can be paid for right now, from the keyring rather than from the active connection alone.
+  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: inference === 'credits' && Boolean(connection.serverAccessToken?.trim()) }), [deployment.free, keys, connection.token, connection.provider, connection.serverAccessToken, inference]);
+  const keyed = useMemo(() => keyedProviders(reach), [reach]);
   const connectorCount = activeCount(settings, mcp);
   // The credit meter tracks whichever budget the current run actually draws from.
   const activeBalance = inference === 'free' ? freeBalance : balance;
@@ -170,7 +181,7 @@ export default function App() {
   }
   function modelNeedsKey(m: CatalogModel) {
     setPage('settings');
-    setNotice(`${m.label} needs your own ${providers[m.provider].name} key. Add it below and it unlocks straight away.`);
+    setNotice(`${m.label} needs a ${providers[m.provider].name} key. Add it below and it unlocks straight away — you do not have to save first, and no other provider is affected.`);
   }
 
   /**
@@ -220,7 +231,9 @@ export default function App() {
       if (balance.remaining <= 0) return `Platform credits for ${balance.month} are used up. Switch to your own key or wait for the monthly reset.`;
       return null;
     }
-    if (!connection.token && connection.provider !== 'custom') return 'Add your provider key in Settings, or pick a free model from the dropdown.';
+    // The key that matters is the one for the model's own provider, which may have been typed into
+    // the keyring without the connection's own token field ever being touched.
+    if (!connection.token && !keys[connection.provider ?? 'custom']?.trim() && connection.provider !== 'custom') return `Add a ${providers[connection.provider ?? 'custom'].name} key in Settings, or pick a free model from the dropdown.`;
     return null;
   }
 
@@ -323,8 +336,20 @@ export default function App() {
 
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
   async function discover() { setChecking(true); try { const ids = await listModels(requestConnection(connection), new AbortController().signal); setModels(ids); if (ids.length && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
-  function saveSettingsForm() { try { if (connection.mode === 'remote') validateConnection(connection); persistConnection(connection); setNotice(connection.saveKey && inference === 'byok' ? 'Connection saved, including your provider keys in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.'); } catch (e) { setNotice(errorText(e)); } }
-  function forget() { try { forgetKeys(); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
+  /**
+   * Save the connection and the whole keyring together. The remember checkbox governs every key,
+   * not just the active one: unticked means nothing is written and anything previously stored is
+   * cleared, while the keys stay usable in this tab until it closes.
+   */
+  function saveSettingsForm() {
+    try {
+      if (connection.mode === 'remote') validateConnection(connection);
+      saveKeyring(connection.saveKey ? keys : emptyKeyring());
+      persistConnection(connection);
+      setNotice(connection.saveKey && inference === 'byok' ? 'Connection saved, including your provider keys in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.');
+    } catch (e) { setNotice(errorText(e)); }
+  }
+  function forget() { try { forgetKeys(); setKeys(emptyKeyring()); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
   async function clearAll() {
     setConfirm(null);
     try {
@@ -332,7 +357,7 @@ export default function App() {
       setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]);
       runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null);
       setBalance(b => computeBalance([], b.pool, b.source)); setFreeBalance(b => computeBalance([], b.pool, 'local', undefined, 'free'));
-      setConnection(zeroConfigConnection());
+      setKeys(emptyKeyring()); setConnection(zeroConfigConnection());
       setNotice('Workspace cleared here and on the server.');
     } catch (e) { setNotice(errorText(e)); }
   }
@@ -387,7 +412,7 @@ export default function App() {
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
               openConnectors={() => openConnectors()} connectorCount={connectorCount}
-              model={connection.model} inference={inference} demo={demo} free={deployment.free} labels={labels} hasKey={hasKey}
+              model={connection.model} inference={inference} demo={demo} free={deployment.free} labels={labels} reach={reach} keyed={keyed}
               pickModel={pickModel} pickPreview={() => setConnection(c => ({ ...c, mode: 'demo' }))} modelNeedsKey={modelNeedsKey}
               busy={busy} ready={ready} send={send} stop={stop}
               listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice}
@@ -398,7 +423,7 @@ export default function App() {
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>Business agents lead a chat and set the focus for a workflow. Work skills run the stages. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings gateway={deployment.gateway} gatewayCatalog={deployment.gatewayCatalog} connection={connection} setConnection={setConnection} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
+        {page === 'settings' && <Settings gateway={deployment.gateway} gatewayCatalog={deployment.gatewayCatalog} connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference, demo)} stats={stats} balance={activeBalance} freeTier={inference === 'free' && !demo} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, KeyRound, Sparkles, Wallet } from 'lucide-react';
 import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
-import { providers } from '../lib/providers';
+import { providers, type Provider } from '../lib/providers';
+import { canPayFor, emptyReason, hasAnyKey, type Reach } from '../lib/availability';
 import type { FreeTier } from '../lib/store';
 
 // The model dropdown on the prompt dock.
@@ -23,7 +24,10 @@ export interface ModelPickerProps {
   free: FreeTier;
   /** Gateway labels by id, so a discovered model reads as "DeepSeek V4 Flash" and not as its id. */
   labels: Record<string, string>;
-  hasKey: boolean;
+  /** What can be paid for right now. Shared with Settings so the two cannot disagree. */
+  reach: Reach;
+  /** Providers holding a key, including one being typed. Unlocks that vendor and only that vendor. */
+  keyed: Set<Provider>;
   disabled?: boolean;
   /** `mode` is set when the group the visitor picked from decides how the run is paid for. */
   onPick: (model: string, mode?: InferenceMode) => void;
@@ -58,15 +62,21 @@ export default function ModelPicker(p: ModelPickerProps) {
 
   // The free group, straight from the server, labelled by the gateway where it has a name for it.
   const freeModels = useMemo(() => p.free.models.map(id => ({ id, label: p.labels[id] ?? findModel(id)?.label ?? id })), [p.free.models, p.labels]);
-  const keyed = catalog;
   const selected = (id: string) => !p.demo && p.model.toLowerCase() === id.toLowerCase();
   const badge = payLabel(p.inference, p.demo);
+  /**
+   * Reachable per vendor, not per session. This used to be one boolean for the whole list, taken
+   * from the active connection's token, so an Anthropic key unlocked Groq's models and a key typed
+   * for a provider you had not switched to unlocked nothing at all.
+   */
+  const payable = (m: CatalogModel) => canPayFor(m.provider, p.reach);
+  const nothingOffered = !p.free.enabled && !hasAnyKey(p.reach) && p.inference !== 'credits';
 
   function chooseKeyed(m: CatalogModel) {
     setOpen(false);
-    // Reachable now means the visitor's own key or the deployment's credits can pay for it. A
-    // model that needs neither is still selectable: it opens Settings rather than failing quietly.
-    if (p.hasKey || p.inference === 'credits') p.onPick(m.id, p.inference === 'credits' ? 'credits' : 'byok');
+    // A model nothing can pay for is still selectable: it opens Settings and names the key it
+    // needs, rather than failing quietly on send.
+    if (payable(m)) p.onPick(m.id, p.inference === 'credits' ? 'credits' : 'byok');
     else p.onNeedsKey(m);
   }
 
@@ -82,7 +92,7 @@ export default function ModelPicker(p: ModelPickerProps) {
         <span className="model-group-label"><Sparkles size={11} strokeWidth={2} />Free · no key needed</span>
         {p.free.enabled
           ? <small className="model-group-note">{freeModels.length} model{freeModels.length === 1 ? '' : 's'} this deployment funds · {p.free.monthlyCredits.toLocaleString()} credits a month, then bring your own key.</small>
-          : <small className="model-group-note">No free models available here right now. Add your own key in Settings, or try the scripted preview.</small>}
+          : <small className="model-group-note">{emptyReason(p.reach)}</small>}
         {freeModels.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={selected(m.id) ? 'model-option active' : 'model-option'} onClick={() => { setOpen(false); p.onPick(m.id, 'free'); }}>
           <strong>{m.label}{selected(m.id) && <Check size={12} />}</strong>
           <small>{p.free.providers[m.id] ?? 'this deployment'} · free here</small>
@@ -90,13 +100,16 @@ export default function ModelPicker(p: ModelPickerProps) {
       </div>
       <div className="model-group">
         <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />Deep reasoning · your key</span>
-        <small className="model-group-note">{p.hasKey ? 'Billed by your provider; no credits are drawn.' : 'Add a provider key in Settings to unlock these.'}</small>
-        {keyed.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={`model-option${selected(m.id) ? ' active' : ''}${p.hasKey || p.inference === 'credits' ? '' : ' locked'}`} onClick={() => chooseKeyed(m)}>
+        <small className="model-group-note">{p.keyed.size
+          ? `Billed by your provider; no credits are drawn. Keys held for ${[...p.keyed].map(id => providers[id].name).join(', ')}.`
+          : 'Add a provider key in Settings to unlock these. A key unlocks its own vendor as soon as you type it.'}</small>
+        {catalog.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={`model-option${selected(m.id) ? ' active' : ''}${payable(m) ? '' : ' locked'}`} onClick={() => chooseKeyed(m)}>
           <strong>{m.label}{selected(m.id) && <Check size={12} />}</strong>
-          <small>{providers[m.provider].name} · {m.weight} cr/1K on credits</small>
+          <small>{providers[m.provider].name} · {payable(m) ? (p.inference === 'credits' ? `${m.weight} cr/1K on credits` : 'on your key') : `${m.weight} cr/1K on credits`}</small>
           <span>{m.note}</span>
         </button>)}
       </div>
+      {nothingOffered && <small className="model-group-note">Nothing here is runnable yet, so the scripted preview below is the one option that works offline.</small>}
       <button type="button" role="option" aria-selected={p.demo} className={p.demo ? 'model-option preview active' : 'model-option preview'} value={PREVIEW} onClick={() => { setOpen(false); p.onPreview(); }}>
         <strong>Scripted preview{p.demo && <Check size={12} />}</strong>
         <small>No AI, no network</small>

@@ -9,7 +9,8 @@ import { retrieve } from '../src/lib/memory';
 import { chatTurn } from '../src/lib/chat';
 import { complete } from '../src/lib/provider';
 import { loadDeployment } from '../src/lib/deployment';
-import { defaultConnection, inferenceFor } from '../src/lib/providers';
+import { defaultConnection, emptyKeyring, inferenceFor } from '../src/lib/providers';
+import { canPayFor, emptyReason, fundedHere, hasAnyKey, keyedProviders } from '../src/lib/availability';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -115,6 +116,58 @@ describe('payment routing', () => {
     // every gateway model is discovered at runtime and none of them appear in the catalog.
     expect(inferenceFor('vendor/brand-new-model', undefined, ['vendor/brand-new-model'])).toBe('free');
     expect(inferenceFor('vendor/brand-new-model', undefined, [])).toBe('byok');
+  });
+});
+
+describe('what a visitor can pay for', () => {
+  const noFree = { enabled: false, models: [], providers: {}, monthlyCredits: 400, perHour: 40 };
+  const someFree = { enabled: true, models: ['deepseek/deepseek-v4-flash'], providers: { 'deepseek/deepseek-v4-flash': 'xkiro' }, monthlyCredits: 400, perHour: 40 };
+  const reach = (over: Partial<Parameters<typeof keyedProviders>[0]> = {}) => ({ free: noFree, keys: emptyKeyring(), credits: false, ...over });
+
+  it('unlocks a provider the moment its key is typed, and only that provider', () => {
+    // The gap this closes: reachability was one boolean taken from the active connection's token,
+    // so a key pasted for Anthropic while the connection pointed at the gateway unlocked nothing
+    // until you switched provider and saved — with the key sitting visible in the form.
+    const r = reach({ keys: { ...emptyKeyring(), anthropic: 'sk-ant-typed' } });
+    expect([...keyedProviders(r)]).toEqual(['anthropic']);
+    expect(canPayFor('anthropic', r)).toBe(true);
+    expect(canPayFor('openrouter', r)).toBe(false);
+    expect(canPayFor('groq', r)).toBe(false);
+    expect(hasAnyKey(r)).toBe(true);
+  });
+  it('counts the key in hand before it reaches the ring', () => {
+    const r = reach({ token: 'gsk_in-hand', provider: 'groq' as const });
+    expect(canPayFor('groq', r)).toBe(true);
+    expect(canPayFor('openai', r)).toBe(false);
+    // Whitespace is not a key.
+    expect(hasAnyKey(reach({ token: '   ', provider: 'groq' as const }))).toBe(false);
+    expect(hasAnyKey(reach({ keys: { ...emptyKeyring(), groq: '  ' } }))).toBe(false);
+  });
+  it('opens every provider on platform credits', () => {
+    const r = reach({ credits: true });
+    expect(canPayFor('anthropic', r)).toBe(true);
+    expect(canPayFor('cohere', r)).toBe(true);
+    // Credits are the deployment's budget, not a key of the visitor's.
+    expect(hasAnyKey(r)).toBe(false);
+  });
+  it('never lets the free tier decide who pays', () => {
+    // Deliberately absent from this module: a "free beats key" rule. Which budget pays is chosen
+    // in Settings and respected verbatim; this answers only whether payment is possible at all.
+    const r = reach({ free: someFree });
+    expect(canPayFor('xkiro', r)).toBe(false);
+    expect(fundedHere('deepseek/deepseek-v4-flash', someFree)).toBe(true);
+    expect(fundedHere('DEEPSEEK/DEEPSEEK-V4-FLASH', someFree)).toBe(true);
+    expect(fundedHere('  deepseek/deepseek-v4-flash  ', someFree)).toBe(true);
+    expect(fundedHere('deepseek/deepseek-chat', someFree)).toBe(false);
+    expect(fundedHere('deepseek/deepseek-v4-flash', noFree)).toBe(false);
+  });
+  it('says which kind of empty it is, because they need different answers', () => {
+    // "Nothing is funded and you have no key" and "you have a key but not for this" are the same
+    // empty list and different problems. One generic sentence sent people to check a status page
+    // when the answer was a missing field.
+    expect(emptyReason(reach())).toMatch(/funds no models and you have not added a key/);
+    expect(emptyReason(reach({ free: someFree }))).toMatch(/No models are funded here right now/);
+    expect(emptyReason(reach({ keys: { ...emptyKeyring(), openai: 'sk-x' } }))).toMatch(/No models match/);
   });
 });
 
