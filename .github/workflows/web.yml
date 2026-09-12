@@ -1,10 +1,10 @@
 name: Web edition checks
 on:
   pull_request:
-    paths: ['web/**', '.github/workflows/web.yml']
+    paths: ['packages/web/**', 'packages/agents/**', '.github/workflows/web.yml']
   push:
     branches: [main]
-    paths: ['web/**', '.github/workflows/web.yml']
+    paths: ['packages/web/**', 'packages/agents/**', '.github/workflows/web.yml']
 permissions:
   contents: read
 jobs:
@@ -12,14 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: web
+        working-directory: packages/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"

@@ -36,7 +36,7 @@ services:
     region: oregon
     branch: main
     autoDeploy: true
-    rootDir: web
+    rootDir: packages/web
     buildCommand: npm ci && npm run build
     startCommand: npm start
     # Answers 200 with no database and no provider key present, which is why it is the probe.
