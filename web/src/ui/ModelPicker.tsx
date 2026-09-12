@@ -1,37 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, KeyRound, Sparkles, Wallet } from 'lucide-react';
 import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
 import { providers } from '../lib/providers';
 import type { FreeTier } from '../lib/store';
 
-// The model dropdown that lives on the prompt dock.
+// The model dropdown on the prompt dock.
 //
-// It sorts models by what a visitor can actually run *right now*, not by vendor: the zero-config
-// group first, live and needing nothing, then the models that need a key. A locked entry is
-// still shown and still selectable — picking one opens Settings rather than silently failing —
-// because hiding them would make the free tier look like the whole product.
+// The free group is the deployment's own answer, rendered verbatim. It used to be a compiled-in
+// list of six ids the build hoped were free, cross-checked against the server's copy of the same
+// hope; both were wrong, so every entry showed "not funded here" or failed on send. There is now
+// nothing to cross-check: `free.models` is what this deployment funds, so every entry in that
+// group is runnable with no key by construction, and there is no locked state to explain.
 //
-// The split between the two groups is a shipped default, not a claim. Only the server knows
-// what this deployment funds, and /api/providers is read for that answer: it can add ids this
-// build has never seen, and it can fund one listed below as key-only.
+// Models that need a key keep their compiled entries, because a key-only model is a suggestion
+// rather than a promise — the visitor's own provider decides what it serves, and the model field
+// in Settings accepts anything typed.
 
 export interface ModelPickerProps {
   model: string;
   inference: InferenceMode;
   demo: boolean;
   free: FreeTier;
+  /** Gateway labels by id, so a discovered model reads as "DeepSeek V4 Flash" and not as its id. */
+  labels: Record<string, string>;
   hasKey: boolean;
   disabled?: boolean;
-  onPick: (model: string) => void;
+  /** `mode` is set when the group the visitor picked from decides how the run is paid for. */
+  onPick: (model: string, mode?: InferenceMode) => void;
   onPreview: () => void;
   onNeedsKey: (model: CatalogModel) => void;
 }
 
 const PREVIEW = '__preview__';
 
-export function modelLabel(model: string, demo: boolean): string {
+export function modelLabel(model: string, demo: boolean, labels: Record<string, string> = {}): string {
   if (demo) return 'Scripted preview';
-  return findModel(model)?.label ?? model ?? 'No model';
+  return labels[model] ?? findModel(model)?.label ?? model ?? 'No model';
 }
 
 /** The one-word badge next to the model name: how this run gets paid for. */
@@ -43,7 +47,6 @@ export function payLabel(inference: InferenceMode, demo: boolean): string {
 export default function ModelPicker(p: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const current = findModel(p.model);
 
   useEffect(() => {
     if (!open) return;
@@ -53,43 +56,24 @@ export default function ModelPicker(p: ModelPickerProps) {
     return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
-  // Live means the server said it funds this exact id — not that this build compiled it in as
-  // free. A deployment that opts into a frontier model with FREE_TIER_ALLOW_FRONTIER funds an
-  // id listed here as key-only, and showing it locked while the host pays for it would send the
-  // visitor to Settings for a key they do not need.
-  const live = (m: CatalogModel) => Boolean(p.free.enabled && p.free.models.some(id => id.toLowerCase() === m.id.toLowerCase()));
-  const inCatalog = new Set(catalog.map(m => m.id.toLowerCase()));
-  const servedBy = (m: CatalogModel) => p.free.providers[m.id] ?? (inCatalog.has(m.id.toLowerCase()) ? providers[m.provider].name : 'this deployment');
-  /**
-   * Models the server says it funds that this build has never heard of — a gateway added a
-   * model, or the operator set their own pool with XKIRO_FREE_MODELS. Showing them keeps the
-   * dropdown honest about what is actually runnable rather than about what was compiled in,
-   * which is the difference between a model list and a hardcoded guess.
-   */
-  const discovered: CatalogModel[] = p.free.models
-    .filter(id => !inCatalog.has(id.toLowerCase()))
-    .map(id => ({ id, provider: 'custom', label: id, tier: 'free', weight: 0.5, zeroConfig: true, note: 'Offered by this deployment.' }));
-  // What this deployment actually funds goes first. A gateway-only deployment funds a handful
-  // of a longer catalogue, and burying those below six locked entries makes a working free tier
-  // look like an empty one. Order is stable within each half, so the list never reshuffles.
-  const zeroConfig = [...catalog.filter(m => m.zeroConfig), ...discovered]
-    .map((m, i) => ({ m, i }))
-    .sort((a, b) => Number(live(b.m)) - Number(live(a.m)) || a.i - b.i)
-    .map(x => x.m);
-  const keyed = catalog.filter(m => !m.zeroConfig);
+  // The free group, straight from the server, labelled by the gateway where it has a name for it.
+  const freeModels = useMemo(() => p.free.models.map(id => ({ id, label: p.labels[id] ?? findModel(id)?.label ?? id })), [p.free.models, p.labels]);
+  const keyed = catalog;
+  const selected = (id: string) => !p.demo && p.model.toLowerCase() === id.toLowerCase();
+  const badge = payLabel(p.inference, p.demo);
 
-  // Reachable now: the deployment funds it, or the visitor's own key can pay for it.
-  const reachable = (m: CatalogModel) => live(m) || p.hasKey || p.inference === 'credits';
-  function choose(m: CatalogModel) {
+  function chooseKeyed(m: CatalogModel) {
     setOpen(false);
-    if (reachable(m)) p.onPick(m.id); else p.onNeedsKey(m);
+    // Reachable now means the visitor's own key or the deployment's credits can pay for it. A
+    // model that needs neither is still selectable: it opens Settings rather than failing quietly.
+    if (p.hasKey || p.inference === 'credits') p.onPick(m.id, p.inference === 'credits' ? 'credits' : 'byok');
+    else p.onNeedsKey(m);
   }
 
-  const badge = p.demo ? 'offline' : p.inference === 'free' ? 'free' : p.inference === 'credits' ? 'credits' : 'your key';
   return <div className="model-picker" ref={root}>
     <button type="button" className={open ? 'chip-button model-trigger open' : 'chip-button model-trigger'} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title="Choose a model">
       {p.inference === 'free' && !p.demo ? <Sparkles size={13} strokeWidth={1.75} /> : p.inference === 'credits' ? <Wallet size={13} strokeWidth={1.75} /> : <KeyRound size={13} strokeWidth={1.75} />}
-      <span className="model-name">{modelLabel(p.model, p.demo)}</span>
+      <span className="model-name">{modelLabel(p.model, p.demo, p.labels)}</span>
       <em className={`pay-badge ${p.demo ? 'offline' : p.inference}`}>{badge}</em>
       <ChevronDown size={12} />
     </button>
@@ -97,20 +81,19 @@ export default function ModelPicker(p: ModelPickerProps) {
       <div className="model-group">
         <span className="model-group-label"><Sparkles size={11} strokeWidth={2} />Free · no key needed</span>
         {p.free.enabled
-          ? <small className="model-group-note">{p.free.monthlyCredits.toLocaleString()} credits a month on this deployment, then bring your own key.</small>
-          : <small className="model-group-note">This deployment has no server keys configured, so free models are unavailable here.</small>}
-        {zeroConfig.map(m => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}${reachable(m) ? '' : ' locked'}`} onClick={() => choose(m)}>
-          <strong>{m.label}{current?.id === m.id && !p.demo && <Check size={12} />}</strong>
-          <small>{servedBy(m)} · {live(m) ? 'ready now' : p.hasKey ? 'on your key' : 'not funded here'}</small>
-          <span>{m.note}</span>
+          ? <small className="model-group-note">{freeModels.length} model{freeModels.length === 1 ? '' : 's'} this deployment funds · {p.free.monthlyCredits.toLocaleString()} credits a month, then bring your own key.</small>
+          : <small className="model-group-note">No free models available here right now. Add your own key in Settings, or try the scripted preview.</small>}
+        {freeModels.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={selected(m.id) ? 'model-option active' : 'model-option'} onClick={() => { setOpen(false); p.onPick(m.id, 'free'); }}>
+          <strong>{m.label}{selected(m.id) && <Check size={12} />}</strong>
+          <small>{p.free.providers[m.id] ?? 'this deployment'} · free here</small>
         </button>)}
       </div>
       <div className="model-group">
         <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />Deep reasoning · your key</span>
-        <small className="model-group-note">{p.hasKey ? 'Billed by your provider; no credits are drawn.' : 'Add an OpenRouter, Groq, or custom key in Settings to unlock these.'}</small>
-        {keyed.map(m => <button key={m.id} type="button" role="option" aria-selected={current?.id === m.id && !p.demo} className={`model-option${current?.id === m.id && !p.demo ? ' active' : ''}${reachable(m) ? '' : ' locked'}`} onClick={() => choose(m)}>
-          <strong>{m.label}{current?.id === m.id && !p.demo && <Check size={12} />}</strong>
-          <small>{live(m) ? `${servedBy(m)} · funded here` : `${providers[m.provider].name} · ${m.weight} cr/1K on credits`}</small>
+        <small className="model-group-note">{p.hasKey ? 'Billed by your provider; no credits are drawn.' : 'Add a provider key in Settings to unlock these.'}</small>
+        {keyed.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={`model-option${selected(m.id) ? ' active' : ''}${p.hasKey || p.inference === 'credits' ? '' : ' locked'}`} onClick={() => chooseKeyed(m)}>
+          <strong>{m.label}{selected(m.id) && <Check size={12} />}</strong>
+          <small>{providers[m.provider].name} · {m.weight} cr/1K on credits</small>
           <span>{m.note}</span>
         </button>)}
       </div>

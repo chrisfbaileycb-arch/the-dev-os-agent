@@ -11,6 +11,7 @@ import { createMcp } from './mcp.mjs';
 import { createFetcher } from './fetch.mjs';
 import { createGithub } from './github.mjs';
 import { createJobs, openJobs } from './jobs.mjs';
+import { catalogStatus, ensureCatalog } from './discovery.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 const dataFile = process.env.DATA_FILE || resolve(process.cwd(), process.env.DATA_DIR || 'data', 'heybuddy.sqlite');
 const db = openDatabase(dataFile);
@@ -35,3 +36,15 @@ const server = createServer(async (req, res) => {
 });
 server.requestTimeout = 135_000;
 server.listen(Number(process.env.PORT || 4173), '0.0.0.0', () => console.log(`Hey Buddy server is ready. Workspace data: ${dataFile}`));
+
+// Warm the gateway catalogue at boot so the first visitor does not pay for the discovery request,
+// and so the log says on startup how large the free tier actually is. Never awaited and never
+// fatal: the server must come up and answer its health check whether or not the gateway is up.
+void ensureCatalog().then(() => {
+  const status = catalogStatus();
+  if (status.discovered) console.log(`Gateway catalogue: ${status.count} models, ${status.free} free.`);
+  else console.error(`Gateway catalogue unavailable at startup: ${status.error}. The free tier stays closed until it answers.`);
+});
+// Refresh on the same clock as the cache TTL, so a model that changes tier is picked up without a
+// redeploy and a visitor never triggers a cold fetch mid-session.
+setInterval(() => void ensureCatalog(), 3_600_000).unref();

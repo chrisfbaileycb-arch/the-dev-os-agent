@@ -2,7 +2,7 @@
 
 Your AI crew. Always in your corner. A privacy-first workspace for one person or a small business: business agents you chat with, three multi-agent workflows on a browser-adapted subset of Ruflo's Agent and Task entities, a connectors hub, a knowledge hub that stays on the device, a model hub, a credit ledger, and a sandboxed browser agent. Hosted inference goes through one streaming proxy to OpenRouter, Groq, Cohere, or an approved custom endpoint.
 
-**Open it and type.** On a deployment with server provider keys, a first-time visitor gets a live streaming reply with no sign-up, no API key, and nothing to configure: the server funds a fixed allowlist of free models from its own Groq and OpenRouter keys and meters every request against a visible credit quota. Bring your own key to unlock Claude 3.5 Sonnet, DeepSeek R1, and GPT-4o, and the quota stops applying.
+**Open it and type.** On a deployment with server provider keys, a first-time visitor gets a live streaming reply with no sign-up, no API key, and nothing to configure: the server funds a set of free models from its own provider keys — discovered live from the gateway's own catalogue rather than hardcoded — and meters every request against a visible credit quota. Bring your own key to unlock Claude 3.5 Sonnet, DeepSeek R1, and GPT-4o, and the quota stops applying.
 
 Built in the United States as an original alternative to the well-known clients. Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio; original code and prompts throughout, with the Apache and MIT notices for the FreeToken and Ruflo code carried in `web/`.
 

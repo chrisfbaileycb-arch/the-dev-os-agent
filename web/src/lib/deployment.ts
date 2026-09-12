@@ -19,7 +19,18 @@ import type { FreeTier } from './store';
 export interface BillingPlan { id: string; name: string; price: string; cadence: string; checkout: string | null; }
 export interface Billing { enabled: boolean; plans: BillingPlan[]; }
 
-export interface Deployment { free: FreeTier; billing: Billing; gateway: string | null; ollamaBridge: string | null; reachable: boolean; }
+/**
+ * One model as the gateway describes it, discovered rather than compiled in.
+ *
+ * `tier` is the gateway's own word — free, paid, premium — and `free` is the server's verdict on
+ * it, which is stricter: free requires zero input and output pricing as well as the label. The UI
+ * shows `label` and sends `id`, and never has to guess at either.
+ */
+export interface GatewayModel { id: string; label: string; tier: string; free: boolean; context: number | null; vision: boolean; reasoning: boolean; }
+/** Whether discovery is working, so a deployment with an empty free tier can say why. */
+export interface GatewayCatalog { url: string | null; models: GatewayModel[]; discovered: boolean; count: number; free: number; at: string | null; error: string | null; }
+
+export interface Deployment { free: FreeTier; billing: Billing; gateway: string | null; gatewayCatalog: GatewayCatalog; ollamaBridge: string | null; reachable: boolean; }
 
 /**
  * What a visitor sees whenever the zero-config tier cannot serve them: keys unset, provider
@@ -35,13 +46,51 @@ export const FREE_TIER_WARMING = 'Public free tier warming up — enter your own
 const WARMING_CODES = new Set(['free_tier_unavailable', 'free_tier_busy']);
 export const isFreeTierWarming = (code?: string): boolean => Boolean(code && WARMING_CODES.has(code));
 
+export const emptyGatewayCatalog: GatewayCatalog = { url: null, models: [], discovered: false, count: 0, free: 0, at: null, error: null };
+
 export const offlineDeployment: Deployment = {
   free: { enabled: false, models: [], providers: {}, monthlyCredits: DEFAULT_FREE_POOL, perHour: 0 },
   billing: { enabled: false, plans: [] },
   gateway: null,
+  gatewayCatalog: emptyGatewayCatalog,
   ollamaBridge: null,
   reachable: false,
 };
+
+/**
+ * The gateway catalogue as reported, filtered rather than trusted. Ids become model names in
+ * outbound requests and labels become text on screen, so both are bounded here; an entry that
+ * does not survive that is dropped rather than repaired.
+ */
+function gatewayCatalogFrom(raw: unknown): GatewayCatalog {
+  const source = (raw ?? {}) as Partial<GatewayCatalog>;
+  const models = (Array.isArray(source.models) ? source.models : [])
+    .filter((m): m is GatewayModel => Boolean(m) && typeof m.id === 'string' && m.id.length > 0 && m.id.length <= 200)
+    .slice(0, 1000)
+    .map(m => ({
+      id: m.id,
+      label: typeof m.label === 'string' && m.label.trim() ? m.label.slice(0, 80) : m.id,
+      tier: typeof m.tier === 'string' ? m.tier.slice(0, 20) : 'unknown',
+      free: m.free === true,
+      context: Number.isFinite(m.context) ? Number(m.context) : null,
+      vision: m.vision === true,
+      reasoning: m.reasoning === true,
+    }));
+  return {
+    url: typeof source.url === 'string' && /^https:\/\//.test(source.url) ? source.url : null,
+    models,
+    discovered: source.discovered === true,
+    count: Number.isFinite(source.count) ? Number(source.count) : models.length,
+    free: Number.isFinite(source.free) ? Number(source.free) : models.filter(m => m.free).length,
+    at: typeof source.at === 'string' ? source.at : null,
+    error: typeof source.error === 'string' ? source.error.slice(0, 300) : null,
+  };
+}
+
+/** Gateway labels by id, so the dock and the status bar can name a discovered model. */
+export function labelsFrom(catalog: GatewayCatalog): Record<string, string> {
+  return Object.fromEntries(catalog.models.map(m => [m.id, m.label]));
+}
 
 /**
  * Plans as reported, filtered rather than trusted. A checkout URL is somewhere this app sends a
@@ -76,12 +125,13 @@ export async function loadDeployment(signal?: AbortSignal): Promise<Deployment> 
   try {
     const response = await fetch('/api/providers', { credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(10_000)]) });
     if (!response.ok) return offlineDeployment;
-    const body = await response.json() as { free?: Partial<FreeTier>; billing?: unknown; gateway?: unknown; ollamaBridge?: string | null };
+    const body = await response.json() as { free?: Partial<FreeTier>; billing?: unknown; gateway?: unknown; gatewayCatalog?: unknown; ollamaBridge?: string | null };
     const free = body.free ?? {};
     return {
       reachable: true,
       billing: billingFrom(body.billing),
       gateway: typeof body.gateway === 'string' && /^https:\/\//.test(body.gateway) ? body.gateway : null,
+      gatewayCatalog: gatewayCatalogFrom(body.gatewayCatalog),
       ollamaBridge: typeof body.ollamaBridge === 'string' ? body.ollamaBridge : null,
       free: {
         enabled: free.enabled === true && Array.isArray(free.models) && free.models.length > 0,
