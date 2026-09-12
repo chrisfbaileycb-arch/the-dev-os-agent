@@ -115,7 +115,11 @@ export default function App() {
   useEffect(() => {
     const controller = new AbortController();
     // Ask what this deployment can fund before promising the visitor a free model.
-    void loadDeployment(controller.signal).then(d => {
+    void loadDeployment(controller.signal, {
+      // A free-plan instance takes a moment to wake. Saying so beats a silent wait that ends in
+      // the scripted preview.
+      onRetry: () => { if (!controller.signal.aborted) setNotice('Waking this deployment up — the first request after a quiet spell takes a few seconds.'); },
+    }).then(d => {
       if (controller.signal.aborted) return;
       setDeployment(d);
       setConnection(c => {
@@ -130,10 +134,14 @@ export default function App() {
           const chosen = (served && Object.hasOwn(providers, served) ? served : c.provider ?? 'xkiro') as Provider;
           return { ...c, model: id, provider: chosen, endpoint: providers[chosen].endpoint };
         }
-        // Nothing is funded here: fall back to the scripted preview rather than a failing send.
-        return { ...c, mode: 'demo' };
+        // Only a deployment that answered and funds nothing sends us to the scripted preview. A
+        // server that never answered is a different thing entirely, and forcing demo mode on it
+        // was how a slow wake-up turned into "no AI, no network" for the rest of the session.
+        return d.reachable ? { ...c, mode: 'demo' } : c;
       });
       if (!d.free.enabled && d.reachable) setNotice(FREE_TIER_WARMING);
+      else if (!d.reachable) setNotice('Could not reach this deployment, so no model is selected yet. Reload to try again, or add your own key in Settings.');
+      else setNotice('');
     });
     // Whether a Render background worker is deployed alongside this web service. Workflows run
     // in the browser either way; this only reports that the heavier path exists.

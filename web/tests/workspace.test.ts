@@ -9,7 +9,7 @@ import { activeTools, defaultSettings, parseRepo } from '../src/lib/connectors';
 import { retrieve } from '../src/lib/memory';
 import { chatTurn } from '../src/lib/chat';
 import { complete } from '../src/lib/provider';
-import { loadDeployment } from '../src/lib/deployment';
+import { loadDeployment, offlineDeployment } from '../src/lib/deployment';
 import { defaultConnection, emptyKeyring, inferenceFor } from '../src/lib/providers';
 import { canPayFor, emptyReason, fundedHere, hasAnyKey, keyedProviders } from '../src/lib/availability';
 
@@ -309,6 +309,38 @@ describe('plans and checkout', () => {
     expect(billing.plans[1].price).toBe('$24.90');
   });
 
+  it('waits out a deployment that is still waking instead of giving up on it', async () => {
+    // The bug this pins: on a free-plan instance the first request wakes the server and can take
+    // longer than one timeout allows. A single attempt then reported the deployment unreachable,
+    // and the app dropped into the scripted preview for the whole session over a cold start.
+    let calls = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      calls++;
+      if (calls < 3) throw new Error('timeout');
+      return reply(undefined);
+    }));
+    const retries: number[] = [];
+    const d = await loadDeployment(undefined, { onRetry: n => retries.push(n), sleep: async () => {} });
+    expect(calls).toBe(3);
+    expect(retries).toEqual([1, 2]);
+    expect(d.reachable).toBe(true);
+  });
+  it('gives up after the last attempt and reports itself unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('down'); }));
+    const d = await loadDeployment(undefined, { attempts: 2, sleep: async () => {} });
+    expect(d).toEqual(offlineDeployment);
+    // reachable false is the flag App uses to keep the connection alone rather than force demo mode.
+    expect(d.reachable).toBe(false);
+  });
+  it('does not retry into a closed tab', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let calls = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => { calls++; throw new Error('aborted'); }));
+    await loadDeployment(controller.signal, { attempts: 5, sleep: async () => {} });
+    expect(calls).toBe(1);
+  });
+
   it('treats a deployment with no checkout as not selling anything', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => reply({ plans: [{ id: 'starter', name: 'Starter', price: '$12.90', cadence: 'per month', checkout: null }] })));
     expect((await loadDeployment()).billing.enabled).toBe(false);
@@ -320,7 +352,9 @@ describe('plans and checkout', () => {
 
   it('falls back to a deployment that sells nothing when the server is unreachable', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
-    const d = await loadDeployment();
+    // `sleep` is stubbed because the real backoff waits out a waking instance, which is the point
+    // of it and not something a unit test should sit through.
+    const d = await loadDeployment(undefined, { sleep: async () => {} });
     expect(d.reachable).toBe(false);
     expect(d.billing.enabled).toBe(false);
   });

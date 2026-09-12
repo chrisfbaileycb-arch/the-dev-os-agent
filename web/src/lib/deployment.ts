@@ -121,9 +121,55 @@ function providerMap(raw: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
 }
 
-export async function loadDeployment(signal?: AbortSignal): Promise<Deployment> {
+/**
+ * How long to wait for /api/providers, and how many times to ask.
+ *
+ * The old single attempt with a 10 second ceiling was tuned for a warm server, and this one is
+ * not always warm: on Render's free plan the instance sleeps after inactivity and the first
+ * request wakes it, which routinely takes longer than ten seconds. That timeout then aborted the
+ * only attempt, the browser concluded the deployment funded nothing, and the app dropped into the
+ * scripted preview for the rest of the session — so the visitor's first impression of a working
+ * free tier was "no AI, no network", curable only by a reload they had no reason to try.
+ *
+ * A waking instance is a normal condition, not an error, so it is waited out and retried.
+ */
+export const DEPLOYMENT_TIMEOUT_MS = 20_000;
+export const DEPLOYMENT_ATTEMPTS = 3;
+const BACKOFF_MS = [1_500, 4_000];
+
+export interface LoadOptions {
+  attempts?: number;
+  timeoutMs?: number;
+  /** Called before each retry, so the UI can say the deployment is waking rather than sit blank. */
+  onRetry?: (attempt: number) => void;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const nap = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/**
+ * What this deployment can do, retried while it wakes up.
+ *
+ * Returns `offlineDeployment` only once every attempt has failed. `reachable` is the field that
+ * matters to the caller: it separates "the server answered and funds nothing", which is a real
+ * state worth acting on, from "the server did not answer", which is a state to wait out.
+ */
+export async function loadDeployment(signal?: AbortSignal, options: LoadOptions = {}): Promise<Deployment> {
+  const attempts = Math.max(1, options.attempts ?? DEPLOYMENT_ATTEMPTS);
+  const sleep = options.sleep ?? nap;
+  for (let attempt = 1; ; attempt++) {
+    const result = await attemptLoad(signal, options.timeoutMs ?? DEPLOYMENT_TIMEOUT_MS);
+    if (result.reachable) return result;
+    // The caller went away — a closed tab is not something to retry into.
+    if (signal?.aborted || attempt >= attempts) return offlineDeployment;
+    options.onRetry?.(attempt);
+    await sleep(BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)]);
+  }
+}
+
+async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): Promise<Deployment> {
   try {
-    const response = await fetch('/api/providers', { credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(10_000)]) });
+    const response = await fetch('/api/providers', { credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(timeoutMs)]) });
     if (!response.ok) return offlineDeployment;
     const body = await response.json() as { free?: Partial<FreeTier>; billing?: unknown; gateway?: unknown; gatewayCatalog?: unknown; ollamaBridge?: string | null };
     const free = body.free ?? {};
