@@ -51,14 +51,39 @@ export function normalizeModel(provider, model) {
   if (typeof model !== 'string' || !model.trim() || model.length > 200) throw new HttpError(400, 'A model identifier is required.');
   const value = model.trim(); return provider === 'groq' ? value.replace(/^groq\//, '') : value;
 }
+/**
+ * A credential as it can safely become an Authorization header.
+ *
+ * Surrounding whitespace is stripped rather than rejected. A key is nearly always pasted into a
+ * dashboard field or a .env line, and a trailing newline is what that paste leaves behind — the
+ * operator's intent is unambiguous and refusing it helps nobody. What cannot be repaired is a
+ * character that is illegal in a header at all: Node throws ERR_INVALID_CHAR while constructing
+ * the request, before a byte reaches the network, which surfaces as an unreachable host and
+ * sends everyone looking at DNS. Such a key is reported as absent so the caller can say so.
+ *
+ * This used to apply only to the key a visitor supplied. The deployment's own key went into the
+ * header raw, on the reasoning that the operator's own configuration is trusted — but trust was
+ * never the question. A newline is not an attack, it is a paste, and it breaks the request
+ * either way. Sanitising the credential we distrusted and not the one we relied on is precisely
+ * backwards, because only one of the two takes the whole free tier down when it is wrong.
+ */
+export const HEADER_SAFE = /^[\x20-\x7e]*$/;
+export function cleanKey(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return HEADER_SAFE.test(trimmed) ? trimmed : '';
+}
+/** Present but unusable — the case worth naming in a log, and the one silence made unfindable. */
+export const malformed = value => typeof value === 'string' && value.trim().length > 0 && !cleanKey(value);
+
 export function keyFor(body, env = process.env) {
   if (body.apiKey !== undefined && (typeof body.apiKey !== 'string' || body.apiKey.length > 8192 || /[\r\n]/.test(body.apiKey))) throw new HttpError(400, 'Invalid API key format.');
-  if (body.apiKey?.trim()) return body.apiKey.trim();
+  if (body.apiKey?.trim()) return cleanKey(body.apiKey);
   const expected = env.SERVER_CREDIT_ACCESS_TOKEN;
   const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
   if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
-  return env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]] || '';
+  return cleanKey(env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]]);
 }
 /**
  * Who pays for this request, decided entirely on the server.
@@ -77,8 +102,12 @@ export function fundingFor(body, env = process.env) {
   if (supplied) return { mode: typeof body.apiKey === 'string' && body.apiKey.trim() ? 'byok' : 'credits', apiKey: supplied };
   if (env.FREE_TIER_DISABLED === 'true') return { mode: 'none', apiKey: '' };
   const entry = freeModel(body.model, env);
-  const key = entry && env[entry.envKey];
-  return key ? { mode: 'free', apiKey: key, entry } : { mode: 'none', apiKey: '' };
+  const configured = entry && env[entry.envKey];
+  const key = cleanKey(configured);
+  // A key that is set but unusable is not the same as one that is unset, and that difference is
+  // the entire diagnosis. Reported here so the handler can name the variable in the log.
+  if (!key) return { mode: 'none', apiKey: '', ...(malformed(configured) ? { malformedKey: entry.envKey } : {}) };
+  return { mode: 'free', apiKey: key, entry };
 }
 
 // Text content, or OpenAI-style parts: text plus up to five bounded data-URL or https images.
@@ -224,6 +253,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (!apiKey && provider !== 'custom' && !(path === '/api/models' && provider === 'openrouter')) {
         // A model on the free allowlist that is simply not funded right now reads as a warming-up
         // tier, not as the visitor's mistake; anything else genuinely needs their own key.
+        if (funding.malformedKey) logUpstream(provider, target.base, `${funding.malformedKey} is set but holds a character that cannot go in a header — check for a stray newline or space`, log);
         throw freeModel(body.model, env)
           ? new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable')
           : new HttpError(401, 'That model needs a key. Pick a free model, or add your own OpenRouter or Groq key in Settings.', 'key_required');
@@ -239,7 +269,8 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       // Anthropic authenticates with x-api-key and a pinned API version rather than a bearer
       // token; every other provider here takes Authorization.
       const headers = { 'Content-Type': 'application/json', Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? (target.nativeAnthropic ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION } : { Authorization: `Bearer ${apiKey}` }) : {}) };
-      if (provider === 'openrouter') { headers['HTTP-Referer'] = env.APP_ORIGIN || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
+      // APP_ORIGIN is operator-set and also becomes a header, so it gets the same treatment.
+      if (provider === 'openrouter') { headers['HTTP-Referer'] = cleanKey(env.APP_ORIGIN) || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
       let payload; let suffix;
       if (path === '/api/chat') {
         if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || !validContent(m.content))) throw new HttpError(400, 'messages must contain standard role/content text pairs, optionally with up to five image parts.');
