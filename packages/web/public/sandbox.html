@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>html,body{margin:0;padding:0;min-height:100%;font:13px/1.5 -apple-system,sans-serif;}</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// The generated-app sandbox shell.
+//
+// A `srcdoc` iframe inherits its embedding document's Content-Security-Policy and intersects it
+// with anything the srcdoc content sets for itself, so the main app's strict script-src (no
+// 'unsafe-inline', for the main app's own real protection against injected scripts) silently
+// blocked every generated app's inline bundle — sandboxed or not, the inherited policy still
+// applied. A real navigation does not inherit anything: this file is fetched as its own HTTP
+// response, and the server gives *this one path* its own, separately-scoped CSP that allows what
+// a generated app legitimately needs to run (see server/index.mjs). Everything else on this
+// origin keeps the strict policy; only this fixed, server-authored shell gets the looser one, and
+// what's injected into it never sees this origin's cookies or storage — the iframe embedding this
+// page still carries sandbox="allow-scripts" with no allow-same-origin, so this document's origin
+// is opaque no matter which URL served it.
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || typeof data !== 'object' || typeof data.html !== 'string') return;
+  document.open();
+  document.write(data.html);
+  document.close();
+});
+</script>
+</body>
+</html>

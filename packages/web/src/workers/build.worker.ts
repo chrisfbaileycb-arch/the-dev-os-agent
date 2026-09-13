@@ -28,9 +28,18 @@ function formatMessage(m: { text: string; location: { file: string; line: number
   return m.location ? `${m.location.file}:${m.location.line}: ${m.text}` : m.text;
 }
 
-/** A single self-contained HTML document: the bundle inlined, sandboxed-iframe-ready. */
+/**
+ * A single self-contained HTML document: the bundle inlined, ready to hand to the sandbox shell.
+ *
+ * No CSP meta tag here — a `srcdoc` document inherits and intersects its embedding page's policy
+ * with anything it declares for itself, so a meta tag here could only ever narrow what the main
+ * app's own strict policy already allows, never widen it. That is why this HTML is delivered
+ * through postMessage into public/sandbox.html rather than straight into a `srcdoc` iframe: that
+ * page is a real navigation with its own server-set policy, which is where the permissive rules
+ * this bundle needs actually live. See server/index.mjs's SANDBOX_CSP for the rest of that story.
+ */
 function htmlShell(js: string, css: string): string {
-  return `<!doctype html>\n<html><head><meta charset="utf-8" />\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'" />\n<style>html,body{margin:0;padding:0;min-height:100%;} ${css}</style>\n</head><body><div id="root"></div>\n<script>\ntry {\n${js}\n} catch (err) {\n  document.body.innerHTML = '<pre style="color:#c0392b;white-space:pre-wrap;padding:12px;font:12px/1.5 monospace;">Runtime error: ' + (err && err.stack || err) + '</pre>';\n}\n</script>\n</body></html>`;
+  return `<!doctype html>\n<html><head><meta charset="utf-8" />\n<style>html,body{margin:0;padding:0;min-height:100%;} ${css}</style>\n</head><body><div id="root"></div>\n<script>\ntry {\n${js}\n} catch (err) {\n  document.body.innerHTML = '<pre style="color:#c0392b;white-space:pre-wrap;padding:12px;font:12px/1.5 monospace;">Runtime error: ' + (err && err.stack || err) + '</pre>';\n}\n</script>\n</body></html>`;
 }
 
 async function build(req: BuildRequest): Promise<BuildResponse> {
@@ -39,8 +48,8 @@ async function build(req: BuildRequest): Promise<BuildResponse> {
   for (const f of req.files) files[f.path] = f.content;
   if (req.kind === 'html') {
     // No bundling needed: the html file is the whole app, referenced siblings are inlined by hand
-    // if present (a css/js file next to it) since a sandboxed srcdoc iframe has no server to fetch
-    // them from.
+    // if present (a css/js file next to it) since the sandbox shell has no server-side reach into
+    // this project to fetch them from.
     let html = files[req.entry] ?? '';
     for (const [path, content] of Object.entries(files)) {
       if (path === req.entry) continue;

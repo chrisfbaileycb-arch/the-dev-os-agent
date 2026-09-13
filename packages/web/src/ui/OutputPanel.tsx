@@ -9,6 +9,19 @@ import PushToGithub from './PushToGithub';
 // a sandboxed iframe — instead of the text dump this panel always showed before. A reply that
 // doesn't (an explanation, a one-off snippet, plain conversation) still gets exactly that text
 // dump; detecting nothing is not a failure state here; it is most replies.
+//
+// The preview iframe loads public/sandbox.html (a real navigation, so it gets its own
+// server-set policy rather than inheriting this page's) and the finished bundle reaches it by
+// postMessage on load, not by `srcDoc` — see that file and SANDBOX_CSP in server/index.mjs for
+// why a `srcdoc` document can't be handed a policy of its own permissive enough to run it.
+
+function SandboxFrame({ html }: { html: string }) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  return <iframe
+    ref={ref} title="App preview" className="output-frame" sandbox="allow-scripts" src="/sandbox.html"
+    onLoad={() => ref.current?.contentWindow?.postMessage({ html }, '*')}
+  />;
+}
 
 export interface OutputPanelProps {
   content: string;
@@ -17,7 +30,7 @@ export interface OutputPanelProps {
   openConnectors: () => void;
 }
 
-type BuildState = { kind: 'idle' } | { kind: 'building' } | { kind: 'ready'; html: string } | { kind: 'error'; errors: string[] };
+type BuildState = { kind: 'idle' } | { kind: 'building' } | { kind: 'ready'; html: string; seq: number } | { kind: 'error'; errors: string[] };
 
 export default function OutputPanel(p: OutputPanelProps) {
   const [tab, setTab] = useState<'preview' | 'code'>('preview');
@@ -26,6 +39,9 @@ export default function OutputPanel(p: OutputPanelProps) {
   const [build, setBuild] = useState<BuildState>({ kind: 'idle' });
   const [pushOpen, setPushOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  // A fresh sandbox iframe per build, even a build that lands byte-identical HTML to the last
+  // one — the id, not the content, is what tells SandboxFrame a new navigation is needed.
+  const seqRef = useRef(0);
 
   useEffect(() => {
     const next = parseProject(p.content);
@@ -38,7 +54,7 @@ export default function OutputPanel(p: OutputPanelProps) {
     setBuild({ kind: 'building' });
     void buildProject(next, controller.signal).then(result => {
       if (controller.signal.aborted) return;
-      setBuild(result.ok ? { kind: 'ready', html: result.html } : { kind: 'error', errors: result.errors });
+      setBuild(result.ok ? { kind: 'ready', html: result.html, seq: ++seqRef.current } : { kind: 'error', errors: result.errors });
     }).catch(error => { if (!controller.signal.aborted) setBuild({ kind: 'error', errors: [error instanceof Error ? error.message : 'The build failed.'] }); });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -51,7 +67,7 @@ export default function OutputPanel(p: OutputPanelProps) {
     setBuild({ kind: 'building' });
     void buildProject(project, controller.signal).then(result => {
       if (controller.signal.aborted) return;
-      setBuild(result.ok ? { kind: 'ready', html: result.html } : { kind: 'error', errors: result.errors });
+      setBuild(result.ok ? { kind: 'ready', html: result.html, seq: ++seqRef.current } : { kind: 'error', errors: result.errors });
     }).catch(error => { if (!controller.signal.aborted) setBuild({ kind: 'error', errors: [error instanceof Error ? error.message : 'The build failed.'] }); });
   }
 
@@ -76,7 +92,7 @@ export default function OutputPanel(p: OutputPanelProps) {
       {project && tab === 'preview' && <div className="output-preview">
         {build.kind === 'building' && <div className="preview-empty"><LoaderCircle size={20} className="spin" /><span>Building {project.kind === 'react' ? 'the React app' : 'the app'}…</span></div>}
         {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
-        {build.kind === 'ready' && <iframe key={build.html.length} title="App preview" className="output-frame" sandbox="allow-scripts" srcDoc={build.html} />}
+        {build.kind === 'ready' && <SandboxFrame key={build.seq} html={build.html} />}
       </div>}
 
       {project && tab === 'code' && <div className="output-code">

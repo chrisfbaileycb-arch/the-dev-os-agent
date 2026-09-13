@@ -15,6 +15,7 @@ import { createGithub } from './github.mjs';
 import { createJobs, openJobs } from './jobs.mjs';
 import { createAuth } from './auth.mjs';
 import { catalogStatus, ensureCatalog } from './discovery.mjs';
+import { cspFor } from './csp.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 // Workspace data: Postgres when DATABASE_URL is set, SQLite otherwise.
 // Jobs are always SQLite — they are transient hand-offs and must never carry credentials.
@@ -36,12 +37,6 @@ const handlers = [auth, createProxy({ db }), createState({ db }), createBrowse()
 // Finished jobs are a transient hand-off, not a record; the run itself lands in the workspace store.
 setInterval(() => jobs.prune(new Date(Date.now() - 24 * 3_600_000).toISOString()), 3_600_000).unref();
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png' };
-// script-src carries 'wasm-unsafe-eval' and connect-src reaches esm.sh for exactly one reason:
-// the live-preview bundler. It runs esbuild-wasm in a same-origin worker to compile a generated
-// project and fetches its npm imports from esm.sh at build time, so the sandboxed preview iframe
-// itself never needs network access — the finished bundle is inlined into that iframe's srcdoc.
-// Nothing else on this app needed either grant; both are as narrow as the feature requires.
-const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://esm.sh; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 // Hashed assets are immutable; the shell, the manifest, and the service worker must revalidate so a new build reaches installed apps.
 const cacheControl = (file) => file.startsWith(root + 'assets' + sep) ? 'public, max-age=31536000, immutable' : 'no-cache';
 const server = createServer(async (req, res) => {
@@ -52,7 +47,7 @@ const server = createServer(async (req, res) => {
     const file = resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
     if (!file.startsWith(root.endsWith(sep) ? root : root + sep)) throw new Error('Invalid path');
     if (!(await stat(file)).isFile()) throw new Error('Not a file');
-    res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': cacheControl(file), 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': CSP });
+    res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': cacheControl(file), 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': cspFor(file, root) });
     if (req.method === 'HEAD') res.end(); else createReadStream(file).on('error', () => res.destroy()).pipe(res);
   } catch { res.writeHead(404); res.end('Not found'); }
 });
