@@ -3,22 +3,22 @@ import { esmUrl, resolveRelative } from '../src/lib/bundle/plugin';
 
 describe('esmUrl', () => {
   it('points an unpinned bare specifier at esm.sh unversioned', () => {
-    expect(esmUrl('react', {})).toBe('https://esm.sh/react?bundle');
+    expect(esmUrl('react', {})).toBe('https://esm.sh/react');
   });
   it('pins the version from the project\'s own package.json when present', () => {
-    expect(esmUrl('react', { react: '18.3.1' })).toBe('https://esm.sh/react@18.3.1?bundle');
+    expect(esmUrl('react', { react: '18.3.1' })).toBe('https://esm.sh/react@18.3.1');
   });
   it('strips a semver range prefix before pinning', () => {
-    expect(esmUrl('react-dom', { 'react-dom': '^18.3.1' })).toBe('https://esm.sh/react-dom@18.3.1?bundle');
+    expect(esmUrl('react-dom', { 'react-dom': '^18.3.1' })).toBe('https://esm.sh/react-dom@18.3.1');
   });
   it('keeps a subpath export attached to its package, not swallowed into the version', () => {
-    expect(esmUrl('react-dom/client', { 'react-dom': '18.3.1' })).toBe('https://esm.sh/react-dom@18.3.1/client?bundle');
+    expect(esmUrl('react-dom/client', { 'react-dom': '18.3.1' })).toBe('https://esm.sh/react-dom@18.3.1/client');
   });
   it('treats a scoped package\'s first two segments as its name', () => {
-    expect(esmUrl('@radix-ui/react-slot', { '@radix-ui/react-slot': '1.0.0' })).toBe('https://esm.sh/@radix-ui/react-slot@1.0.0?bundle');
+    expect(esmUrl('@radix-ui/react-slot', { '@radix-ui/react-slot': '1.0.0' })).toBe('https://esm.sh/@radix-ui/react-slot@1.0.0');
   });
   it('keeps a scoped package\'s subpath intact', () => {
-    expect(esmUrl('@radix-ui/react-slot/dist/foo', {})).toBe('https://esm.sh/@radix-ui/react-slot/dist/foo?bundle');
+    expect(esmUrl('@radix-ui/react-slot/dist/foo', {})).toBe('https://esm.sh/@radix-ui/react-slot/dist/foo');
   });
 });
 
