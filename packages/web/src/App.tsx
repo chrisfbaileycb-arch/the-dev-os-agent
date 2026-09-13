@@ -19,7 +19,7 @@ import { clearProviderStorage, emptyKeyring, forgetKeys, inferenceFor, initialPr
 import { keyedProviders, type Reach } from './lib/availability';
 import { defaultPersonaId, personaById, workflows, type Persona } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
-import { clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, storage, sync, loadWorkspace, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
+import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
@@ -87,6 +87,8 @@ export default function App() {
   const [mcp, setMcpState] = useState<McpConnection[]>(loadConnections);
   const [settings, setSettingsState] = useState<ConnectorSettings>(loadSettings);
   const [stats, setStats] = useState<Stats | null>(null); const [listening, setListening] = useState(false);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
   const abortRef = useRef<AbortController | null>(null); const worker = useRef<Worker | null>(null); const recognition = useRef<Recognition | null>(null);
   const approvedRuns = useRef(false); const endRef = useRef<HTMLDivElement>(null);
 
@@ -112,6 +114,17 @@ export default function App() {
   useEffect(() => {
     const controller = new AbortController();
     // Ask what this deployment can fund before promising the visitor a free model.
+    // Auth check first: if the visitor has a signed-in session, override the anonymous workspace
+    // id so that loadWorkspace() below pulls the account's data instead of the browser's local copy.
+    void Promise.all([authMe(), authConfig()]).then(([user, cfg]) => {
+      if (controller.signal.aborted) return;
+      if (cfg?.googleEnabled !== undefined) setGoogleEnabled(cfg.googleEnabled);
+      if (user) { setAuthUser(user); setWorkspaceId(user.workspaceId); }
+      // Surface OAuth error if Google redirected back with an error param.
+      const authErr = new URLSearchParams(location.search).get('auth_error');
+      if (authErr) { setNotice('Sign-in failed. Please try again.'); history.replaceState(null, '', location.pathname); }
+    });
+
     void loadDeployment(controller.signal, {
       // A free-plan instance takes a moment to wake. Saying so beats a silent wait that ends in
       // the scripted preview.
@@ -390,7 +403,7 @@ export default function App() {
 
   const PersonaIcon = iconFor(persona.icon);
   return <div className={collapsed ? 'app rail-collapsed' : 'app'}>
-    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} />
+    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} />
     <div className="main">
       {(!online || notice) && <div className="notices">
         {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. The scripted preview still works; hosted models need a connection.</span></div>}

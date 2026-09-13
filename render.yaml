@@ -136,6 +136,19 @@ services:
       - key: MCP_MAX_PER_HOUR
         value: "120"
 
+      # --- Google OAuth (optional) -------------------------------------------------------
+      # Set all three to enable "Sign in with Google". Without them the sign-in button is hidden
+      # and all workspace data stays in the anonymous browser-minted workspace id.
+      # Create credentials at console.cloud.google.com → APIs & Services → Credentials.
+      # Authorized redirect URI: https://<your-domain>/auth/google/callback
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      # Any long random string: openssl rand -hex 32
+      - key: SESSION_SECRET
+        sync: false
+
       # APP_ORIGIN is deliberately unset. The server falls back to matching the request Origin
       # against its own Host, which is correct on Render. Set it only to pin a single external
       # origin, and never to a guessed URL: a wrong value makes every API call fail with 403.
