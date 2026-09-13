@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Database, FileText, Github, Globe, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { refreshTools, type McpConnection } from '../lib/mcp';
-import { parseRepo, type ConnectorSettings } from '../lib/connectors';
+import { type ConnectorSettings } from '../lib/connectors';
 import { useDismiss } from './useDismiss';
 import type { Knowledge } from '../lib/types';
 
@@ -34,7 +34,6 @@ const TABS: { id: ConnectorTab; label: string; icon: typeof Github; blurb: strin
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
 export default function Connectors(p: ConnectorsProps) {
-  const [repo, setRepo] = useState('');
   const [url, setUrl] = useState(''); const [name, setName] = useState(''); const [token, setToken] = useState(''); const [saveToken, setSaveToken] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -42,16 +41,6 @@ export default function Connectors(p: ConnectorsProps) {
   if (!p.open) return null;
 
   const patch = (partial: Partial<ConnectorSettings>) => p.setSettings({ ...p.settings, ...partial });
-
-  function addRepo() {
-    const parsed = parseRepo(repo);
-    if (!parsed) { p.notify('Enter a repository as owner/name, or paste its GitHub URL.'); return; }
-    const full = `${parsed.owner}/${parsed.repo}`;
-    if (p.settings.github.repos.includes(full)) { p.notify(`${full} is already in the list.`); setRepo(''); return; }
-    patch({ github: { ...p.settings.github, enabled: true, repos: [...p.settings.github.repos, full].slice(0, 10) } });
-    setRepo('');
-    p.notify(`${full} is available to your agents through github_repo, github_files, and github_issues.`);
-  }
 
   async function check(conn: McpConnection): Promise<McpConnection> {
     try { const tools = await refreshTools(conn, AbortSignal.timeout(45_000)); return { ...conn, tools, checkedAt: new Date().toISOString(), error: undefined }; }
@@ -69,7 +58,7 @@ export default function Connectors(p: ConnectorsProps) {
   async function refresh(conn: McpConnection) { setBusyId(conn.id); const checked = await check(conn); setBusyId(null); p.setMcp(p.mcp.map(c => c.id === conn.id ? checked : c)); }
 
   const mcpTools = p.mcp.filter(c => c.enabled).reduce((n, c) => n + c.tools.length, 0);
-  const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? p.settings.github.repos.length || 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools };
+  const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools };
 
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) p.close(); }}>
     <section className="drawer" role="dialog" aria-modal="true" aria-labelledby="connectors-title">
@@ -90,8 +79,6 @@ export default function Connectors(p: ConnectorsProps) {
       {p.tab === 'github' && <section className="panel">
         <div className="panel-head"><h3>GitHub</h3><label className="switch"><input type="checkbox" checked={p.settings.github.enabled} onChange={e => patch({ github: { ...p.settings.github, enabled: e.target.checked } })} />Enabled</label></div>
         <p className="help">Read-only. Your agents get <code>github_repo</code> (description, README, or any text file), <code>github_files</code> (the file listing), and <code>github_issues</code> (recent issues, or one issue with its comments). This connector can only ever issue GET requests, so nothing here can write to a repository.</p>
-        <label className="grow">Repository<span className="row gap"><input value={repo} placeholder="owner/name, or a github.com URL" onChange={e => setRepo(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addRepo(); } }} /><button className="button small" onClick={addRepo}><Plus size={13} />Add</button></span></label>
-        {p.settings.github.repos.length > 0 && <div className="chip-row">{p.settings.github.repos.map(r => <span key={r} className="chip"><Github size={11} />{r}<button aria-label={`Remove ${r}`} onClick={() => patch({ github: { ...p.settings.github, repos: p.settings.github.repos.filter(x => x !== r) } })}><X size={11} /></button></span>)}</div>}
         <label>Personal access token (optional)<input type="password" autoComplete="off" spellCheck={false} value={p.settings.github.token} placeholder="ghp_… for private repos and a higher rate limit" onChange={e => patch({ github: { ...p.settings.github, token: e.target.value } })} /></label>
         <label className="check"><input type="checkbox" checked={p.settings.github.saveToken} onChange={e => patch({ github: { ...p.settings.github, saveToken: e.target.checked } })} />Remember this token in this browser</label>
         <p className="help">Without a token GitHub allows 60 calls an hour and public repositories only. A fine-grained token with read-only Contents and Issues access raises that to 5,000 and reaches your private repositories. The token is sent to GitHub through this app's proxy and is never stored on the server.</p>
