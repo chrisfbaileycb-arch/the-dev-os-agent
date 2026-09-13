@@ -7,7 +7,7 @@ import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
-import OutputPanel from './ui/OutputPanel';
+import OutputPanel, { type PreviewSplit } from './ui/OutputPanel';
 import Pricing from './ui/Pricing';
 import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
@@ -18,6 +18,7 @@ import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
+import { defaultModel } from './lib/modelChoices';
 import { defaultPersonaId, personaById, workflows, type Persona } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
 import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
@@ -85,6 +86,12 @@ export default function App() {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
   const [previewOpen, setPreviewOpen] = useState(false);
+  /**
+   * The chat/preview split, remembered like the rail is. `even` is the AI-Studio two-pane default;
+   * the other two focus one side without ever fully hiding the other.
+   */
+  const [previewSplit, setPreviewSplit] = useState<PreviewSplit>(() => { try { const v = localStorage.getItem('hb-split'); return v === 'chat' || v === 'preview' ? v : 'even'; } catch { return 'even'; } });
+  const chooseSplit = (next: PreviewSplit) => { try { localStorage.setItem('hb-split', next); } catch { /* storage unavailable; the choice lasts the session */ } setPreviewSplit(next); };
   const [mcp, setMcpState] = useState<McpConnection[]>(loadConnections);
   const [settings, setSettingsState] = useState<ConnectorSettings>(loadSettings);
   const [stats, setStats] = useState<Stats | null>(null); const [listening, setListening] = useState(false);
@@ -371,7 +378,7 @@ export default function App() {
   }
 
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
-  async function discover() { setChecking(true); try { const ids = await listModels(requestConnection(connection), new AbortController().signal); setModels(ids); if (ids.length && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
+  async function discover() { setChecking(true); try { const ids = await listModels(requestConnection(connection), new AbortController().signal); setModels(ids); if (ids.length && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: defaultModel(connection.model, ids, deployment.free.models) ?? ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
   /**
    * Save the connection and the whole keyring together. The remember checkbox governs every key,
    * not just the active one: unticked means nothing is written and anything previously stored is
@@ -411,7 +418,7 @@ export default function App() {
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
       </div>}
       <div className="content">
-        {page === 'workspace' && <div className={previewOpen ? 'workspace with-preview' : 'workspace'}>
+        {page === 'workspace' && <div className={previewOpen ? `workspace with-preview split-${previewSplit}` : 'workspace'}>
           <aside className="sessions">
             <div className="sessions-head"><strong>Sessions</strong><button className="icon-button" aria-label="New session" title="New session" disabled={busy} onClick={newSession}><Plus size={14} /></button></div>
             {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => { setActiveId(s.id); setPersonaId(s.persona); }}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
@@ -464,6 +471,7 @@ export default function App() {
             close={() => setPreviewOpen(false)}
             github={settings.github}
             openConnectors={() => openConnectors('github')}
+            split={previewSplit} setSplit={chooseSplit}
           />}
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}

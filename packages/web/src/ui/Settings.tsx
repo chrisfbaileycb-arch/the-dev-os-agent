@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Check, Coins, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wallet } from 'lucide-react';
-import { catalog, findModel, weightFor, type CatalogModel, type InferenceMode } from '../lib/catalog';
+import { findModel, weightFor, type InferenceMode } from '../lib/catalog';
+import { modelChoices } from '../lib/modelChoices';
 import { inferenceFor, providers, switchProvider, type Keyring, type Provider } from '../lib/providers';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { GatewayCatalog } from '../lib/deployment';
@@ -60,6 +61,8 @@ export default function Settings(p: SettingsProps) {
   const current = findModel(c.model);
   const inference: InferenceMode = c.inference ?? 'byok';
   const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch });
+  /** The manual model-id field starts hidden: discovery is the normal path, and the raw field is the escape hatch. */
+  const [manualModel, setManualModel] = useState(false);
 
   /**
    * A key belongs to a provider, not to the session, so all of them are editable at once and
@@ -85,12 +88,9 @@ export default function Settings(p: SettingsProps) {
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [p.free.models, p.gatewayCatalog.models]);
 
-  /**
-   * Model ids worth suggesting for a key-funded run: the compiled key-only catalog, plus whatever
-   * the gateway serves beyond its free tier. Suggestions, not a catalogue — the field below still
-   * accepts anything typed, because the visitor's provider decides what it serves, not this build.
-   */
-  const paidGateway = useMemo(() => p.gatewayCatalog.models.filter(m => !m.free), [p.gatewayCatalog.models]);
+  /** What the Select Model dropdown offers: the live discovery list, filtered to chat models and labelled readably. */
+  const choices = useMemo(() => modelChoices(p.models, p.gatewayCatalog.models), [p.models, p.gatewayCatalog.models]);
+  const selectedInChoices = choices.some(ch => ch.id === c.model);
 
   const onFreeTier = inference === 'free';
   const freeSelection = onFreeTier && p.free.models.includes(c.model) ? c.model : '';
@@ -124,22 +124,21 @@ export default function Settings(p: SettingsProps) {
       <div className="stack">
         <section className="panel">
           <div className="panel-head"><h2>Model</h2><label className="switch"><input type="checkbox" checked={c.mode === 'demo'} disabled={p.busy} onChange={e => set({ mode: e.target.checked ? 'demo' : 'remote' })} />Scripted preview (no AI, no network)</label></div>
-          <p className="help">Type any model id your provider serves, pick one of the suggestions, or point at an OpenAI-compatible endpoint this deployment approves. Anything chosen here is paid for by your own key or by platform credits, never by the free tier.</p>
+          <p className="help">Pick a provider, then Discover Models to read the live list it actually serves — no guessed ids, no stale suggestions — and choose from what came back. Anything chosen here is paid for by your own key or by platform credits, never by the free tier.</p>
           <div className="form-grid">
             <label>Provider<select value={provider} disabled={p.busy || c.mode === 'demo'} onChange={e => pickProvider(e.target.value as Provider)}>{(Object.keys(providers) as Provider[]).map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
             {provider === 'custom' && <label>API base URL<input type="url" disabled={p.busy || c.mode === 'demo'} value={c.endpoint} placeholder="https://your-inference.example/v1" onChange={e => set({ endpoint: e.target.value })} /></label>}
-            <label className="grow">Model ID<span className="row"><input list="model-catalog" disabled={p.busy || c.mode === 'demo'} value={c.model} placeholder="Model served by your provider" onChange={e => set({ model: e.target.value, inference: inferenceFor(e.target.value, c.inference, p.free.models) })} /><datalist id="model-catalog">{p.models.map(m => <option key={m} value={m} />)}</datalist><button className="button small" disabled={p.busy || p.checking || c.mode === 'demo' || (provider === 'custom' && !c.endpoint)} onClick={p.discover}>{p.checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover</button></span></label>
-            <label className="grow">Suggestions
-              <select value="" disabled={p.busy || c.mode === 'demo'} onChange={e => { const [id, forProvider] = e.target.value.split('\u0000'); pickKeyed(id, forProvider as Provider); }}>
-                <option value="">Pick a known model…</option>
-                <optgroup label="On your own key">
-                  {catalog.map((m: CatalogModel) => <option key={m.id} value={`${m.id}\u0000${m.provider}`}>{m.label} · {providers[m.provider].name} · {m.weight} cr/1K</option>)}
-                </optgroup>
-                {paidGateway.length > 0 && <optgroup label={`xKiro gateway · ${paidGateway.length} paid models`}>
-                  {paidGateway.map(m => <option key={m.id} value={`${m.id}\u0000xkiro`}>{m.label} · {m.tier}</option>)}
-                </optgroup>}
+            <label className="grow">Select Model<span className="row">
+              <select aria-label="Model" value={selectedInChoices ? c.model : ''} disabled={p.busy || c.mode === 'demo' || choices.length === 0} onChange={e => pickKeyed(e.target.value, provider)}>
+                {choices.length === 0 && <option value="">{p.checking ? 'Discovering available models…' : 'No models discovered yet'}</option>}
+                {choices.map(ch => <option key={ch.id} value={ch.id}>{ch.label} ({ch.id})</option>)}
               </select>
-            </label>
+              <button className="button primary small" disabled={p.busy || p.checking || c.mode === 'demo' || (provider === 'custom' && !c.endpoint)} onClick={p.discover}>{p.checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover Models</button>
+            </span></label>
+            {p.checking && <p className="help">Discovering available models…</p>}
+            {!p.checking && choices.length === 0 && <p className="help">The dropdown fills from what your provider serves — hit Discover Models to read it. Nothing is prefilled from a guess.</p>}
+            <button type="button" className="text-button" onClick={() => setManualModel(m => !m)}>{manualModel ? 'Hide the manual model field' : 'Can\u2019t find your model? Enter its ID manually'}</button>
+            {manualModel && <label className="grow">Model ID<span className="row"><input list="model-catalog" disabled={p.busy || c.mode === 'demo'} value={c.model} placeholder="Model served by your provider" onChange={e => set({ model: e.target.value, inference: inferenceFor(e.target.value, c.inference, p.free.models) })} /><datalist id="model-catalog">{p.models.map(m => <option key={m} value={m} />)}</datalist></span></label>}
             <label>Output limit<select disabled={p.busy} value={c.maxTokens} onChange={e => set({ maxTokens: Number(e.target.value) })}>{[512, 1024, 2048, 4096].map(n => <option key={n} value={n}>{n.toLocaleString()} tokens</option>)}</select></label>
           </div>
           {c.mode === 'remote' && c.model && !current && !p.free.models.includes(c.model) && <p className="help">Unlisted model: charged at {weightFor(c.model)} credits per 1K tokens on platform credits, judged from its name. Free-tier funding covers the models in the list above only.</p>}
