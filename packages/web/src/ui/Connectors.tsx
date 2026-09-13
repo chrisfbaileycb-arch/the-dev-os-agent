@@ -91,10 +91,10 @@ export default function Connectors(p: ConnectorsProps) {
 
       {p.tab === 'github' && <section className="panel">
         <div className="panel-head"><h3>GitHub</h3><label className="switch"><input type="checkbox" checked={p.settings.github.enabled} onChange={e => patch({ github: { ...p.settings.github, enabled: e.target.checked } })} />Enabled</label></div>
-        <p className="help">Read-only. Your agents get <code>github_repo</code> (description, README, or any text file), <code>github_files</code> (the file listing), and <code>github_issues</code> (recent issues, or one issue with its comments). This connector can only ever issue GET requests, so nothing here can write to a repository.</p>
+        <p className="help">Read-only for your agents: they get <code>github_repo</code> (description, README, or any text file), <code>github_files</code> (the file listing), and <code>github_issues</code> (recent issues, or one issue with its comments) — nothing they call can write to a repository. The one write in this app lives elsewhere: the "Push to GitHub" button on a generated app's Output panel, which commits with this same token and needs one scoped for write access to push.</p>
         <label>Personal access token (optional)<input type="password" autoComplete="off" spellCheck={false} value={p.settings.github.token} placeholder="ghp_… for private repos and a higher rate limit" onChange={e => patch({ github: { ...p.settings.github, token: e.target.value } })} /></label>
         <label className="check"><input type="checkbox" checked={p.settings.github.saveToken} onChange={e => patch({ github: { ...p.settings.github, saveToken: e.target.checked } })} />Remember this token in this browser</label>
-        <p className="help">Without a token GitHub allows 60 calls an hour and public repositories only. A fine-grained token with read-only Contents and Issues access raises that to 5,000 and reaches your private repositories. The token is sent to GitHub through this app's proxy and is never stored on the server.</p>
+        <p className="help">Without a token GitHub allows 60 calls an hour and public repositories only. A fine-grained token with read-only Contents and Issues access raises that to 5,000 and reaches your private repositories for reading; add write access to Contents on the same token if you also want to use "Push to GitHub". The token is sent to GitHub through this app's proxy and is never stored on the server.</p>
       </section>}
 
       {p.tab === 'web' && <section className="panel">

@@ -1,0 +1,89 @@
+import { useEffect, useRef, useState } from 'react';
+import { CircleAlert, Code2, Eye, Github, LoaderCircle, PanelRightClose, PanelRightOpen, RotateCw } from 'lucide-react';
+import { parseProject, type Project } from '../lib/project';
+import { buildProject } from '../lib/bundle/client';
+import type { GithubSettings } from '../lib/connectors';
+import PushToGithub from './PushToGithub';
+
+// The Output panel: a reply that reads as a project gets a real preview — bundled and rendered in
+// a sandboxed iframe — instead of the text dump this panel always showed before. A reply that
+// doesn't (an explanation, a one-off snippet, plain conversation) still gets exactly that text
+// dump; detecting nothing is not a failure state here; it is most replies.
+
+export interface OutputPanelProps {
+  content: string;
+  close: () => void;
+  github: GithubSettings;
+  openConnectors: () => void;
+}
+
+type BuildState = { kind: 'idle' } | { kind: 'building' } | { kind: 'ready'; html: string } | { kind: 'error'; errors: string[] };
+
+export default function OutputPanel(p: OutputPanelProps) {
+  const [tab, setTab] = useState<'preview' | 'code'>('preview');
+  const [project, setProject] = useState<Project | null>(null);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [build, setBuild] = useState<BuildState>({ kind: 'idle' });
+  const [pushOpen, setPushOpen] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const next = parseProject(p.content);
+    setProject(next);
+    setSelectedFile(next?.entry ?? null);
+    setTab('preview');
+    abortRef.current?.abort();
+    if (!next) { setBuild({ kind: 'idle' }); return; }
+    const controller = new AbortController(); abortRef.current = controller;
+    setBuild({ kind: 'building' });
+    void buildProject(next, controller.signal).then(result => {
+      if (controller.signal.aborted) return;
+      setBuild(result.ok ? { kind: 'ready', html: result.html } : { kind: 'error', errors: result.errors });
+    }).catch(error => { if (!controller.signal.aborted) setBuild({ kind: 'error', errors: [error instanceof Error ? error.message : 'The build failed.'] }); });
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.content]);
+
+  function rebuild() {
+    if (!project) return;
+    abortRef.current?.abort();
+    const controller = new AbortController(); abortRef.current = controller;
+    setBuild({ kind: 'building' });
+    void buildProject(project, controller.signal).then(result => {
+      if (controller.signal.aborted) return;
+      setBuild(result.ok ? { kind: 'ready', html: result.html } : { kind: 'error', errors: result.errors });
+    }).catch(error => { if (!controller.signal.aborted) setBuild({ kind: 'error', errors: [error instanceof Error ? error.message : 'The build failed.'] }); });
+  }
+
+  return <aside className="preview-panel">
+    <div className="preview-head">
+      <span>Output</span>
+      {project && <div className="output-tabs" role="tablist" aria-label="Output view">
+        <button role="tab" aria-selected={tab === 'preview'} className={tab === 'preview' ? 'output-tab active' : 'output-tab'} onClick={() => setTab('preview')}><Eye size={12} />Preview</button>
+        <button role="tab" aria-selected={tab === 'code'} className={tab === 'code' ? 'output-tab active' : 'output-tab'} onClick={() => setTab('code')}><Code2 size={12} />Code</button>
+      </div>}
+      <span className="row gap">
+        {project && <button className="icon-button" title="Rebuild" aria-label="Rebuild" disabled={build.kind === 'building'} onClick={rebuild}><RotateCw size={13} className={build.kind === 'building' ? 'spin' : ''} /></button>}
+        {project && <button className="button small" onClick={() => setPushOpen(true)}><Github size={12} />Push to GitHub</button>}
+        <button className="icon-button" aria-label="Close output panel" onClick={p.close}><PanelRightClose size={14} /></button>
+      </span>
+    </div>
+    <div className="preview-content">
+      {!project && (!p.content
+        ? <div className="preview-empty"><PanelRightOpen size={22} strokeWidth={1.25} /><span>Agent output will appear here</span></div>
+        : <pre className="preview-body">{p.content}</pre>)}
+
+      {project && tab === 'preview' && <div className="output-preview">
+        {build.kind === 'building' && <div className="preview-empty"><LoaderCircle size={20} className="spin" /><span>Building {project.kind === 'react' ? 'the React app' : 'the app'}…</span></div>}
+        {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
+        {build.kind === 'ready' && <iframe key={build.html.length} title="App preview" className="output-frame" sandbox="allow-scripts" srcDoc={build.html} />}
+      </div>}
+
+      {project && tab === 'code' && <div className="output-code">
+        <div className="chip-row">{project.files.map(f => <button key={f.path} className={f.path === selectedFile ? 'chip active' : 'chip'} onClick={() => setSelectedFile(f.path)}>{f.path}</button>)}</div>
+        <pre className="preview-body">{project.files.find(f => f.path === selectedFile)?.content ?? ''}</pre>
+      </div>}
+    </div>
+    <PushToGithub open={pushOpen} close={() => setPushOpen(false)} files={project?.files ?? []} github={p.github} openConnectors={p.openConnectors} />
+  </aside>;
+}

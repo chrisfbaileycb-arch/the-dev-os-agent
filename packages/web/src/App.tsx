@@ -7,6 +7,7 @@ import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
+import OutputPanel from './ui/OutputPanel';
 import Pricing from './ui/Pricing';
 import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
@@ -458,19 +459,12 @@ export default function App() {
               tokens={tokens}
             />
           </section>
-          {previewOpen && <aside className="preview-panel">
-            <div className="preview-head">
-              <span>Output</span>
-              <button className="icon-button" aria-label="Close output panel" onClick={() => setPreviewOpen(false)}><PanelRightClose size={14} /></button>
-            </div>
-            <div className="preview-content">
-              {(() => {
-                const lastReply = active?.messages.slice().reverse().find(m => m.role === 'assistant');
-                if (!lastReply?.content) return <div className="preview-empty"><PanelRightOpen size={22} strokeWidth={1.25} /><span>Agent output will appear here</span></div>;
-                return <pre className="preview-body">{lastReply.content}</pre>;
-              })()}
-            </div>
-          </aside>}
+          {previewOpen && <OutputPanel
+            content={active?.messages.slice().reverse().find(m => m.role === 'assistant')?.content ?? ''}
+            close={() => setPreviewOpen(false)}
+            github={settings.github}
+            openConnectors={() => openConnectors('github')}
+          />}
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}

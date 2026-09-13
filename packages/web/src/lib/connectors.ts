@@ -13,6 +13,10 @@ import type { Knowledge } from './types';
 //
 // Each connector's settings live in localStorage; secrets (a GitHub token, an MCP bearer) stay
 // in memory for the session unless the person explicitly asks to remember them.
+//
+// `pushProject` below is the one write path in the whole hub: the Output panel's "Push to
+// GitHub" button, not a model-callable tool, and it always sends the visitor's own token —
+// there is no server-funded fallback for it the way there is for reads.
 
 export type ConnectorKind = 'github' | 'web' | 'knowledge' | 'mcp';
 
@@ -76,6 +80,12 @@ async function post<T>(path: string, body: unknown, signal: AbortSignal, timeout
 export interface GithubResult { result: Record<string, unknown>; }
 export const callGithub = (operation: string, params: Record<string, unknown>, token: string, signal: AbortSignal) =>
   post<GithubResult>('/api/github', { operation, params, ...(token ? { token } : {}) }, signal).then(r => r.result);
+
+export interface PushResult { commitSha: string; branch: string; url: string; filesPushed: number; }
+export interface PushParams { owner: string; repo: string; branch?: string; createBranch?: boolean; message: string; files: { path: string; content: string }[]; }
+/** Push a generated project as one commit. Requires the visitor's own token — there is no other kind for a write. */
+export const pushProject = (params: PushParams, token: string, signal: AbortSignal) =>
+  post<{ result: PushResult }>('/api/github', { operation: 'push', params, token }, signal, 60_000).then(r => r.result);
 
 export interface PageSnapshot { url: string; status: number; contentType: string; title: string; description: string; headings: string[]; wordCount: number; text: string; truncated: boolean; links: { href: string }[]; }
 export const fetchUrl = (url: string, signal: AbortSignal) => post<PageSnapshot>('/api/fetch', { url }, signal, 25_000);
