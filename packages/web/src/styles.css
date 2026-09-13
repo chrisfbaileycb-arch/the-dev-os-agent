@@ -40,7 +40,13 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 
 /* Workspace */
 .workspace { display: grid; grid-template-columns: 224px minmax(0, 1fr); height: 100%; }
-.workspace.with-preview { grid-template-columns: 224px minmax(0, 1fr) 340px; }
+/* With the output panel open the workspace is an even two-pane split, AI-Studio style: chat and
+   preview each take half of what's left of the sessions column, and the preview's iframe fills
+   its pane (flex-1/min-w-0 equivalents below). The two focus states shift the ratio without ever
+   hiding a side entirely; both fractions stay flexible so the whole thing keeps working at any width. */
+.workspace.with-preview { grid-template-columns: 224px minmax(0, 1fr) minmax(0, 1fr); }
+.workspace.with-preview.split-chat { grid-template-columns: 224px minmax(0, 5fr) minmax(0, 2fr); }
+.workspace.with-preview.split-preview { grid-template-columns: 224px minmax(0, 2fr) minmax(0, 5fr); }
 .sessions { border-right: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .sessions-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .session { display: flex; align-items: flex-start; gap: 8px; padding: 6px 7px; border-radius: var(--radius); text-align: left; width: 100%; color: var(--ink); } .session svg { margin-top: 2px; color: var(--muted); }
@@ -90,6 +96,7 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 
 /* Output panel: Preview/Code tabs, the sandboxed app frame, and build errors. */
 .output-tabs { display: flex; gap: 4px; text-transform: none; letter-spacing: normal; }
+.preview-head { flex-wrap: wrap; row-gap: 4px; }
 .output-tab { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .output-tab:hover { background: var(--panel-2); color: var(--ink); } .output-tab.active { background: var(--accent-soft); color: var(--accent-ink); }
 .preview-content:has(.output-preview) { padding: 0; }

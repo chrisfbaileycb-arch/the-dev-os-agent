@@ -23,11 +23,15 @@ function SandboxFrame({ html }: { html: string }) {
   />;
 }
 
+export type PreviewSplit = 'even' | 'chat' | 'preview';
 export interface OutputPanelProps {
   content: string;
   close: () => void;
   github: GithubSettings;
   openConnectors: () => void;
+  /** How the workspace divides between chat and this panel; owned by App so it survives remounts. */
+  split: PreviewSplit;
+  setSplit: (s: PreviewSplit) => void;
 }
 
 type BuildState = { kind: 'idle' } | { kind: 'building' } | { kind: 'ready'; html: string; seq: number } | { kind: 'error'; errors: string[] };
@@ -79,6 +83,11 @@ export default function OutputPanel(p: OutputPanelProps) {
         <button role="tab" aria-selected={tab === 'code'} className={tab === 'code' ? 'output-tab active' : 'output-tab'} onClick={() => setTab('code')}><Code2 size={12} />Code</button>
       </div>}
       <span className="row gap">
+        <span className="output-tabs split-toggle" role="group" aria-label="Split layout">
+          <button role="button" aria-pressed={p.split === 'even'} className={p.split === 'even' ? 'output-tab active' : 'output-tab'} title="Equal split between chat and output" onClick={() => p.setSplit('even')}>50/50</button>
+          <button role="button" aria-pressed={p.split === 'chat'} className={p.split === 'chat' ? 'output-tab active' : 'output-tab'} title="Focus chat, keep output beside it" onClick={() => p.setSplit('chat')}>Chat</button>
+          <button role="button" aria-pressed={p.split === 'preview'} className={p.split === 'preview' ? 'output-tab active' : 'output-tab'} title="Focus output, keep chat beside it" onClick={() => p.setSplit('preview')}>Preview</button>
+        </span>
         {project && <button className="icon-button" title="Rebuild" aria-label="Rebuild" disabled={build.kind === 'building'} onClick={rebuild}><RotateCw size={13} className={build.kind === 'building' ? 'spin' : ''} /></button>}
         {project && <button className="button small" onClick={() => setPushOpen(true)}><Github size={12} />Push to GitHub</button>}
         <button className="icon-button" aria-label="Close output panel" onClick={p.close}><PanelRightClose size={14} /></button>
