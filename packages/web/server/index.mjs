@@ -3,8 +3,10 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { createProxy } from './proxy.mjs';
 import { openDatabase } from './db.mjs';
+import { openPostgresDb } from './pgdb.mjs';
 import { createState } from './state.mjs';
 import { createBrowse } from './browse.mjs';
 import { createMcp } from './mcp.mjs';
@@ -13,9 +15,21 @@ import { createGithub } from './github.mjs';
 import { createJobs, openJobs } from './jobs.mjs';
 import { catalogStatus, ensureCatalog } from './discovery.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
-const dataFile = process.env.DATA_FILE || resolve(process.cwd(), process.env.DATA_DIR || 'data', 'heybuddy.sqlite');
-const db = openDatabase(dataFile);
-const jobs = openJobs(db);
+// Workspace data: Postgres when DATABASE_URL is set, SQLite otherwise.
+// Jobs are always SQLite — they are transient hand-offs and must never carry credentials.
+let db, jobsSqlite;
+if (process.env.DATABASE_URL) {
+  db = await openPostgresDb(process.env.DATABASE_URL);
+  jobsSqlite = new DatabaseSync(':memory:');
+  console.log('Workspace data: Postgres');
+} else {
+  const dataFile = process.env.DATA_FILE || resolve(process.cwd(), process.env.DATA_DIR || 'data', 'heybuddy.sqlite');
+  const sqliteDb = openDatabase(dataFile);
+  db = sqliteDb;
+  jobsSqlite = sqliteDb.raw();
+  console.log(`Workspace data: ${dataFile}`);
+}
+const jobs = openJobs(jobsSqlite);
 const handlers = [createProxy({ db }), createState({ db }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs })];
 // Finished jobs are a transient hand-off, not a record; the run itself lands in the workspace store.
 setInterval(() => jobs.prune(new Date(Date.now() - 24 * 3_600_000).toISOString()), 3_600_000).unref();
@@ -35,7 +49,7 @@ const server = createServer(async (req, res) => {
   } catch { res.writeHead(404); res.end('Not found'); }
 });
 server.requestTimeout = 135_000;
-server.listen(Number(process.env.PORT || 4173), '0.0.0.0', () => console.log(`Hey Buddy server is ready. Workspace data: ${dataFile}`));
+server.listen(Number(process.env.PORT || 4173), '0.0.0.0', () => console.log('Hey Buddy server is ready.'));
 
 // Warm the gateway catalogue at boot so the first visitor does not pay for the discovery request,
 // and so the log says on startup how large the free tier actually is. Never awaited and never

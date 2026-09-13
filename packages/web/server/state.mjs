@@ -31,7 +31,7 @@ export function createState({ env = process.env, db }) {
   const pool = Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000);
   // The zero-config allowance is metered by the proxy, not by the browser, so the balance the
   // client shows for it is read back from the server rather than recomputed from local rows.
-  const budget = workspace => ({ pool, freePool: monthlyPool(env), freeUsed: db.usedThisMonth(workspace, new Date(), 'free'), free: freeTierStatus(env) });
+  const budget = async workspace => ({ pool, freePool: monthlyPool(env), freeUsed: await db.usedThisMonth(workspace, new Date(), 'free'), free: freeTierStatus(env) });
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://state').pathname;
     if (!['/api/state', '/api/state/clear', '/api/state/usage'].includes(path)) return false;
@@ -39,21 +39,22 @@ export function createState({ env = process.env, db }) {
       checkOrigin(req, env);
       const workspace = req.headers['x-workspace-id'];
       if (typeof workspace !== 'string' || !ID.test(workspace)) throw new HttpError(400, 'A workspace id header is required.');
-      if (path === '/api/state' && req.method === 'GET') { json(res, 200, { ...db.state(workspace), ...budget(workspace) }); return true; }
+      if (path === '/api/state' && req.method === 'GET') { json(res, 200, { ...(await db.state(workspace)), ...(await budget(workspace)) }); return true; }
       // A cheap read the client polls after a zero-config turn, so the credit meter moves in
       // step with the server's own measurement instead of a guess made in the browser.
-      if (path === '/api/state/usage' && req.method === 'GET') { json(res, 200, { ...budget(workspace), used: db.usedThisMonth(workspace), entry: db.latestEntry(workspace, 'free') }); return true; }
+      if (path === '/api/state/usage' && req.method === 'GET') { const [b, used, entry] = await Promise.all([budget(workspace), db.usedThisMonth(workspace), db.latestEntry(workspace, 'free')]); json(res, 200, { ...b, used, entry }); return true; }
       if (req.method !== 'POST') throw new HttpError(405, 'Use GET or POST.');
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
       const body = await readBody(req);
-      if (path === '/api/state/clear') { db.clear(workspace); json(res, 200, { ok: true }); return true; }
+      if (path === '/api/state/clear') { await db.clear(workspace); json(res, 200, { ok: true }); return true; }
       const sessions = Array.isArray(body.sessions) ? body.sessions : []; const runs = Array.isArray(body.runs) ? body.runs : []; const ledger = Array.isArray(body.ledger) ? body.ledger : [];
       if (sessions.length > MAX_ITEMS || runs.length > MAX_ITEMS || ledger.length > MAX_ITEMS) throw new HttpError(400, 'Too many items in one request.');
       sessions.forEach(validateSession); runs.forEach(validateRun); ledger.forEach(validateEntry);
-      const counts = db.counts(workspace);
+      const counts = await db.counts(workspace);
       if (counts.sessions + sessions.length > MAX_SESSIONS * 2 || counts.runs + runs.length > MAX_RUNS * 2) throw new HttpError(429, 'Workspace storage limit reached. Clear old sessions first.');
-      if (sessions.length) db.upsertSessions(workspace, sessions); if (runs.length) db.upsertRuns(workspace, runs); if (ledger.length) db.addLedger(workspace, ledger);
-      json(res, 200, { ok: true, used: db.usedThisMonth(workspace), ...budget(workspace) }); return true;
+      await Promise.all([sessions.length && db.upsertSessions(workspace, sessions), runs.length && db.upsertRuns(workspace, runs), ledger.length && db.addLedger(workspace, ledger)]);
+      const [used, b] = await Promise.all([db.usedThisMonth(workspace), budget(workspace)]);
+      json(res, 200, { ok: true, used, ...b }); return true;
     } catch (error) {
       json(res, error instanceof HttpError ? error.status : 500, { error: { message: error instanceof HttpError ? error.message : 'Workspace storage failed.' } }); return true;
     }
