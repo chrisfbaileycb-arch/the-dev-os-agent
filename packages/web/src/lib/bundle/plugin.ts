@@ -33,6 +33,14 @@ function normalize(path: string): string {
  * package's name is its first two path segments ("@radix-ui/react-slot"), an unscoped one just
  * its first, and whatever follows is a subpath export ("react-dom/client" -> "/client") that
  * esm.sh serves directly off the same package.
+ *
+ * No `?bundle` on these URLs, deliberately. esm.sh's `?bundle` makes a module carry private,
+ * inlined copies of all of its dependencies — so a project importing both `react` and
+ * `react-dom/client` ends up with two unrelated Reacts in the bundle: react-dom's private one
+ * installs the hooks dispatcher on its own copy, the app's `useState` reads from the other, and
+ * every component crashes with "Cannot read properties of null (reading 'useState')" at first
+ * render. Without it, esm.sh serves ordinary modules whose imports resolve to shared, canonical
+ * esm.sh URLs, and esbuild's path-keyed dedupe folds them into the single copy the app expects.
  */
 export function esmUrl(specifier: string, dependencies: Record<string, string>): string {
   const scoped = specifier.startsWith('@');
@@ -41,7 +49,7 @@ export function esmUrl(specifier: string, dependencies: Record<string, string>):
   const subpath = segments.slice(scoped ? 2 : 1).join('/');
   const pinned = dependencies[name]?.replace(/^[\^~]/, '');
   const base = pinned ? `${name}@${pinned}` : name;
-  return `https://esm.sh/${base}${subpath ? `/${subpath}` : ''}?bundle`;
+  return `https://esm.sh/${base}${subpath ? `/${subpath}` : ''}`;
 }
 
 export interface ResolveFailure { text: string; }

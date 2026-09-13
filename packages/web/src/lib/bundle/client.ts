@@ -17,7 +17,10 @@ function ensureWorker(): Worker {
   return worker;
 }
 
-const BUILD_TIMEOUT_MS = 30_000;
+// 60s, not 30: the first build pays a one-time ~14 MB wasm download plus every esm.sh fetch,
+// which on a slow connection is not fast — production's first-ever build hit a 30s cap. Later
+// builds reuse the warm worker and finish in a couple of seconds.
+const BUILD_TIMEOUT_MS = 60_000;
 
 export function buildProject(project: Project, signal?: AbortSignal): Promise<BuildResult> {
   const id = crypto.randomUUID();
