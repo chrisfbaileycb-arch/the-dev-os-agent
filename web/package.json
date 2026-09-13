@@ -1,0 +1,10 @@
+{
+  "name": "hey-buddy-web-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "cd .. && npm ci && cd packages/web && npm run build",
+    "start": "node ../packages/web/server/index.mjs",
+    "ci": "echo ok"
+  }
+}
