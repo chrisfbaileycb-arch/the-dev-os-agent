@@ -18,6 +18,13 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .rail { background: var(--rail); color: var(--rail-ink); display: flex; flex-direction: column; padding: 8px 6px; gap: 2px; border-right: 1px solid #000; }
 .rail-brand { display: flex; align-items: center; gap: 8px; color: #fff; font-weight: 650; font-size: 13.5px; padding: 6px; border-radius: var(--radius); margin-bottom: 6px; } .rail-brand img { border-radius: 6px; }
 .rail nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.rail-foot { display: flex; flex-direction: column; gap: 2px; margin-top: auto; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.08); }
+.rail-user { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius); }
+.rail-avatar { width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; object-fit: cover; }
+.rail-avatar-initial { background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 650; }
+.rail-user-info { display: flex; flex-direction: column; flex: 1; min-width: 0; } .rail-user-info strong { font-size: 12px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .rail-user-info small { font-size: 10px; color: var(--rail-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-signout { width: auto; flex-shrink: 0; padding: 4px; color: var(--rail-ink); } .rail-signout:hover { color: #fff; background: none; }
+.rail.collapsed .rail-user { padding: 8px 0; justify-content: center; } .rail.collapsed .rail-user-info, .rail.collapsed .rail-signout { display: none; }
 .rail-item { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--radius); color: var(--rail-ink); text-align: left; white-space: nowrap; width: 100%; }
 .rail-item:hover { background: var(--rail-active); color: #fff; } .rail-item.active { background: var(--rail-active); color: #fff; box-shadow: inset 2px 0 0 var(--accent); }
 .rail-badge { margin-left: auto; font-style: normal; font-size: 10px; background: var(--accent); color: #fff; border-radius: 9px; padding: 1px 6px; }
@@ -137,6 +144,7 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 550; } label.check, label.switch { flex-direction: row; align-items: center; gap: 6px; font-weight: 450; } label.check input, label.switch input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
 input:not([type=checkbox]), select, textarea { border: 1px solid var(--line-strong); background: var(--panel); border-radius: var(--radius); padding: 5px 8px; font-weight: 400; min-width: 0; width: 100%; } textarea { resize: vertical; }
+input.input-error { border-color: var(--danger); } .field-error { color: var(--danger); font-size: 11.5px; font-weight: 400; margin-top: 2px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; align-items: end; } .form-grid .grow { grid-column: 1 / -1; } .form-grid .row { gap: 6px; }
 .tier { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--line); } .tier h3 { display: flex; flex-direction: column; gap: 1px; } .tier h3 small { color: var(--muted); font-weight: 400; font-size: 11.5px; }
 .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }

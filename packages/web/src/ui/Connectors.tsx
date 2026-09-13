@@ -37,6 +37,19 @@ export default function Connectors(p: ConnectorsProps) {
   const [url, setUrl] = useState(''); const [name, setName] = useState(''); const [token, setToken] = useState(''); const [saveToken, setSaveToken] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+
+  const urlError = (() => {
+    const v = url.trim();
+    if (!v) return '';
+    // Looks like a provider/model slug (e.g. groq/llama-3.3-70b-versatile)
+    if (/^[a-z0-9_-]+\/[a-z0-9._:-]+$/i.test(v) && !v.includes('://'))
+      return 'That looks like a model name, not a server URL. Enter an https:// address, for example https://mcp.example.com/mcp.';
+    try {
+      const parsed = new URL(v);
+      if (parsed.protocol !== 'https:') return 'MCP servers must use https://. Local servers need a public tunnel (e.g. ngrok).';
+    } catch { return 'Enter a valid https:// URL, for example https://mcp.example.com/mcp.'; }
+    return '';
+  })();
   useDismiss(p.open, p.close);
   if (!p.open) return null;
 
@@ -115,11 +128,11 @@ export default function Connectors(p: ConnectorsProps) {
           <p className="help">Connect a remote MCP server over Streamable HTTP (MCP 2025-06-18). Its tools become available to the agent you are chatting with. Requirements: the server must be reachable over <strong>https://</strong> on a public host — local servers and <code>localhost</code> are not reachable from a hosted app. Use a tunnel (e.g. ngrok) with a bearer token for local development, or connect a cloud-hosted MCP server.</p>
           <div className="form-grid">
             <label>Name<input value={name} maxLength={40} placeholder="Shop orders" onChange={e => setName(e.target.value)} /></label>
-            <label className="grow">Server URL<input type="url" value={url} placeholder="https://mcp.example.com/mcp" onChange={e => setUrl(e.target.value)} /></label>
+            <label className="grow">Server URL<input type="url" value={url} placeholder="https://mcp.example.com/mcp" onChange={e => setUrl(e.target.value)} className={urlError ? 'input-error' : ''} />{urlError && <span className="field-error">{urlError}</span>}</label>
             <label className="grow">Bearer token (optional)<input type="password" autoComplete="off" spellCheck={false} value={token} placeholder="Token the server expects" onChange={e => setToken(e.target.value)} /></label>
           </div>
           <label className="check"><input type="checkbox" checked={saveToken} onChange={e => setSaveToken(e.target.checked)} />Remember the token in this browser</label>
-          <div className="row gap"><button className="button primary small" disabled={!url.trim() || busyId !== null} onClick={() => void addMcp()}>{busyId && !p.mcp.some(c => c.id === busyId) ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}Connect and list tools</button></div>
+          <div className="row gap"><button className="button primary small" disabled={!url.trim() || !!urlError || busyId !== null} onClick={() => void addMcp()}>{busyId && !p.mcp.some(c => c.id === busyId) ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}Connect and list tools</button></div>
           <p className="help">The token is sent only to that server, through this app's proxy, and stays in memory unless remembered. Servers must be https on a public host.</p>
         </section>
         {p.mcp.map(c => <section key={c.id} className="panel mcp-row">

@@ -4,6 +4,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
 import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, xkiroBase } from './freetier.mjs';
+import { parseSession } from './auth.mjs';
 import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog } from './discovery.mjs';
 import { billingStatus } from './billing.mjs';
 import { createMeter } from './meter.mjs';
@@ -308,7 +309,11 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
           ? new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable')
           : new HttpError(401, 'That model needs a key. Pick a free model, or add your own OpenRouter or Groq key in Settings.', 'key_required');
       }
-      const workspace = typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'].slice(0, 64) : ip;
+      // Authenticated visitors use their account's canonical workspace_id rather than the
+      // anonymous browser-minted header. The session cookie is self-contained and signed, so
+      // no database read is needed here — the workspace_id is embedded in the token.
+      const session = parseSession(req.headers['cookie'], env.SESSION_SECRET);
+      const workspace = session?.workspaceId ?? (typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'].slice(0, 64) : ip);
       if (funding.mode === 'free' && path === '/api/chat') {
         const burst = takeBurst(ip);
         if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`, 'free_tier_busy');

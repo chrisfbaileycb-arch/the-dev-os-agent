@@ -25,6 +25,10 @@ export function workspaceId(): string {
   try { const existing = localStorage.getItem('hb-workspace-id'); if (existing && /^[0-9a-f-]{36}$/.test(existing)) return existing; const id = crypto.randomUUID(); localStorage.setItem('hb-workspace-id', id); return id; }
   catch { return '00000000-0000-4000-8000-000000000000'; }
 }
+/** Override the workspace to the server-assigned id after sign-in. All subsequent api() calls pick it up automatically. */
+export function setWorkspaceId(id: string): void {
+  try { if (/^[0-9a-f-]{36}$/.test(id)) localStorage.setItem('hb-workspace-id', id); } catch {}
+}
 
 async function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -86,6 +90,10 @@ async function api<T>(path: string, init: RequestInit = {}, signal?: AbortSignal
     return await response.json() as T;
   } catch { return null; }
 }
+export interface AuthUser { id: string; email: string; name: string; picture: string; workspaceId: string; }
+export const authMe = () => api<AuthUser | null>('/api/auth/me');
+export const authConfig = () => api<{ googleEnabled: boolean }>('/api/auth/config');
+
 export const sync = {
   pull: (signal?: AbortSignal) => api<ServerState>('/api/state', {}, signal),
   /** Re-read the server's own meter after a zero-config turn; cheap enough to call every message. */

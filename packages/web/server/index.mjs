@@ -13,6 +13,7 @@ import { createMcp } from './mcp.mjs';
 import { createFetcher } from './fetch.mjs';
 import { createGithub } from './github.mjs';
 import { createJobs, openJobs } from './jobs.mjs';
+import { createAuth } from './auth.mjs';
 import { catalogStatus, ensureCatalog } from './discovery.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 // Workspace data: Postgres when DATABASE_URL is set, SQLite otherwise.
@@ -30,7 +31,8 @@ if (process.env.DATABASE_URL) {
   console.log(`Workspace data: ${dataFile}`);
 }
 const jobs = openJobs(jobsSqlite);
-const handlers = [createProxy({ db }), createState({ db }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs })];
+const auth = createAuth({ db, env: process.env });
+const handlers = [auth, createProxy({ db }), createState({ db }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs })];
 // Finished jobs are a transient hand-off, not a record; the run itself lands in the workspace store.
 setInterval(() => jobs.prune(new Date(Date.now() - 24 * 3_600_000).toISOString()), 3_600_000).unref();
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png' };

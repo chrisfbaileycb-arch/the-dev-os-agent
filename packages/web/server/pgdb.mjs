@@ -13,6 +13,9 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS ledger (workspace_id TEXT NOT NULL, id TEXT NOT NULL, at TEXT NOT NULL, session_id TEXT, model TEXT NOT NULL, tier TEXT NOT NULL, mode TEXT NOT NULL, tokens INTEGER NOT NULL, credits REAL NOT NULL, PRIMARY KEY (workspace_id, id))`,
   `CREATE INDEX IF NOT EXISTS ledger_workspace_at ON ledger (workspace_id, at)`,
   `CREATE INDEX IF NOT EXISTS sessions_workspace_updated ON sessions (workspace_id, updated_at)`,
+  // User accounts: Google OAuth identity tied to a canonical workspace_id.
+  `CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, google_id TEXT UNIQUE NOT NULL, email TEXT NOT NULL, name TEXT NOT NULL, picture TEXT NOT NULL, workspace_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS users_google_id ON users (google_id)`,
 ];
 
 export async function openPostgresDb(connectionString) {
@@ -88,6 +91,22 @@ export async function openPostgresDb(connectionString) {
     },
     async clear(workspace) {
       await Promise.all(['sessions','runs','ledger'].map(t => pool.query(`DELETE FROM ${t} WHERE workspace_id=$1`, [workspace])));
+    },
+    // User accounts — only meaningful on the Postgres path; the SQLite adapter has no users table.
+    async findOrCreateUser(googleId, email, name, picture) {
+      const now = new Date().toISOString();
+      const { rows } = await pool.query(
+        `INSERT INTO users (id, google_id, email, name, picture, workspace_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+         ON CONFLICT (google_id) DO UPDATE SET email=EXCLUDED.email, name=EXCLUDED.name, picture=EXCLUDED.picture, updated_at=EXCLUDED.updated_at
+         RETURNING id, google_id, email, name, picture, workspace_id, created_at, updated_at`,
+        [randomUUID(), googleId, email, name, picture, randomUUID(), now]
+      );
+      return rows[0];
+    },
+    async getUserById(id) {
+      const { rows } = await pool.query('SELECT id, google_id, email, name, picture, workspace_id, created_at, updated_at FROM users WHERE id=$1', [id]);
+      return rows[0] ?? null;
     },
     close() { return pool.end(); },
   };
