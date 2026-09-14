@@ -36,6 +36,9 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     // AIHubMix speaks the standard OpenAI surface, so it needs no translation — only a fixed
     // home, like every other named provider, so a request body cannot steer the destination.
     aihubmix: 'https://aihubmix.com/v1',
+    // Hugging Face's Inference Providers router is likewise OpenAI-compatible for chat and
+    // lists its live roster at /v1/models, so it too needs only a fixed home.
+    huggingface: 'https://router.huggingface.co/v1',
     xkiro: xkiroBase(env),
   };
   if (fixed[provider]) return { base: fixed[provider], nativeCohere: provider === 'cohere', nativeAnthropic: provider === 'anthropic' };
@@ -88,7 +91,7 @@ export function keyFor(body, env = process.env) {
   const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
   if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
-  return cleanKey(env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', aihubmix: 'AIHUBMIX_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]]);
+  return cleanKey(env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', aihubmix: 'AIHUBMIX_API_KEY', huggingface: 'HF_TOKEN', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]]);
 }
 /**
  * Who pays for this request, decided entirely on the server.
@@ -218,7 +221,7 @@ export function outputLimit(provider, model, max) {
  * token count into a failed run. Requested only where it is known to be supported.
  */
 export const usageReportable = (provider, target) =>
-  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'aihubmix', 'xkiro'].includes(provider);
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'aihubmix', 'huggingface', 'xkiro'].includes(provider);
 
 /**
  * An OpenAI-shaped chat request as Anthropic's /v1/messages wants it.

@@ -123,6 +123,50 @@ test('AIHubMix routes as an ordinary OpenAI-compatible vendor on the visitor key
   assert.equal(usageReportable('aihubmix', { nativeCohere: false, nativeAnthropic: false }), true, 'usage is requested so BYOK runs still count tokens');
 });
 
+test('Hugging Face routes through its OpenAI-compatible router on the visitor token', async () => {
+  // One HF token pays every underlying provider; the deployment funds no HF ids, so funding
+  // answers 'byok' with a key in hand and 'none' without — a server-side HF_TOKEN exists only
+  // for a hypothetical allowlist entry, exactly like AIHubMix's.
+  const env = { HF_TOKEN: 'server-hf-token' };
+  assert.deepEqual(fundingFor({ provider: 'huggingface', model: 'openai/gpt-oss-120b', apiKey: 'visitor-hf-token' }, env), { mode: 'byok', apiKey: 'visitor-hf-token' });
+  assert.equal(fundingFor({ provider: 'huggingface', model: 'deepseek-ai/DeepSeek-R1' }, env).mode, 'none', 'no allowlist entry exists, so the deployment cannot fund it');
+  let captured;
+  await withProxy({ env: {}, transport: async (url, options) => { captured = { url, ...options }; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await post(url, { ...base, provider: 'huggingface', model: 'meta-llama/Llama-3.1-8B-Instruct', baseUrl: 'https://attacker.example/v1' })).status, 200);
+  });
+  assert.equal(captured.url, 'https://router.huggingface.co/v1/chat/completions', 'a supplied base URL is ignored, not honoured');
+  assert.equal(captured.headers.Authorization, 'Bearer test-key-not-real');
+  assert.equal(JSON.parse(captured.body).model, 'meta-llama/Llama-3.1-8B-Instruct', 'routing suffixes like :fastest are legal ids and pass through untouched');
+  assert.equal(usageReportable('huggingface', { nativeCohere: false, nativeAnthropic: false }), true, 'usage is requested so BYOK runs still count tokens');
+});
+
+test('HF serverless models join the zero-config pool only when the deployment holds HF_TOKEN', async () => {
+  // With the token set, the small instruct models are funded exactly like the Groq statics:
+  // mode 'free', the deployment's key, the allowlist entry carried along so routeFreeRequest
+  // and the handler know where to send it. DeepSeek-R1:auto stays out — a reasoning chain is
+  // what this tier must not fund by default, and :auto is a router directive, not a price.
+  const env = { HF_TOKEN: 'server-hf-token' };
+  const funded = fundingFor({ provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct' }, env);
+  assert.equal(funded.mode, 'free');
+  assert.equal(funded.apiKey, 'server-hf-token');
+  assert.deepEqual(funded.entry, { id: 'Qwen/Qwen2.5-7B-Instruct', provider: 'huggingface', envKey: 'HF_TOKEN' });
+  assert.equal(fundingFor({ provider: 'huggingface', model: 'meta-llama/Llama-3.1-8B-Instruct' }, env).mode, 'free');
+  assert.equal(fundingFor({ provider: 'huggingface', model: 'deepseek-ai/DeepSeek-R1:auto' }, env).mode, 'none', 'reasoning is never deployment-funded by default');
+  assert.equal(fundingFor({ provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct' }, {}).mode, 'none', 'no token, no pool — never advertise a 503 as free');
+  // A keyless request routes to the pinned router home with the id passed through untouched
+  // and the server-side output cap applied, like every other zero-config model.
+  let captured;
+  await withProxy({ env, transport: async (url, options) => { captured = { url, ...options }; return stream('data: [DONE]\n\n'); } }, async url => {
+    const response = await post(url, { provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct', messages: base.messages });
+    assert.equal(response.status, 200);
+  });
+  assert.equal(captured.url, 'https://router.huggingface.co/v1/chat/completions');
+  assert.equal(captured.headers.Authorization, 'Bearer server-hf-token');
+  const payload = JSON.parse(captured.body);
+  assert.equal(payload.model, 'Qwen/Qwen2.5-7B-Instruct');
+  assert.ok(payload.max_tokens <= 4096, 'free-tier output stays capped');
+});
+
 test('Anthropic is translated to /v1/messages, headers and all', async () => {
   // Anthropic does not speak the OpenAI protocol: x-api-key rather than a bearer token, a
   // pinned API version, and a system prompt that is a top-level field. Left in the messages

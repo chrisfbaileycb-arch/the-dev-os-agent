@@ -70,7 +70,8 @@ export default function ModelPicker(p: ModelPickerProps) {
   // Group keyed catalog entries by provider so each vendor's section is visually distinct.
   const keyedByProvider = useMemo(() => {
     // AIHubMix rides after OpenRouter: both are gateways the visitor reaches with their own key.
-    const order: Provider[] = ['anthropic', 'openai', 'google', 'openrouter', 'aihubmix'];
+    // Hugging Face follows for the same reason: one key, many vendors behind it.
+    const order: Provider[] = ['anthropic', 'openai', 'google', 'openrouter', 'aihubmix', 'huggingface'];
     const groups: { provider: Provider; models: CatalogModel[] }[] = [];
     for (const provider of order) {
       const models = catalog.filter(m => m.provider === provider);

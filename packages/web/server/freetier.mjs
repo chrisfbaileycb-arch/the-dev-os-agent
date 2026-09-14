@@ -116,6 +116,21 @@ export const FRONTIER = /claude|opus|sonnet|gpt-[45]|(^|[/_.-])o[134](?![0-9a-z]
 export const isFrontier = id => typeof id === 'string' && FRONTIER.test(id);
 
 /**
+ * Hugging Face serverless pool, reached through the Inference Providers router.
+ *
+ * A deployment holding HF_TOKEN can fund a handful of small instruct models from that token's
+ * monthly inference credit — a cheap way to widen the zero-config tier. Like every static entry
+ * these pass the FRONTIER guard: `deepseek-ai/DeepSeek-R1:auto` is deliberately excluded, both
+ * because a reasoning chain is exactly what this tier must not fund by default and because
+ * `:auto` is a router directive, not a price — the operator can name a concrete cheap id in
+ * XKIRO-style narrowing instead of letting the router pick an expensive provider for them.
+ */
+export const HF_POOL = [
+  'Qwen/Qwen2.5-7B-Instruct',
+  'meta-llama/Llama-3.1-8B-Instruct',
+];
+
+/**
  * Groq and OpenRouter free entries, which are still declared here.
  *
  * Neither provider publishes a machine-readable "this is free" flag the way the gateway does —
@@ -140,8 +155,13 @@ const STATIC_FREE = [
  */
 export function freeModels(env = process.env, discovered = discoveredXkiro) {
   const guarded = env.FREE_TIER_ALLOW_FRONTIER === 'true' ? STATIC_FREE : STATIC_FREE.filter(m => !isFrontier(m.id));
+  // HF serverless joins only when the deployment holds a token: without one these ids would
+  // advertise as free and answer 503, which is the exact "warming up" lie the status message
+  // exists to avoid.
+  const hf = HF_POOL.some(id => isFrontier(id)) ? [] : (env.HF_TOKEN ? HF_POOL.map(id => ({ id, provider: 'huggingface', envKey: 'HF_TOKEN' })) : []);
   return [
     ...guarded,
+    ...hf,
     ...xkiroPool(env, discovered).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
   ];
 }
@@ -194,6 +214,10 @@ export const creditsForTokens = tokens => Math.ceil((Math.max(0, tokens) * FREE_
  */
 export function routeFreeRequest(entry) {
   if (entry.provider === 'groq') return { model: entry.id.replace(/^groq\//, '') };
+  // HF router ids are passed through exactly as documented — `Qwen/Qwen2.5-7B-Instruct` is the
+  // org/model form the router's OpenAI surface expects, and its routing policies (:fastest,
+  // :cheapest) are legal suffixes a deployment may name deliberately.
+  if (entry.provider === 'huggingface') return { model: entry.id };
   if (entry.pool) return { model: entry.pool[0], models: [...entry.pool] };
   // xKiro and the OpenRouter :free ids are passed through exactly as the gateway names them.
   return { model: entry.id };

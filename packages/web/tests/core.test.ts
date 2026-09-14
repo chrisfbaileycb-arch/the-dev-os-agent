@@ -43,10 +43,12 @@ describe('AIHubMix provider', () => {
 
   it('carries catalog entries that resolve by id and price as fast models', () => {
     expect(findModel('coding-glm-5.1-free')?.provider).toBe('aihubmix');
-    // tier 'free' is reserved for deployment-funded ids (see workspace.test.ts); AIHubMix
-    // freeness lives on the visitor's key, so its entries are key-required like every other.
-    expect(findModel('gpt-5.5-free')?.tier).toBe('pro');
+    // Tier 'free' is reserved for deployment-funded ids (see workspace.test.ts). AIHubMix models
+    // are free on the visitor's own key, which is exactly what 'byok' means; they would answer
+    // 401 without that key, so they must never read as zero-config.
+    expect(findModel('gpt-5.5-free')?.tier).toBe('byok');
     expect(weightFor('gpt-5.5-free')).toBe(0.5);
+    expect(catalog.filter(m => m.provider === 'aihubmix').every(m => m.tier === 'byok')).toBe(true);
     expect(catalog.filter(m => m.provider === 'aihubmix').length).toBeGreaterThanOrEqual(8);
   });
 
@@ -56,6 +58,42 @@ describe('AIHubMix provider', () => {
     expect(inferenceFor('gpt-5.5-free', undefined, ['kimi-for-coding-free'])).toBe('byok');
     expect(inferenceFor('gpt-5.5-free', 'byok', ['kimi-for-coding-free'])).toBe('byok');
     expect(inferenceFor('gpt-5.5-free', 'credits', [])).toBe('credits');
+  });
+});
+
+describe('Hugging Face provider', () => {
+  // HF's Inference Providers router: one token pays every underlying host for hundreds of
+  // open-weights models, with a small monthly credit on every HF account. Same BYOK shape
+  // as AIHubMix — free on the visitor's key, never the deployment's allowance.
+  it('is registered with the router endpoint and open-model seeds', () => {
+    expect(providers.huggingface).toBeDefined();
+    expect(providers.huggingface.endpoint).toBe('https://router.huggingface.co/v1');
+    expect(providers.huggingface.models.length).toBeGreaterThan(0);
+    expect(providers.huggingface.models.every(m => m.includes('/'))).toBe(true); // HF ids are namespaced like org/model
+  });
+
+  it('builds a default connection like any named provider', () => {
+    const c = defaultConnection('huggingface');
+    expect(c.provider).toBe('huggingface');
+    expect(c.endpoint).toBe('https://router.huggingface.co/v1');
+    expect(c.model).toBe('Qwen/Qwen2.5-7B-Instruct'); // low-compute serverless models lead the seed
+  });
+
+  it('carries catalog entries that resolve by id and classify sensibly', () => {
+    expect(findModel('openai/gpt-oss-120b')?.provider).toBe('huggingface');
+    // Small serverless models are 'byok' — free on the token's monthly credit, still a token.
+    expect(findModel('Qwen/Qwen2.5-7B-Instruct')?.tier).toBe('byok');
+    expect(findModel('meta-llama/Llama-3.1-8B-Instruct')?.tier).toBe('byok');
+    // Reasoning stays 'pro': the deployment never funds a chain-of-thought by default.
+    expect(findModel('deepseek-ai/DeepSeek-R1:auto')?.tier).toBe('pro');
+    expect(weightFor('meta-llama/Llama-3.1-8B-Instruct')).toBe(0.5); // small open model reads as fast
+    expect(weightFor('deepseek-ai/DeepSeek-R1:auto')).toBe(15); // reasoning weights ride the model name, not the vendor
+    expect(catalog.filter(m => m.provider === 'huggingface').length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('is never treated as deployment-funded free tier', () => {
+    expect(inferenceFor('openai/gpt-oss-120b', undefined, ['some-gateway-id'])).toBe('byok');
+    expect(inferenceFor('deepseek-ai/DeepSeek-R1:fastest', 'byok', [])).toBe('byok');
   });
 });
 

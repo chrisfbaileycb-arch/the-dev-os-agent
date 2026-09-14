@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'aihubmix' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'aihubmix' | 'huggingface' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -16,6 +16,12 @@ export const providers: Record<Provider, { name: string; tier: string; endpoint:
   // AIHubMix account key, frontier ones included. Seeds from their published free list; Discover
   // reads the live catalogue and the model field accepts anything typed, as everywhere else.
   aihubmix: { name: 'AIHubMix', tier: 'Free gateway', endpoint: 'https://aihubmix.com/v1', models: ['gpt-5.5-free', 'gpt-4.1-free', 'gemini-3-flash-preview-free', 'coding-glm-5.1-free', 'kimi-for-coding-free', 'k2.6-code-preview-free', 'xiaomi-mimo-v2.5-free', 'coding-minimax-m2.7-free'] },
+  // Hugging Face's Inference Providers router: hundreds of open models behind one OpenAI-compatible
+  // chat surface at a fixed home. One HF token pays every underlying provider, accounts carry a
+  // small monthly inference credit, and a `:fastest` / `:cheapest` suffix on the model id chooses
+  // how the router routes. Seeds from their documented open-weights roster; Discover reads the
+  // live list from /v1/models and the model field accepts anything typed, as everywhere else.
+  huggingface: { name: 'Hugging Face', tier: 'Open models', endpoint: 'https://router.huggingface.co/v1', models: ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Llama-3.1-8B-Instruct', 'openai/gpt-oss-120b', 'deepseek-ai/DeepSeek-R1:auto', 'Qwen/Qwen2.5-Coder-32B-Instruct', 'zai-org/GLM-4.5', 'moonshotai/Kimi-K2-Instruct'] },
   groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
   openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy

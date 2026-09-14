@@ -72,7 +72,13 @@ describe('duplicate model ids across providers', () => {
     // The whole class of bug this replaces: a compiled list claiming six models were free, none
     // of which the gateway served free, cross-checked only against another copy of itself. The
     // free list now comes from /api/providers and nothing here is allowed to compete with it.
-    for (const m of catalog) expect(m.tier).toBe('pro');
+    //
+    // Three tiers, one invariant: 'free' means the deployment funds it and is compiled nowhere;
+    // 'byok' means free on the visitor's own key (subsidized gateways, small HF serverless
+    // models) — zero-cost is not zero-config; 'pro' is billed by the token somewhere. The
+    // budget split lives in server/freetier.mjs and nowhere else.
+    for (const m of catalog) expect(['byok', 'pro']).toContain(m.tier);
+    for (const m of catalog) if (m.tier === 'byok') expect(m.note + m.label).toMatch(/free|subsidized|HF|router|open/i);
     for (const id of ['deepseek/deepseek-chat', 'z-ai/glm-5.2', 'moonshotai/kimi-k2.7-code', 'groq/llama-3.3-70b-versatile', 'openrouter/auto']) {
       expect(catalog.find(m => m.id === id)).toBeUndefined();
     }

@@ -38,7 +38,7 @@ export interface SettingsProps {
  * `custom` is left out: it is not an account you hold a key for, it is an endpoint you point at,
  * and it is configured with its base URL in the model hub above.
  */
-const KEYED: Provider[] = ['openai', 'anthropic', 'google', 'xkiro', 'openrouter', 'groq', 'cohere', 'aihubmix'];
+const KEYED: Provider[] = ['openai', 'anthropic', 'google', 'xkiro', 'openrouter', 'groq', 'cohere', 'aihubmix', 'huggingface'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
   openai: 'sk-… from platform.openai.com',
   anthropic: 'sk-ant-… from console.anthropic.com',
@@ -48,6 +48,7 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
   groq: 'gsk_… from console.groq.com',
   cohere: 'From dashboard.cohere.com',
   aihubmix: 'From aihubmix.com — free tier, no card',
+  huggingface: 'hf_… token from hf.co/settings/tokens',
 };
 
 /** The vendor an id belongs to, for grouping a long list into readable sections. */
