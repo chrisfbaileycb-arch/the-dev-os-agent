@@ -1,10 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import esbuildNs from 'esbuild-wasm/lib/browser.js';
 import { chromium } from 'playwright';
+
+// Skip rather than fail when the browser binary is absent: CI installs Chromium, but a checkout
+// that skipped the Playwright download (PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1, or no `playwright
+// install` locally) cannot run this test, and a hard failure there reads as a code regression
+// that it is not. The esbuild-wasm build half still runs everywhere.
+const hasChromium = (() => { try { return existsSync(chromium.executablePath()); } catch { return false; } })();
 
 const require = createRequire(import.meta.url);
 // Resolution through the package, not a hand-counted path: npm hoists this to the workspace root.
@@ -39,7 +45,7 @@ async function loadProjectPlugin() {
   return mod.projectPlugin;
 }
 
-test('a built React app runs in a real browser and its state works', async () => {
+test('a built React app runs in a real browser and its state works', { skip: hasChromium ? false : 'headless Chromium is not installed on this machine' }, async () => {
   const wasmModule = new WebAssembly.Module(readFileSync(esbuildWasmPath));
   await esbuild.initialize({ wasmModule, worker: false });
   const projectPlugin = await loadProjectPlugin();

@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { existsSync } from 'node:fs';
+import { chromium } from 'playwright';
 import { allowedHost, checkTarget, createBrowse } from '../server/browse.mjs';
+
+// The Chromium binary is an install-time concern, not a code concern: CI installs it (see
+// .github/workflows/web.yml), but a checkout that skipped the Playwright download cannot run
+// the browser tests, and a hard failure there reads as a regression in code the diff never
+// touched. Skip cleanly instead; the pure-logic tests in this file still run everywhere.
+const hasChromium = (() => { try { return existsSync(chromium.executablePath()); } catch { return false; } })();
 const html = `<!doctype html><html lang="en"><head><title>Blocky's Eatery</title><meta name="description" content="Family diner since 1998"><link rel="canonical" href="https://example.com/eatery"><meta name="robots" content="index,follow"><meta property="og:title" content="Blocky's"></head><body><h1>Welcome to Blocky's</h1><h2>Menu</h2><p>Breakfast all day. Pancakes, eggs, coffee.</p><a href="/menu">See the menu</a><a href="https://maps.example/blockys">Directions</a></body></html>`;
 async function withFixture(fn) {
   const server = createServer((req, res) => { if (req.url === '/slow') return; res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(html); });
@@ -18,7 +26,7 @@ test('allowlist rules and target checks', async () => {
   await assert.rejects(checkTarget('https://example.com', { env: { BROWSE_ALLOWED_HOSTS: '*' }, resolve: async () => [{ address: '10.0.0.5' }] }), /Private/);
   assert.equal((await checkTarget('https://example.com/page', { env: { BROWSE_ALLOWED_HOSTS: 'example.com' }, resolve: async () => [{ address: '93.184.216.34' }] })).pathname, '/page');
 });
-test('inspects a page with headless Chromium and enforces the hourly budget', async () => { await withFixture(async base => {
+test('inspects a page with headless Chromium and enforces the hourly budget', { skip: hasChromium ? false : 'headless Chromium is not installed on this machine' }, async () => { await withFixture(async base => {
   const browse = createBrowse({ env: { BROWSE_MAX_PER_HOUR: '2' }, allowPrivate: true });
   try {
     const report = await browse.inspect(base + '/', 'ws-test');
