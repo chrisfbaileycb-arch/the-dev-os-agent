@@ -388,6 +388,46 @@ test('an error response is read, not discarded', async () => {
   }
 });
 
+test('OmniRoute routes to the operator install with the server key and an unmodified id', async () => {
+  const env = { OMNIROUTE_API_KEY: 'omni-key', OMNIROUTE_BASE_URL: 'https://my-omniroute.example/v1', OMNIROUTE_FREE_MODELS: 'auto, auto/coding' };
+  const captures = [];
+  await withProxy({ env, transport: async (url, options) => { captures.push({ url, ...options }); return stream('data: [DONE]\n\n'); } }, async url => {
+    // Keyless: funded from the server key, via the allowlist.
+    assert.equal((await chatFree(url, { provider: 'omniroute', model: 'auto', messages: [{ role: 'user', content: 'hi' }] })).status, 200);
+    // BYOK: the visitor's own credential against the same pinned origin.
+    assert.equal((await post(url, { ...base, provider: 'omniroute', model: 'auto/fast', apiKey: 'visitor-credential' })).status, 200);
+  });
+  assert.equal(captures.length, 2);
+  assert.equal(captures[0].url, 'https://my-omniroute.example/v1/chat/completions', 'the destination is the operator origin, not anything the request body named');
+  assert.equal(captures[0].headers.Authorization, 'Bearer omni-key', 'a keyless free request carries the deployment key');
+  assert.equal(captures[1].headers.Authorization, 'Bearer visitor-credential', 'BYOK carries the visitor key to the same pinned origin');
+  const body = JSON.parse(captures[1].body);
+  // OmniRoute names its own ids; nothing is stripped or rewritten on the way through.
+  assert.equal(body.model, 'auto/fast');
+  assert.equal(body.stream, true);
+  assert.deepEqual(body.stream_options, { include_usage: true }, 'usage is requested so token counts still work');
+  assert.equal(usageReportable('omniroute', { nativeCohere: false, nativeAnthropic: false }), true);
+});
+
+test('a deployment without OMNIROUTE_BASE_URL says so plainly instead of failing obscurely', async () => {
+  await withProxy({ env: { OMNIROUTE_API_KEY: 'k', OMNIROUTE_FREE_MODELS: 'auto' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    const response = await chatFree(url, { provider: 'omniroute', model: 'auto', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.match(body.error.message, /OMNIROUTE_BASE_URL/);
+  });
+});
+
+test('a visitor cannot fund an OmniRoute id the operator did not list', async () => {
+  const env = { OMNIROUTE_API_KEY: 'omni-key', OMNIROUTE_BASE_URL: 'https://my-omniroute.example/v1', OMNIROUTE_FREE_MODELS: 'auto' };
+  await withProxy({ env, transport: async () => { throw Error('must not call'); } }, async url => {
+    // On the allowlist but narrowed out — and a URL in the body steers nothing.
+    const response = await chatFree(url, { provider: 'omniroute', model: 'auto/coding', baseUrl: 'https://attacker.example/v1', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error.code, 'key_required');
+  });
+});
+
 test('reading the error body is bounded and can never fail the request', async () => {
   // A provider that answers an error with a megabyte of HTML must cost one log line, not memory,
   // and a diagnostic that throws would take down the request it exists to explain.

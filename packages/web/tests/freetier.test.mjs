@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { FREE_TIER_UNAVAILABLE, createProxy } from '../server/proxy.mjs';
 import { openDatabase } from '../server/db.mjs';
-import { FREE_MODELS, XKIRO_DEFAULT_BASE, createBurstLimiter, creditsForTokens, freeModel, freeModels, freeTierStatus, fundedModels, isFrontier, routeFreeRequest, setXkiroCatalog, xkiroBase, xkiroCatalog, xkiroPool } from '../server/freetier.mjs';
+import { FREE_MODELS, OMNIROUTE_DEFAULT_BASE, XKIRO_DEFAULT_BASE, createBurstLimiter, creditsForTokens, freeModel, freeModels, freeTierStatus, fundedModels, isFrontier, omnirouteBase, omniRoutePool, routeFreeRequest, setXkiroCatalog, xkiroBase, xkiroCatalog, xkiroPool } from '../server/freetier.mjs';
 import { createMeter, deltaLength, usageFrom } from '../server/meter.mjs';
 
 const workspace = '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f';
@@ -380,6 +380,43 @@ test('an xKiro stream is metered to the free ledger like any other funded model'
       assert.equal(db.latestEntry(workspace, 'free').model, 'openai/gpt-5.3-codex-spark');
     });
   } finally { restore(); db.close(); }
+});
+
+test('omniRoutePool is the operator list verbatim — trimmed, deduplicated, empty by default', () => {
+  // No variable means no funding, and there is no default install to fall back to: OmniRoute is
+  // software the operator runs, so silence has to mean off rather than "somewhere on the internet".
+  assert.deepEqual(omniRoutePool({}), []);
+  assert.deepEqual(omniRoutePool({ OMNIROUTE_FREE_MODELS: ' auto, auto/coding , oc/openai/gpt-oss-120b,auto ' }), ['auto', 'auto/coding', 'oc/openai/gpt-oss-120b']);
+  assert.deepEqual(omniRoutePool({ OMNIROUTE_FREE_MODELS: '   ' }), []);
+  assert.deepEqual(omniRoutePool({ OMNIROUTE_FREE_MODELS: `auto, ${'x'.repeat(201)}` }), ['auto'], 'an oversized id is dropped, not repaired');
+});
+
+test('omnirouteBase validates like xkiroBase and defaults to nothing', () => {
+  assert.equal(omnirouteBase({}), OMNIROUTE_DEFAULT_BASE);
+  assert.equal(omnirouteBase({ OMNIROUTE_BASE_URL: 'https://my-omniroute.example/v1/' }), 'https://my-omniroute.example/v1', 'a trailing slash is normalised');
+  // Operator-set but still checked, exactly like the xKiro variable: a typo should surface as a
+  // clear sentence in Settings, not as a puzzling network error from a mangled URL.
+  for (const bad of ['http://my-omniroute.example/v1', 'not a url', 'https://u:p@my-omniroute.example/v1', 'https://my-omniroute.example/v1?k=1', '   '])
+    assert.equal(omnirouteBase({ OMNIROUTE_BASE_URL: bad }), OMNIROUTE_DEFAULT_BASE, bad);
+});
+
+test('OmniRoute joins the free pool only when the operator names ids and the deployment holds the key', () => {
+  const env = { OMNIROUTE_API_KEY: 'k', OMNIROUTE_FREE_MODELS: 'auto, auto/coding' };
+  assert.equal(freeModel('auto', env)?.provider, 'omniroute');
+  assert.equal(freeModel('auto/coding', env)?.provider, 'omniroute');
+  // Either half missing funds nothing. freeModel is the allowlist lookup; the key gate is
+  // applied by fundedModels/fundingFor, exactly as it is for every other provider entry.
+  assert.deepEqual(fundedModels({ OMNIROUTE_API_KEY: 'k' }).filter(m => m.provider === 'omniroute'), [], 'a key without a list funds nothing');
+  assert.deepEqual(fundedModels({ OMNIROUTE_FREE_MODELS: 'auto' }).filter(m => m.provider === 'omniroute'), [], 'a list without a key funds nothing');
+  assert.equal(freeModel('auto/chaos', env), undefined, 'an id outside the list is refused');
+  // The names mean nothing on a gateway whose free-ness depends on how the operator routed it, so
+  // FRONTIER does not veto this list the way it guards the static Groq and OpenRouter entries.
+  const status = freeTierStatus(env, []);
+  assert.deepEqual(status.models, ['auto', 'auto/coding']);
+  assert.equal(status.providers['auto'], 'omniroute');
+  assert.equal(freeTierStatus({ ...env, FREE_TIER_DISABLED: 'true' }, []).enabled, false);
+  // And the request reaches the gateway with the id exactly as the operator named it.
+  assert.deepEqual(routeFreeRequest(freeModel('auto/coding', env)), { model: 'auto/coding' });
 });
 
 test('XKIRO_BASE_URL steers the gateway, and a bad value falls back rather than breaking', async () => {

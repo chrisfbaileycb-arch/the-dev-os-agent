@@ -38,7 +38,7 @@ export interface SettingsProps {
  * `custom` is left out: it is not an account you hold a key for, it is an endpoint you point at,
  * and it is configured with its base URL in the model hub above.
  */
-const KEYED: Provider[] = ['openai', 'anthropic', 'google', 'xkiro', 'openrouter', 'groq', 'cohere', 'aihubmix', 'huggingface'];
+const KEYED: Provider[] = ['openai', 'anthropic', 'google', 'xkiro', 'openrouter', 'groq', 'cohere', 'aihubmix', 'huggingface', 'omniroute'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
   openai: 'sk-… from platform.openai.com',
   anthropic: 'sk-ant-… from console.anthropic.com',
@@ -49,6 +49,7 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
   cohere: 'From dashboard.cohere.com',
   aihubmix: 'From aihubmix.com — free tier, no card',
   huggingface: 'hf_… token from hf.co/settings/tokens',
+  omniroute: 'Any value — set OMNIROUTE_API_KEY on the server to unlock funding',
 };
 
 /** The vendor an id belongs to, for grouping a long list into readable sections. */
@@ -145,6 +146,7 @@ export default function Settings(p: SettingsProps) {
           </div>
           {c.mode === 'remote' && c.model && !current && !p.free.models.includes(c.model) && <p className="help">Unlisted model: charged at {weightFor(c.model)} credits per 1K tokens on platform credits, judged from its name. Free-tier funding covers the models in the list above only.</p>}
           {provider === 'xkiro' && p.gateway && <p className="help">This deployment reaches xKiro at <strong className="mono">{p.gateway}</strong>. That is the resolved value of XKIRO_BASE_URL — if it is not the address you expect, the variable is the thing to correct, and a wrong-but-valid host shows up only as a failed connection.</p>}
+          {provider === 'omniroute' && <p className="help">OmniRoute is self-hosted: this deployment reaches your install at <strong className="mono">OMNIROUTE_BASE_URL</strong> (HTTPS, including /v1). Free-tier funding is exactly what <strong className="mono">OMNIROUTE_FREE_MODELS</strong> names — comma-separated ids such as <span className="mono">auto, auto/coding</span> — and requires <strong className="mono">OMNIROUTE_API_KEY</strong> to be set (any value works against an install with auth off). Discover reads the live model list from your gateway. Until those are set on the server, requests answer “not configured”.</p>}
           {provider === 'custom' && <p className="help">HTTPS only, and the origin must be listed in CUSTOM_API_ORIGINS on the server. A home PC running Ollama or LM Studio is reached through an administrator bridge, never through localhost on a hosted server.</p>}
         </section>
 

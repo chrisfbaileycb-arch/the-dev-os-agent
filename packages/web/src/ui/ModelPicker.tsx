@@ -71,7 +71,7 @@ export default function ModelPicker(p: ModelPickerProps) {
   const keyedByProvider = useMemo(() => {
     // AIHubMix rides after OpenRouter: both are gateways the visitor reaches with their own key.
     // Hugging Face follows for the same reason: one key, many vendors behind it.
-    const order: Provider[] = ['anthropic', 'openai', 'google', 'openrouter', 'aihubmix', 'huggingface'];
+    const order: Provider[] = ['anthropic', 'openai', 'google', 'openrouter', 'aihubmix', 'huggingface', 'omniroute'];
     const groups: { provider: Provider; models: CatalogModel[] }[] = [];
     for (const provider of order) {
       const models = catalog.filter(m => m.provider === provider);

@@ -90,6 +90,39 @@ export function xkiroPool(env = process.env, discovered = discoveredXkiro) {
 }
 
 /**
+ * OmniRoute, self-hosted. Where the deployment's install lives is the operator's to say, so it is
+ * configured exactly like XKIRO_BASE_URL: an HTTPS origin, no credentials or query, validated and
+ * defaulted rather than trusted blind — a typo should surface as a clear message in Settings, not
+ * as a puzzling network error. Unlike xKiro there is no public default to fall back to, so an
+ * unset variable resolves to '' and the provider simply does not resolve until it is configured.
+ */
+export const OMNIROUTE_DEFAULT_BASE = '';
+export function omnirouteBase(env = process.env) {
+  const configured = (env.OMNIROUTE_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (!configured) return OMNIROUTE_DEFAULT_BASE;
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return OMNIROUTE_DEFAULT_BASE;
+    return configured;
+  } catch { return OMNIROUTE_DEFAULT_BASE; }
+}
+
+/**
+ * The OmniRoute ids this deployment offers free.
+ *
+ * Deliberately a plain allowlist, without the discovered-catalogue intersection XKIRO_FREE_MODELS
+ * was corrected into. That intersection exists because the xKiro gateway publishes a price and a
+ * tier per id, so the server can check the operator's list against what the gateway actually gives
+ * away. OmniRoute's /v1/models is the plain OpenAI shape — no pricing block, no access_tier — and
+ * whether a run costs anything depends on which providers the operator connected to their own
+ * install, which is knowledge only they have. There is nothing upstream to check a claimed id
+ * against, so the operator naming it is the whole decision, and the list is taken verbatim.
+ */
+export function omniRoutePool(env = process.env) {
+  return [...new Set((env.OMNIROUTE_FREE_MODELS || '').split(',').map(s => s.trim()).filter(id => id && id.length <= 200))];
+}
+
+/**
  * Frontier models, which this deployment never funds from its own key.
  *
  * The zero-config tier exists so a stranger can type one sentence and get an answer. It is paid
@@ -163,6 +196,7 @@ export function freeModels(env = process.env, discovered = discoveredXkiro) {
     ...guarded,
     ...hf,
     ...xkiroPool(env, discovered).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
+    ...omniRoutePool(env).map(id => ({ id, provider: 'omniroute', envKey: 'OMNIROUTE_API_KEY' })),
   ];
 }
 
@@ -218,6 +252,9 @@ export function routeFreeRequest(entry) {
   // org/model form the router's OpenAI surface expects, and its routing policies (:fastest,
   // :cheapest) are legal suffixes a deployment may name deliberately.
   if (entry.provider === 'huggingface') return { model: entry.id };
+  // OmniRoute names its own ids — `auto`, `auto/coding`, concrete `oc/…` entries — and the
+  // gateway is the authority on what any of them resolves to. Nothing is stripped or rewritten.
+  if (entry.provider === 'omniroute') return { model: entry.id };
   if (entry.pool) return { model: entry.pool[0], models: [...entry.pool] };
   // xKiro and the OpenRouter :free ids are passed through exactly as the gateway names them.
   return { model: entry.id };

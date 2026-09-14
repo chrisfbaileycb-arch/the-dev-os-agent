@@ -97,6 +97,42 @@ describe('Hugging Face provider', () => {
   });
 });
 
+describe('OmniRoute provider', () => {
+  // Self-hosted gateway software: one OpenAI-compatible endpoint per install, so unlike every
+  // hosted provider there is no public URL to pin. The browser keeps no endpoint — Discover asks
+  // the proxy, which asks the operator's install — and funding is the operator's own declaration
+  // (OMNIROUTE_FREE_MODELS on the server), never a client-side guess.
+  it('is registered with the auto-family seeds and no browser endpoint', () => {
+    expect(providers.omniroute).toBeDefined();
+    expect(providers.omniroute.endpoint).toBe('');
+    expect(providers.omniroute.models.slice(0, 4)).toEqual(['auto', 'auto/coding', 'auto/fast', 'auto/cheap']);
+  });
+
+  it('builds a default connection that carries no hardcoded destination', () => {
+    const c = defaultConnection('omniroute');
+    expect(c.provider).toBe('omniroute');
+    expect(c.endpoint).toBe('');
+    expect(c.model).toBe('auto');
+  });
+
+  it('carries catalog entries that never claim free or byok', () => {
+    // Nothing here can honestly promise a cost on the visitor's side: whether a run costs
+    // anything depends on which providers the operator connected to their install.
+    expect(findModel('auto')?.provider).toBe('omniroute');
+    expect(findModel('auto')?.tier).toBe('pro');
+    expect(findModel('auto/coding')?.tier).toBe('pro');
+    expect(weightFor('auto/fast')).toBe(3);
+    expect(catalog.filter(m => m.provider === 'omniroute').every(m => m.tier === 'pro')).toBe(true);
+  });
+
+  it('is never treated as deployment-funded from the client side', () => {
+    // /api/providers is the only thing that can fund an id here — the operator's server list —
+    // so the client inferenceFor() never reaches that conclusion from the name.
+    expect(inferenceFor('auto', undefined, ['kimi-for-coding-free'])).toBe('byok');
+    expect(inferenceFor('auto', 'byok', [])).toBe('byok');
+  });
+});
+
 describe('streaming provider client', () => {
   it.each(['https://user:secret@api.example.com/v1', 'https://api.example.com/v1?key=secret', 'file:///tmp/test'])('rejects invalid base URL %s', endpoint => { expect(() => validateEndpoint(endpoint)).toThrow(); });
   it('accepts bridge URLs for server-side validation', () => { expect(validateEndpoint('http://localhost:11434/v1/')).toBe('http://localhost:11434/v1'); });

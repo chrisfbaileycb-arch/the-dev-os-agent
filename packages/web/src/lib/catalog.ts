@@ -66,6 +66,12 @@ export const catalog: CatalogModel[] = [
   { id: 'Qwen/Qwen2.5-Coder-32B-Instruct', provider: 'huggingface', label: 'Qwen 2.5 Coder 32B', tier: 'byok', weight: CREDIT_WEIGHTS.standard, note: 'Code-dense open model for building.' },
   { id: 'zai-org/GLM-4.5', provider: 'huggingface', label: 'GLM-4.5', tier: 'byok', weight: CREDIT_WEIGHTS.standard, note: 'Agentic open model on the HF router.' },
   { id: 'moonshotai/Kimi-K2-Instruct', provider: 'huggingface', label: 'Kimi K2 Instruct', tier: 'byok', weight: CREDIT_WEIGHTS.standard, note: 'Long-context open MoE.' },
+  // OmniRoute, self-hosted. Its `auto` channel is the router itself: one request, and the
+  // gateway picks among every provider the operator connected — free tiers first, by design.
+  // No entry can honestly claim a tier on the visitor's side: whether a run costs anything
+  // depends on which providers this deployment's operator connected and how their gateway
+  // scored the request. So these ride 'pro' — the tier that only says "billed somewhere" —
+  // and Discover lists whatever ids this install actually serves, `auto/…` included.
   // Direct on the vendor's own API, billed to the visitor's account with that vendor. The same
   // families are reachable through OpenRouter above; these exist so a key you already hold works
   // without opening an account somewhere new. Model names move faster than a deploy, so these
@@ -74,6 +80,10 @@ export const catalog: CatalogModel[] = [
   { id: 'claude-sonnet-4-5', provider: 'anthropic', label: 'Claude Sonnet (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'On your own Anthropic key.' },
   { id: 'gemini-2.5-pro', provider: 'google', label: 'Gemini 2.5 Pro (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'On your own Google AI Studio key.' },
   { id: 'gemini-2.5-flash', provider: 'google', label: 'Gemini 2.5 Flash (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Quick and cheap on your own Google key.' },
+  { id: 'auto', provider: 'omniroute', label: 'OmniRoute auto (balanced)', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Routes across the operator\'s connected providers; free tiers first.' },
+  { id: 'auto/coding', provider: 'omniroute', label: 'OmniRoute auto/coding', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Quality-first routing for code generation.' },
+  { id: 'auto/fast', provider: 'omniroute', label: 'OmniRoute auto/fast', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Lowest-latency routing channel.' },
+  { id: 'auto/cheap', provider: 'omniroute', label: 'OmniRoute auto/cheap', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Cheapest-per-token routing channel.' },
 ];
 
 const bare = (id: string) => id.replace(/^groq\//, '').toLowerCase();
