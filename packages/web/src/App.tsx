@@ -372,8 +372,11 @@ export default function App() {
         }
       };
       // The lead persona goes over whole, not by id: a custom agent lives in localStorage and the
-      // worker cannot read it, so an id alone would silently lose the lead the user chose.
-      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files });
+      // worker cannot read it, so an id alone would silently lose the lead the user chose. The
+      // stage-candidate list is the deployment's funded ids only when the visitor is actually on
+      // the free tier — a BYOK run stays on the visitor's own model for every stage.
+      const stageCandidates = inference === 'free' ? deployment.free.models : [];
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates });
     } catch (e) { fail(errorText(e)); }
   }
 

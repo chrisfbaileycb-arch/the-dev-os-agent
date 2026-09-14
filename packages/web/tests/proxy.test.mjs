@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { FREE_TIER_UNAVAILABLE, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
 import { setXkiroCatalog } from '../server/freetier.mjs';
 const NL = String.fromCharCode(10);
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
@@ -88,6 +88,12 @@ test('the major vendors route to their own APIs on the visitor key', async () =>
   assert.equal((await resolveTarget('anthropic')).nativeAnthropic, true);
   assert.equal((await resolveTarget('openai')).nativeAnthropic, false);
   assert.equal((await resolveTarget('openai', 'https://attacker.example/v1', {})).base, 'https://api.openai.com/v1', 'a supplied base URL is ignored, not honoured');
+  // AIHubMix: a subsidized OpenAI-compatible gateway, reached at its own fixed home like every
+  // other named provider — a request body naming a different host is ignored, not honoured.
+  assert.equal((await resolveTarget('aihubmix')).base, 'https://aihubmix.com/v1');
+  assert.equal((await resolveTarget('aihubmix', 'https://attacker.example/v1', {})).base, 'https://aihubmix.com/v1', 'a supplied base URL is ignored, not honoured');
+  assert.equal((await resolveTarget('aihubmix')).nativeAnthropic, false);
+  assert.equal((await resolveTarget('aihubmix')).nativeCohere, false);
 
   for (const [provider, model, host] of [['openai', 'gpt-4o', 'https://api.openai.com/v1'], ['google', 'gemini-2.5-flash', 'https://generativelanguage.googleapis.com/v1beta/openai']]) {
     let captured;
@@ -98,6 +104,23 @@ test('the major vendors route to their own APIs on the visitor key', async () =>
     assert.equal(captured.headers.Authorization, 'Bearer test-key-not-real');
     assert.equal(JSON.parse(captured.body).model, model);
   }
+});
+
+test('AIHubMix routes as an ordinary OpenAI-compatible vendor on the visitor key', async () => {
+  // Its models are free on the visitor's own AIHubMix key, not on the deployment's: fundingFor
+  // must answer 'byok' for a key in hand and 'none' without one, never 'free', because the
+  // deployment funds no AIHubMix ids and a visitor's key is never silently replaced.
+  const env = { AIHUBMIX_API_KEY: 'server-hub-key' };
+  assert.deepEqual(fundingFor({ provider: 'aihubmix', model: 'gpt-5.5-free', apiKey: 'visitor-hub-key' }, env), { mode: 'byok', apiKey: 'visitor-hub-key' });
+  assert.deepEqual(fundingFor({ provider: 'aihubmix', model: 'coding-glm-5.1-free' }, env).mode, 'none', 'no allowlist entry exists, so the deployment cannot fund it');
+  let captured;
+  await withProxy({ env: {}, transport: async (url, options) => { captured = { url, ...options }; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await post(url, { ...base, provider: 'aihubmix', model: 'gpt-5.5-free', baseUrl: 'https://attacker.example/v1' })).status, 200);
+  });
+  assert.equal(captured.url, 'https://aihubmix.com/v1/chat/completions');
+  assert.equal(captured.headers.Authorization, 'Bearer test-key-not-real');
+  assert.equal(JSON.parse(captured.body).model, 'gpt-5.5-free');
+  assert.equal(usageReportable('aihubmix', { nativeCohere: false, nativeAnthropic: false }), true, 'usage is requested so BYOK runs still count tokens');
 });
 
 test('Anthropic is translated to /v1/messages, headers and all', async () => {

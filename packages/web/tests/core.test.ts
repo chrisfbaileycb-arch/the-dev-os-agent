@@ -5,6 +5,9 @@ import { safeJsonParse } from '../src/vendor/ruflo/json-security';
 import { makeTasks, executeRun, selectAgent } from '../src/lib/orchestrator';
 import { retrieve, PromptCache } from '../src/lib/memory';
 import { complete, listModels, ProviderError, validateEndpoint } from '../src/lib/provider';
+import { providers, defaultConnection } from '../src/lib/providers';
+import { catalog, findModel, weightFor } from '../src/lib/catalog';
+import { inferenceFor } from '../src/lib/providers';
 import { exportRun } from '../src/lib/storage';
 import type { StartMessage, Run } from '../src/lib/types';
 const message = (): StartMessage => ({ type: 'start', runId: crypto.randomUUID(), goal: 'Design browser knowledge search', workflow: 'build', connection: { mode: 'remote', endpoint: 'https://api.example.com/v1', model: 'test-model', token: 'never-export-this-token', maxTokens: 512 }, knowledge: [{ id: 'note', title: 'Browser knowledge', content: 'Use keyword search for the first version.', createdAt: new Date().toISOString() }] });
@@ -19,6 +22,41 @@ describe('Ruflo browser adaptation', () => {
 describe('memory', () => {
   it('retrieves matching notes but not irrelevant notes', () => { const docs = message().knowledge; expect(retrieve('browser search', docs)).toHaveLength(1); expect(retrieve('gardening', docs)).toHaveLength(0); });
   it('evicts the least recently used exact prompt', () => { const cache = new PromptCache(2); cache.set('a', 'A'); cache.set('b', 'B'); expect(cache.get('a')).toBe('A'); cache.set('c', 'C'); expect(cache.get('b')).toBeUndefined(); cache.clear(); expect(cache.get('a')).toBeUndefined(); });
+});
+
+describe('AIHubMix provider', () => {
+  // A subsidized OpenAI-compatible gateway added alongside the others: free models on the
+  // visitor's own key, never the deployment's allowance.
+  it('is registered with its fixed endpoint and free-model seeds', () => {
+    expect(providers.aihubmix).toBeDefined();
+    expect(providers.aihubmix.endpoint).toBe('https://aihubmix.com/v1');
+    expect(providers.aihubmix.models.length).toBeGreaterThan(0);
+    expect(providers.aihubmix.models.every(m => m.endsWith('-free'))).toBe(true);
+  });
+
+  it('builds a default connection like any named provider', () => {
+    const c = defaultConnection('aihubmix');
+    expect(c.provider).toBe('aihubmix');
+    expect(c.endpoint).toBe('https://aihubmix.com/v1');
+    expect(c.model).toBe('gpt-5.5-free');
+  });
+
+  it('carries catalog entries that resolve by id and price as fast models', () => {
+    expect(findModel('coding-glm-5.1-free')?.provider).toBe('aihubmix');
+    // tier 'free' is reserved for deployment-funded ids (see workspace.test.ts); AIHubMix
+    // freeness lives on the visitor's key, so its entries are key-required like every other.
+    expect(findModel('gpt-5.5-free')?.tier).toBe('pro');
+    expect(weightFor('gpt-5.5-free')).toBe(0.5);
+    expect(catalog.filter(m => m.provider === 'aihubmix').length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('is never treated as free-tier funded: its models bill the visitor key', () => {
+    // The deployment funds xKiro gateway ids, not AIHubMix ones, so an unchosen mode resolves
+    // to BYOK — and a deliberate 'byok' or 'credits' is returned untouched.
+    expect(inferenceFor('gpt-5.5-free', undefined, ['kimi-for-coding-free'])).toBe('byok');
+    expect(inferenceFor('gpt-5.5-free', 'byok', ['kimi-for-coding-free'])).toBe('byok');
+    expect(inferenceFor('gpt-5.5-free', 'credits', [])).toBe('credits');
+  });
 });
 
 describe('streaming provider client', () => {

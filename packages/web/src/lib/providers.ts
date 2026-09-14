@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'aihubmix' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -12,6 +12,10 @@ export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google'
 // provider is allowed to steer the destination, and then only to an approved origin.
 export const providers: Record<Provider, { name: string; tier: string; endpoint: string; models: string[] }> = {
   openrouter: { name: 'OpenRouter', tier: 'Universal', endpoint: 'https://openrouter.ai/api/v1', models: ['meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-nemo:free', 'qwen/qwen-2.5-72b-instruct:free', 'deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'anthropic/claude-3.5-haiku', 'openai/gpt-4o'] },
+  // A subsidized gateway: 27+ models whose ids end in -free run at no cost against a normal
+  // AIHubMix account key, frontier ones included. Seeds from their published free list; Discover
+  // reads the live catalogue and the model field accepts anything typed, as everywhere else.
+  aihubmix: { name: 'AIHubMix', tier: 'Free gateway', endpoint: 'https://aihubmix.com/v1', models: ['gpt-5.5-free', 'gpt-4.1-free', 'gemini-3-flash-preview-free', 'coding-glm-5.1-free', 'kimi-for-coding-free', 'k2.6-code-preview-free', 'xiaomi-mimo-v2.5-free', 'coding-minimax-m2.7-free'] },
   groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
   openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy

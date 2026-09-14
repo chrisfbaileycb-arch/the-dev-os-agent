@@ -30,6 +30,19 @@ export const catalog: CatalogModel[] = [
   { id: 'anthropic/claude-3.5-sonnet', provider: 'openrouter', label: 'Claude 3.5 Sonnet', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Strong writing and analysis.' },
   { id: 'anthropic/claude-3.5-haiku', provider: 'openrouter', label: 'Claude 3.5 Haiku', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Quick and careful.' },
   { id: 'openai/gpt-4o', provider: 'openrouter', label: 'GPT-4o', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'General purpose flagship.' },
+  // AIHubMix: a gateway whose subsidized free tier (ids ending in -free) runs at no cost on the
+  // visitor's own AIHubMix key. Seeds from their published free catalogue; the gateway labels
+  // every entry, so Discover fills in whatever has shipped since these were written.
+  { id: 'gpt-5.5-free', provider: 'aihubmix', label: 'GPT-5.5 (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'Frontier reasoning, subsidized to zero.' },
+  { id: 'gpt-4.1-free', provider: 'aihubmix', label: 'GPT-4.1 (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: '1M context on a free id.' },
+  { id: 'gemini-3-flash-preview-free', provider: 'aihubmix', label: 'Gemini 3 Flash (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'Ultra-long context, multimodal.' },
+  { id: 'coding-glm-5.1-free', provider: 'aihubmix', label: 'GLM-5.1 Coding (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'SWE-bench Pro leader at zero cost.' },
+  { id: 'coding-glm-5-free', provider: 'aihubmix', label: 'GLM-5 Coding (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'Open-source code powerhouse.' },
+  { id: 'kimi-for-coding-free', provider: 'aihubmix', label: 'Kimi for Coding (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'Multi-file refactoring and debugging.' },
+  { id: 'k2.6-code-preview-free', provider: 'aihubmix', label: 'K2.6 Code (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'Algorithmic and systems-level code.' },
+  { id: 'coding-minimax-m2.7-free', provider: 'aihubmix', label: 'MiniMax M2.7 (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'Latest MiniMax coding release.' },
+  { id: 'xiaomi-mimo-v2.5-free', provider: 'aihubmix', label: 'MiMo v2.5 (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: '1M context, agent-grade tool use.' },
+  { id: 'xiaomi-mimo-v2-pro-free', provider: 'aihubmix', label: 'MiMo v2 Pro (free)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'Advanced reasoning, function calling.' },
   // Direct on the vendor's own API, billed to the visitor's account with that vendor. The same
   // families are reachable through OpenRouter above; these exist so a key you already hold works
   // without opening an account somewhere new. Model names move faster than a deploy, so these

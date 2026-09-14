@@ -24,7 +24,7 @@ export interface Project { files: ProjectFile[]; entry: string; dependencies: Re
 const FENCE = /```([^\n`]*)\n([\s\S]*?)```/g;
 const BARE_LANGUAGES = new Set(['html', 'htm', 'js', 'javascript', 'jsx', 'ts', 'typescript', 'tsx', 'css', 'json', 'python', 'py', 'bash', 'sh', 'shell', 'zsh', 'text', 'plain', 'plaintext', 'markdown', 'md', 'yaml', 'yml', 'sql', 'diff', '']);
 /** A safe, relative project path: no leading slash, no drive letter, no `..` segment, no NUL. */
-const SAFE_PATH = /^(?!\/)(?!.*\.\.(?:\/|$))(?!.*\\)[A-Za-z0-9._][A-Za-z0-9._\-/]{0,199}$/;
+const SAFE_PATH = /^(?!\/)(?!.*\.\.(?:\/|$))(?!.*\\)[A-Za-z0-9._][A-Za-z0-9._\-\/]{0,199}$/;
 
 export function isSafeProjectPath(path: string): boolean {
   return SAFE_PATH.test(path) && !path.includes('\0');
@@ -53,6 +53,80 @@ function fences(text: string): { path: string | null; lang: string; body: string
   return out;
 }
 
+/**
+ * The code-ish fence bodies a reply carries, excluding any already serving as project content.
+ *
+ * Used to repair HTML documents whose scripts and stylesheets arrived as sibling fences: a ```js
+ * block beside an ```html one is most often the file the HTML points at, so it is inlined rather
+ * than left to 404 against the sandbox shell, which serves no project files.
+ */
+function codeBlocks(text: string, except: Set<string>): string[] {
+  const CODEISH = new Set(['js', 'javascript', 'jsx', 'ts', 'typescript', 'tsx', 'css']);
+  return fences(text).filter(f => !f.path && CODEISH.has(f.lang) && !except.has(f.body.replace(/\n$/, ''))).map(f => f.body);
+}
+
+/**
+ * A complete HTML document as it arrived, including directly in the reply text rather than a
+ * fence — some providers emit the document bare. Matching is lazy so the first `</html>` ends
+ * it, rather than swallowing everything up to a second, unrelated occurrence.
+ */
+function rawDocument(text: string): string | null {
+  const match = text.match(/<!DOCTYPE html[\s\S]*?<\/html>|<html[\s\S]*?<\/html>/i);
+  return match ? match[0] : null;
+}
+
+/** A rough shape test: does this fenced block read as CSS rather than as code? */
+function looksLikeCss(block: string): boolean {
+  const body = block.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+  if (!body) return false;
+  if (body.startsWith('@')) return true;
+  if (/\b(function|const|let|var|class|import|export|document\.|window\.|=>)/.test(body.slice(0, 400))) return false;
+  return /^[.#]?[A-Za-z\[][^{}]*\{/.test(body) && body.includes(':');
+}
+
+/**
+ * Fold sibling code blocks into an HTML document so the script and stylesheet references a reply
+ * wrote actually resolve, instead of 404ing against the sandbox shell, which serves no project
+ * files. Each external reference is replaced with the next unconsumed sibling of its kind, and a
+ * reference with no sibling left is dropped, which keeps the document runnable either way. Blocks
+ * that no tag claimed join the document itself — but only where they cannot run twice, so a
+ * document that already carries an inline script or style is left alone. Content that arrived
+ * with no wrappers at all (a canvas, a few divs) gains the shell it needs.
+ *
+ * Returns null when nothing changed, which tells the caller to keep the text verbatim. A
+ * self-contained document therefore comes back untouched.
+ */
+export function stitchFragments(doc: string, blocks: string[]): string | null {
+  const scriptQueue = [...blocks.filter(b => !looksLikeCss(b))];
+  const styleQueue = [...blocks.filter(looksLikeCss)];
+  let out = doc.trim();
+  let changed = false;
+
+  out = out.replace(/<script\b[^>]*\bsrc\s*=\s*["'][^"']*["'][^>]*>\s*<\/script>/gi, () => {
+    changed = true;
+    const next = scriptQueue.shift();
+    return next === undefined ? '' : `<script>\n${next}\n</script>`;
+  });
+  out = out.replace(/<link\b[^>]*rel\s*=\s*["']?stylesheet["']?[^>]*>/gi, () => {
+    changed = true;
+    const next = styleQueue.shift();
+    return next === undefined ? '' : `<style>\n${next}\n</style>`;
+  });
+
+  const leftovers = [
+    scriptQueue.length && !/<script\b/i.test(out) ? `<script>\n${scriptQueue.join('\n')}\n</script>` : '',
+    styleQueue.length && !/<style\b/i.test(out) ? `<style>\n${styleQueue.join('\n')}\n</style>` : '',
+  ].filter(Boolean);
+  if (leftovers.length && /<\/body>/i.test(out)) {
+    out = out.replace(/<\/body>/i, `${leftovers.join('\n')}\n</body>`);
+    changed = true;
+  } else if (leftovers.length && !/<(html|body)\b/i.test(out)) {
+    out = `<!doctype html>\n<html><head><meta charset="utf-8" /></head><body>\n${out}\n${leftovers.join('\n')}\n</body></html>`;
+    changed = true;
+  }
+  return changed ? out : null;
+}
+
 function parsePackageJson(text: string): Record<string, string> {
   try {
     const data = JSON.parse(text) as { dependencies?: unknown };
@@ -77,7 +151,10 @@ function reactEntry(paths: string[]): string | null {
  * Multi-file wins whenever at least one fence declared a real path: those files are the project,
  * verbatim, and any bare-language fences alongside them (an explanatory snippet, say) are ignored
  * rather than folded in. Failing that, a single ```html fence — the legacy shape — is a one-file
- * project on its own.
+ * project on its own, with any sibling ```js / ```css fences stitched into it so the references
+ * the model wrote resolve instead of 404ing. A complete document carried bare in the reply text
+ * is read the same way. Anything that is only prose is not a project; the panel falls back to
+ * showing the reply as text, exactly as it always has.
  */
 export function parseProject(text: string): Project | null {
   const found = fences(text);
@@ -98,9 +175,17 @@ export function parseProject(text: string): Project | null {
     if (html) return { files, entry: html, dependencies, kind: 'html' };
     return null;
   }
-  const htmlOnly = found.find(f => f.lang === 'html' || f.lang === 'htm');
-  if (htmlOnly && found.filter(f => f.lang === 'html' || f.lang === 'htm').length === 1) {
-    return { files: [{ path: 'index.html', content: htmlOnly.body.replace(/\n$/, '') }], entry: 'index.html', dependencies: {}, kind: 'html' };
+  const htmlFences = found.filter(f => f.lang === 'html' || f.lang === 'htm');
+  if (htmlFences.length === 1) {
+    const doc = htmlFences[0].body.replace(/\n$/, '');
+    const content = stitchFragments(doc, codeBlocks(text, new Set([doc]))) ?? doc;
+    return { files: [{ path: 'index.html', content }], entry: 'index.html', dependencies: {}, kind: 'html' };
+  }
+  // A complete document the reply carried directly, not inside any fence.
+  const bare = rawDocument(text);
+  if (bare) {
+    const content = stitchFragments(bare, codeBlocks(text, new Set([bare]))) ?? bare;
+    return { files: [{ path: 'index.html', content }], entry: 'index.html', dependencies: {}, kind: 'html' };
   }
   return null;
 }

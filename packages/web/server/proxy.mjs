@@ -33,6 +33,9 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     anthropic: 'https://api.anthropic.com/v1',
     google: 'https://generativelanguage.googleapis.com/v1beta/openai',
     cohere: 'https://api.cohere.com/v2',
+    // AIHubMix speaks the standard OpenAI surface, so it needs no translation — only a fixed
+    // home, like every other named provider, so a request body cannot steer the destination.
+    aihubmix: 'https://aihubmix.com/v1',
     xkiro: xkiroBase(env),
   };
   if (fixed[provider]) return { base: fixed[provider], nativeCohere: provider === 'cohere', nativeAnthropic: provider === 'anthropic' };
@@ -85,7 +88,7 @@ export function keyFor(body, env = process.env) {
   const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
   if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
-  return cleanKey(env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]]);
+  return cleanKey(env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', aihubmix: 'AIHUBMIX_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]]);
 }
 /**
  * Who pays for this request, decided entirely on the server.
@@ -215,7 +218,7 @@ export function outputLimit(provider, model, max) {
  * token count into a failed run. Requested only where it is known to be supported.
  */
 export const usageReportable = (provider, target) =>
-  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xkiro'].includes(provider);
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'aihubmix', 'xkiro'].includes(provider);
 
 /**
  * An OpenAI-shaped chat request as Anthropic's /v1/messages wants it.

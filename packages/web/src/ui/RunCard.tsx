@@ -55,7 +55,7 @@ export default function RunCard({ run }: { run: Run }) {
         {run.steps.map((s, i) => <button
           key={s.id} role="tab" aria-selected={shown?.id === s.id}
           className={`stage ${s.status}${shown?.id === s.id ? ' selected' : ''}`}
-          title={`${s.agent}: ${s.title} — ${s.status}`}
+          title={`${s.agent}: ${s.title} — ${s.status}${s.model ? ` · ${s.model}` : ''}`}
           onClick={() => { setSelected(s.id); setCollapsed(false); }}
         ><StageIcon status={s.status} index={i} />{shortName(s.agent)}</button>)}
         {!run.steps.length && <span className="stage pending"><LoaderCircle size={11} className="spin" />Starting</span>}
@@ -64,7 +64,7 @@ export default function RunCard({ run }: { run: Run }) {
       <button className="text-button" onClick={() => download('heybuddy-run.md', exportRun(run))} title="Export this run as Markdown"><Download size={12} /><span className="chip-label">Export</span></button>
     </div>
     {!collapsed && <>
-      {shown && <div className="run-stage-head"><strong>{shown.agent}</strong><small>{shown.title}</small></div>}
+      {shown && <div className="run-stage-head"><strong>{shown.agent}</strong><small>{shown.title}</small>{shown.model && <small className="mono">· {shown.model}</small>}</div>}
       <pre className="run-output" aria-live="polite">{shown?.output ?? shown?.error ?? 'Stages report here as they finish.'}</pre>
     </>}
     <small className="run-meta">{run.mode === 'demo' ? 'scripted preview' : run.model} · {run.calls} request{run.calls === 1 ? '' : 's'} · {run.tokens.toLocaleString()} tokens{run.origin === 'server' ? ' · background worker' : ''}</small>
