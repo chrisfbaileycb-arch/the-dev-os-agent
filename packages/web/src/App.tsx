@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, Download, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
+import { CircleAlert, Download, KeyRound, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
 import Rail, { type Page } from './ui/Rail';
 import Dock, { type Attached, type RunMode } from './ui/Dock';
 import RunCard from './ui/RunCard';
@@ -8,13 +8,14 @@ import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
 import { usePaneResize } from './ui/SplitPane';
-import OutputPanel, { type LayoutPreset } from './ui/OutputPanel';
+import OutputPanel from './ui/OutputPanel';
 import Pricing from './ui/Pricing';
 import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
 import { iconFor } from './ui/icons';
 import { chatTurn } from './lib/chat';
 import { estimateTokens, findModel, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel, type InferenceMode } from './lib/catalog';
+import { DEFAULT_SPLIT_PERCENT, clampSplit, normalizeStoredSplit } from './lib/split';
 import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
@@ -82,31 +83,32 @@ export default function App() {
   const [draft, setDraft] = useState(''); const [mode, setMode] = useState<RunMode>('chat'); const [attachments, setAttachments] = useState<Attached[]>([]);
   const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false); const [notice, setNotice] = useState('');
   const [rosterOpen, setRosterOpen] = useState(false); const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
+  /** A premium model the visitor picked that nothing here can pay for, awaiting their own key. */
+  const [keyPrompt, setKeyPrompt] = useState<CatalogModel | null>(null);
   // Agents the user wrote. Held here because the drawer creates them and the dock displays them.
   const [custom, setCustom] = useState<Persona[]>(customAgents);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
   const [previewOpen, setPreviewOpen] = useState(false);
-  /** Percentage of the chat canvas when output is open. The two extreme presets collapse one side. */
+  /**
+   * Share of the workspace the conversation takes; the preview gets the rest. Half each by
+   * default, restored on every visit to the preview, and persisted only within the drag bounds —
+   * the old full-width presets are read back as the canonical split rather than trusted.
+   */
   const [chatPercent, setChatPercent] = useState(() => {
-    try {
-      const saved = Number(localStorage.getItem('hb-chat-percent'));
-      if (Number.isFinite(saved)) return Math.max(0, Math.min(100, saved));
-      const legacy = localStorage.getItem('hb-split');
-      return legacy === 'chat' ? 70 : legacy === 'preview' ? 30 : 50;
-    } catch { return 50; }
+    try { return normalizeStoredSplit(localStorage.getItem('hb-chat-percent') ?? localStorage.getItem('hb-split')); }
+    catch { return DEFAULT_SPLIT_PERCENT; }
   });
+  /** True only while the divider is being dragged, when the panes must not animate behind it. */
+  const [resizing, setResizing] = useState(false);
   const resizeChat = (percent: number) => {
-    const next = Math.max(20, Math.min(80, percent));
+    const next = clampSplit(percent);
     try { localStorage.setItem('hb-chat-percent', String(next)); } catch { /* storage unavailable */ }
     setChatPercent(next);
   };
-  const chooseLayout = (preset: LayoutPreset) => {
-    const next = preset === 'chat' ? 100 : preset === 'balanced' ? 50 : preset === 'focus' ? 30 : 0;
-    try { localStorage.setItem('hb-chat-percent', String(next)); } catch { /* storage unavailable */ }
-    setChatPercent(next);
-  };
-  const dividerProps = usePaneResize(resizeChat);
+  /** The canonical layout: what opening the preview, or focusing it, always returns to. */
+  const resetSplit = () => resizeChat(DEFAULT_SPLIT_PERCENT);
+  const dividerProps = usePaneResize(resizeChat, { onDragChange: setResizing });
   const [mcp, setMcpState] = useState<McpConnection[]>(loadConnections);
   const [settings, setSettingsState] = useState<ConnectorSettings>(loadSettings);
   const [stats, setStats] = useState<Stats | null>(null); const [listening, setListening] = useState(false);
@@ -232,8 +234,9 @@ export default function App() {
     setNotice('');
   }
   function modelNeedsKey(m: CatalogModel) {
-    setPage('settings');
-    setNotice(`${m.label} needs a ${providers[m.provider].name} key. Add it below and it unlocks straight away — you do not have to save first, and no other provider is affected.`);
+    // The ask is made where the visitor is standing. Bouncing them to Settings mid-thought loses
+    // the model they just chose; one modal names it, and the button onward carries it with them.
+    setKeyPrompt(m);
   }
 
   /**
@@ -431,7 +434,7 @@ export default function App() {
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
       </div>}
       <div className="content">
-        {page === 'workspace' && <div className={previewOpen ? 'workspace with-preview' : 'workspace'} style={previewOpen ? { gridTemplateColumns: `224px minmax(0, ${chatPercent}fr) 8px minmax(0, ${100 - chatPercent}fr)` } : undefined}>
+        {page === 'workspace' && <div className={`${previewOpen ? 'workspace with-preview' : 'workspace'}${resizing ? ' resizing' : ''}`} style={previewOpen ? { gridTemplateColumns: `224px minmax(0, ${chatPercent}fr) 8px minmax(0, ${100 - chatPercent}fr)` } : undefined}>
           <aside className="sessions">
             <div className="sessions-head"><strong>Sessions</strong><button className="icon-button" aria-label="New session" title="New session" disabled={busy} onClick={newSession}><Plus size={14} /></button></div>
             {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => { setActiveId(s.id); setPersonaId(s.persona); }}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
@@ -443,7 +446,7 @@ export default function App() {
               <span className="canvas-title"><PersonaIcon size={14} strokeWidth={1.75} />{active ? active.title : 'New session'}<small>{persona.name}</small></span>
               <span className="row gap">
                 {active && <><button className="icon-button" title="Export session" aria-label="Export session" onClick={() => download('heybuddy-session.md', exportSession(active))}><Download size={14} /></button><button className="icon-button" title="Delete session" aria-label="Delete session" disabled={busy} onClick={() => void deleteSession(active.id)}><Trash2 size={14} /></button></>}
-                <button className={previewOpen ? 'icon-button live' : 'icon-button'} title={previewOpen ? 'Hide output panel' : 'Show output panel'} aria-label={previewOpen ? 'Hide output panel' : 'Show output panel'} onClick={() => setPreviewOpen(p => !p)}>{previewOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}</button>
+                <button className={previewOpen ? 'icon-button live' : 'icon-button'} title={previewOpen ? 'Hide output panel' : 'Show output panel'} aria-label={previewOpen ? 'Hide output panel' : 'Show output panel'} onClick={() => { if (previewOpen) setPreviewOpen(false); else { setPreviewOpen(true); resetSplit(); } }}>{previewOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}</button>
               </span>
             </header>
             <div className="messages">
@@ -486,9 +489,7 @@ export default function App() {
               close={() => setPreviewOpen(false)}
               github={settings.github}
               openConnectors={() => openConnectors('github')}
-              chatPercent={chatPercent}
-              setChatPercent={resizeChat}
-              setLayout={chooseLayout}
+              onPreviewFocus={resetSplit}
               streaming={busy}
             />
           </>}
@@ -508,6 +509,14 @@ export default function App() {
       removeDocument={id => { void storage.removeKnowledge(id).then(() => setKnowledge(k => k.filter(x => x.id !== id))).catch(e => setNotice(errorText(e))); }}
       notify={setNotice}
     />
+    {keyPrompt && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="key-title">
+      <h2 id="key-title">Provide your own API Key to run this model directly.</h2>
+      <p><strong>{keyPrompt.label}</strong> runs on your {providers[keyPrompt.provider].name} account, so it needs a key this deployment does not hold. Add it in Settings and the model unlocks the moment you type it — the key stays in this browser and is never bundled into the app.</p>
+      <div className="row gap end">
+        <button className="button small" autoFocus onClick={() => setKeyPrompt(null)}>Not now</button>
+        <button className="button primary small" onClick={() => { const m = keyPrompt; setKeyPrompt(null); setPage('settings'); setNotice(`${m.label} needs a ${providers[m.provider].name} key. Add it below and it unlocks straight away — you do not have to save first, and no other provider is affected.`); }}><KeyRound size={13} />Add key in Settings</button>
+      </div>
+    </section></div>}
     {confirm && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
       <h2 id="confirm-title">{confirm === 'run' ? 'Send workflows to your provider?' : 'Clear this workspace?'}</h2>
       {confirm === 'run'

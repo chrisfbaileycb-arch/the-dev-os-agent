@@ -139,6 +139,45 @@ export function omniRoutePool(env = process.env) {
 }
 
 /**
+ * The owner key: one credential the operator sets so the free tier does not need a key per
+ * provider before it can serve anybody.
+ *
+ * Named twice because two audiences name it differently — SETTINGS_OWNER_API_KEY is the generic
+ * dashboard setting, OPENROUTER_OWNER_KEY is what an operator who thinks of this as \"my gateway
+ * account\" will look for — and both mean the same thing here. Sanitised through the same header
+ * rule as every other credential, because a key pasted into a dashboard field carries a trailing
+ * newline more often than not. The browser never sees either name or value: the request is funded
+ * server-side exactly like every other free-tier request.
+ */
+const HEADER_SAFE = /^[\x20-\x7e]*$/;
+const cleanCredential = value => typeof value === 'string' && HEADER_SAFE.test(value.trim()) ? value.trim() : '';
+
+export function ownerKey(env = process.env) {
+  return cleanCredential(env.SETTINGS_OWNER_API_KEY) || cleanCredential(env.OPENROUTER_OWNER_KEY) || '';
+}
+export function ownerKeyName(env = process.env) {
+  if (cleanCredential(env.SETTINGS_OWNER_API_KEY)) return 'SETTINGS_OWNER_API_KEY';
+  return cleanCredential(env.OPENROUTER_OWNER_KEY) ? 'OPENROUTER_OWNER_KEY' : '';
+}
+
+/**
+ * The credential that funds one free-pool entry, and the variable it came from.
+ *
+ * The entry's own provider key always wins, so configuring OPENROUTER_API_KEY still overrides the
+ * owner key rather than being shadowed by it. The owner key then stands in for the OpenRouter
+ * pool only, and deliberately not for the others: it is one credential for one endpoint, and
+ * sending an OpenRouter-shaped key to Groq's host or the Hugging Face router would trade a funded
+ * free tier for a guaranteed 401. Those pools keep needing their own provider key.
+ */
+export function freeKey(entry, env = process.env) {
+  const own = entry ? cleanCredential(env[entry.envKey]) : '';
+  if (own) return { key: own, source: entry.envKey };
+  if (!entry || entry.provider !== 'openrouter') return { key: '', source: '' };
+  const owner = ownerKey(env);
+  return owner ? { key: owner, source: ownerKeyName(env) } : { key: '', source: '' };
+}
+
+/**
  * Frontier models, which this deployment never funds from its own key.
  *
  * The zero-config tier exists so a stranger can type one sentence and get an answer. It is paid
@@ -229,7 +268,9 @@ export function freeModel(id, env = process.env, discovered = discoveredXkiro) {
 /** Free models this deployment can actually fund, i.e. the ones whose provider key is set. */
 export function fundedModels(env = process.env, discovered = discoveredXkiro) {
   if (env.FREE_TIER_DISABLED === 'true') return [];
-  return freeModels(env, discovered).filter(m => Boolean(env[m.envKey]));
+  // A pool counts as funded when a credential resolves for it, which is its own provider key or,
+  // for the OpenRouter pool, the owner key standing in for it.
+  return freeModels(env, discovered).filter(m => Boolean(freeKey(m, env).key));
 }
 
 /**

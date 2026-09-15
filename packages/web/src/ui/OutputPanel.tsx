@@ -6,15 +6,17 @@ import { highlightCode } from '../lib/highlight';
 import type { GithubSettings } from '../lib/connectors';
 import PushToGithub from './PushToGithub';
 
-export type LayoutPreset = 'chat' | 'balanced' | 'focus' | 'full';
 export interface OutputPanelProps {
   content: string;
   close: () => void;
   github: GithubSettings;
   openConnectors: () => void;
-  chatPercent: number;
-  setChatPercent: (percent: number) => void;
-  setLayout: (preset: LayoutPreset) => void;
+  /**
+   * Show the live app. The workspace is a dedicated preview surface, so activating it always
+   * returns the split to the canonical half-and-half layout rather than leaving whatever a drag
+   * last settled on — one button that means one thing.
+   */
+  onPreviewFocus: () => void;
   streaming?: boolean;
 }
 
@@ -113,13 +115,14 @@ export default function OutputPanel(p: OutputPanelProps) {
 
   const isBuilding = build.kind === 'building';
   const codeMarkup = highlightCode(activeCode);
-  const setViewAndReset = (next: View) => { setView(next); if (next === 'preview') setRefresh(n => n + 1); };
+  /** Every route back to the running app: re-mount the frame and restore the canonical split. */
+  const showPreview = () => { setView('preview'); p.onPreviewFocus(); setRefresh(n => n + 1); };
 
   return <aside className="preview-panel">
     <header className="preview-head developer-toolbar">
       <div className="toolbar-brand"><Code2 size={14} /><span>Workspace</span></div>
       <nav className="developer-tabs" role="tablist" aria-label="Developer workspace views">
-        <button role="tab" aria-selected={view === 'preview'} className={view === 'preview' ? 'developer-tab active' : 'developer-tab'} onClick={() => setViewAndReset('preview')}><Eye size={12} />Preview{(isBuilding || p.streaming) && <LoaderCircle size={11} className="spin" />}{p.streaming && <span className="stream-pulse" aria-label="Code is streaming" />}</button>
+        <button role="tab" aria-selected={view === 'preview'} className={view === 'preview' ? 'developer-tab active' : 'developer-tab'} onClick={showPreview}><Eye size={12} />Preview{(isBuilding || p.streaming) && <LoaderCircle size={11} className="spin" />}{p.streaming && <span className="stream-pulse" aria-label="Code is streaming" />}</button>
         <button role="tab" aria-selected={view === 'code'} className={view === 'code' ? 'developer-tab active' : 'developer-tab'} onClick={() => setView('code')}><Code2 size={12} />Code</button>
         <button role="tab" aria-selected={view === 'edit'} className={view === 'edit' ? 'developer-tab active' : 'developer-tab'} onClick={() => setView('edit')}><Settings2 size={12} />Edit{editDirty && <span className="edit-dot" />}</button>
       </nav>
@@ -130,13 +133,6 @@ export default function OutputPanel(p: OutputPanelProps) {
         <button className="icon-button" aria-label="Close output panel" onClick={p.close}><PanelRightClose size={14} /></button>
       </div>
     </header>
-    <div className="preview-subhead">
-      <div className="layout-presets" role="group" aria-label="Panel layout">
-        {([['chat', 'Chat Only'], ['balanced', 'Balanced'], ['focus', 'Preview Focus'], ['full', 'Full Preview']] as const).map(([id, label]) => <button key={id} className="layout-preset" onClick={() => p.setLayout(id)} aria-pressed={(id === 'chat' && p.chatPercent === 100) || (id === 'full' && p.chatPercent === 0) || (id === 'balanced' && p.chatPercent === 50) || (id === 'focus' && p.chatPercent === 30)}>{label}</button>)}
-      </div>
-      <span className="pane-size">Chat {Math.round(p.chatPercent)}% · Preview {Math.round(100 - p.chatPercent)}%</span>
-      <button className="icon-button" onClick={() => setRefresh(n => n + 1)} disabled={!project} title="Refresh / rerun preview" aria-label="Refresh / rerun preview"><RotateCw size={13} /></button>
-    </div>
     <div className="preview-content">
       {!project && (!p.content ? <div className="preview-empty"><PanelRightOpen size={22} strokeWidth={1.25} /><span>Agent output will appear here</span></div> : <pre className="preview-body">{p.content}</pre>)}
       {project && view === 'preview' && <div className="output-preview">
@@ -152,7 +148,7 @@ export default function OutputPanel(p: OutputPanelProps) {
       </div>}
       {project && view === 'edit' && <div className="output-editor">
         <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>
-        <div className="code-toolbar"><span>Edit source{editDirty ? ' · unsaved' : ''}</span><button className="toolbar-button" onClick={() => setViewAndReset('preview')}><Check size={12} />Apply & Preview</button></div>
+        <div className="code-toolbar"><span>Edit source{editDirty ? ' · unsaved' : ''}</span><button className="toolbar-button" onClick={showPreview}><Check size={12} />Apply & Preview</button></div>
         <textarea aria-label="Generated code editor" className="code-editor" spellCheck={false} value={activeCode} onChange={event => edit(event.target.value)} />
       </div>}
     </div>

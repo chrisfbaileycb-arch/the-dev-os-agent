@@ -3,7 +3,7 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
+import { createBurstLimiter, creditsForTokens, freeKey, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
 import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog } from './discovery.mjs';
@@ -113,12 +113,15 @@ export function fundingFor(body, env = process.env) {
   if (supplied) return { mode: typeof body.apiKey === 'string' && body.apiKey.trim() ? 'byok' : 'credits', apiKey: supplied };
   if (env.FREE_TIER_DISABLED === 'true') return { mode: 'none', apiKey: '' };
   const entry = freeModel(body.model, env);
+  // The entry's own provider key, or the operator's owner key where that key can serve this pool
+  // (see freeKey in freetier.mjs). Either way the credential is resolved here, on the server, and
+  // never travels to the browser.
+  const funded = freeKey(entry, env);
   const configured = entry && env[entry.envKey];
-  const key = cleanKey(configured);
   // A key that is set but unusable is not the same as one that is unset, and that difference is
   // the entire diagnosis. Reported here so the handler can name the variable in the log.
-  if (!key) return { mode: 'none', apiKey: '', ...(malformed(configured) ? { malformedKey: entry.envKey } : {}) };
-  return { mode: 'free', apiKey: key, entry };
+  if (!funded.key) return { mode: 'none', apiKey: '', ...(malformed(configured) ? { malformedKey: entry.envKey } : {}) };
+  return { mode: 'free', apiKey: funded.key, entry };
 }
 
 // Text content, or OpenAI-style parts: text plus up to five bounded data-URL or https images.

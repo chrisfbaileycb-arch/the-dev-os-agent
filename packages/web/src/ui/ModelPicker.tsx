@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, KeyRound, Sparkles, Wallet } from 'lucide-react';
 import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
 import { providers, type Provider } from '../lib/providers';
-import { canPayFor, emptyReason, hasAnyKey, type Reach } from '../lib/availability';
+import { badgeFor, canPayFor, emptyReason, hasAnyKey, type Reach } from '../lib/availability';
 import type { FreeTier } from '../lib/store';
 
 // The model dropdown on the prompt dock.
@@ -95,8 +95,8 @@ export default function ModelPicker(p: ModelPickerProps) {
           ? <small className="model-group-note">{freeModels.length} model{freeModels.length === 1 ? '' : 's'} this deployment funds · {p.free.monthlyCredits.toLocaleString()} credits a month, then bring your own key.</small>
           : <small className="model-group-note">{emptyReason(p.reach)}</small>}
         {freeModels.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={selected(m.id) ? 'model-option active' : 'model-option'} onClick={() => { setOpen(false); p.onPick(m.id, 'free'); }}>
-          <strong>{m.label}{selected(m.id) && <Check size={12} />}</strong>
-          <small>{p.free.providers[m.id] ?? 'this deployment'} · free here</small>
+          <strong>{m.label}<em className="model-badge included">Included / Free</em>{selected(m.id) && <Check size={12} />}</strong>
+          <small>{p.free.providers[m.id] ?? 'this deployment'} · runs with nothing entered</small>
         </button>)}
       </div>
       {keyedByProvider.map(({ provider, models }) => {
@@ -105,8 +105,8 @@ export default function ModelPicker(p: ModelPickerProps) {
         return <div key={provider} className="model-group">
           <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {unlocked ? '· key active' : '· bring your key'}</span>
           {!unlocked && <small className="model-group-note">Add your {providerName} API key in Settings — it unlocks this vendor the moment you type it.</small>}
-          {models.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={`model-option${selected(m.id) ? ' active' : ''}${payable(m) ? '' : ' locked'}`} onClick={() => chooseKeyed(m)}>
-            <strong>{m.label}{selected(m.id) && <Check size={12} />}</strong>
+          {models.map(m => <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={`model-option${selected(m.id) ? ' active' : ''}`} onClick={() => chooseKeyed(m)}>
+            <strong>{m.label}<em className={badgeFor(m, p.reach) === 'included' ? 'model-badge included' : 'model-badge'}>{badgeFor(m, p.reach) === 'included' ? 'Included / Free' : 'BYOK'}</em>{selected(m.id) && <Check size={12} />}</strong>
             <small>{payable(m) ? (p.inference === 'credits' ? `${m.weight} cr/1K on credits` : 'on your key') : `${m.weight} cr/1K on credits`}</small>
             <span>{m.note}</span>
           </button>)}

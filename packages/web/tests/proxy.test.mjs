@@ -413,6 +413,36 @@ test('client-supplied provider URLs cannot re-enable the disabled OmniRoute adap
   });
 });
 
+test('an owner key funds the free pool server-side, and never beats a visitor key', () => {
+  // The operator's master credential takes the same funding path as any other free-tier request:
+  // it is resolved inside the proxy, attached to the upstream call, and never returned to the
+  // browser. /api/providers reports the models it unlocks, not the key behind them.
+  const env = { OPENROUTER_OWNER_KEY: 'owner-key' };
+  const funded = fundingFor({ provider: 'openrouter', model: 'mistralai/mistral-nemo:free' }, env);
+  assert.equal(funded.mode, 'free');
+  assert.equal(funded.apiKey, 'owner-key');
+  assert.equal(fundingFor({ provider: 'openrouter', model: 'mistralai/mistral-nemo:free', apiKey: 'visitor' }, env).mode, 'byok');
+  assert.equal(fundingFor({ provider: 'openrouter', model: 'mistralai/mistral-nemo:free' }, { SETTINGS_OWNER_API_KEY: 'owner-key' }).apiKey, 'owner-key');
+  // It is not a universal credential: it funds the OpenRouter pool only, and no paid model.
+  assert.equal(fundingFor({ provider: 'groq', model: 'groq/llama-3.1-8b-instant' }, env).mode, 'none');
+  assert.equal(fundingFor({ provider: 'openrouter', model: 'anthropic/claude-3.5-sonnet' }, env).mode, 'none');
+});
+
+test('the managed tier streams on an owner key alone, and publishes no credential', async () => {
+  await withProxy({ env: { OPENROUTER_OWNER_KEY: 'owner-key' }, transport: async (url, options) => {
+    assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
+    assert.equal(options.headers.Authorization, 'Bearer owner-key');
+    return stream('data: [DONE]\n\n');
+  } }, async url => {
+    const status = await fetch(url + '/api/providers', { headers: { 'X-Workspace-Id': '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f' } }).then(r => r.json());
+    assert.equal(status.free.enabled, true, 'the tier is live for a visitor with no key at all');
+    assert.ok(status.free.models.length > 0);
+    assert.ok(!JSON.stringify(status).includes('owner-key'), 'the credential never crosses to the browser');
+    const response = await chatFree(url, { provider: 'openrouter', model: 'meta-llama/llama-3.2-3b-instruct:free', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 200);
+  });
+});
+
 test('reading the error body is bounded and can never fail the request', async () => {
   // A provider that answers an error with a megabyte of HTML must cost one log line, not memory,
   // and a diagnostic that throws would take down the request it exists to explain.

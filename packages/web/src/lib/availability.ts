@@ -1,3 +1,4 @@
+import type { CatalogModel } from './catalog';
 import { providers, type Provider, type Keyring } from './providers';
 import type { FreeTier } from './store';
 
@@ -56,6 +57,19 @@ export const canPayFor = (provider: Provider, r: Reach): boolean =>
 /** Whether the deployment funds this exact id. Case-insensitive: ids arrive from many hands. */
 export const fundedHere = (id: string, free: FreeTier): boolean =>
   free.enabled && free.models.some(m => m.toLowerCase() === id.trim().toLowerCase());
+
+/**
+ * How a listed model is paid for, as the one word the dropdown prints beside it.
+ *
+ * 'included' means this deployment funds it and it runs with nothing entered; 'byok' means it
+ * runs on the visitor's own key at their provider. The distinction is the whole promise of the
+ * free tier, and it used to be something a visitor discovered by sending a message and reading
+ * the error, so it is stated up front for every entry in the list — including the ones nobody can
+ * pay for yet, where the group heading says which key would unlock them.
+ */
+export type PayBadge = 'included' | 'byok';
+export const badgeFor = (model: CatalogModel, r: Reach): PayBadge =>
+  fundedHere(model.id, r.free) ? 'included' : 'byok';
 
 /**
  * Why there is nothing to offer, said plainly and specifically.

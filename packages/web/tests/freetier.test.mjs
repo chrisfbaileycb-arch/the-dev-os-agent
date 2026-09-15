@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { FREE_TIER_UNAVAILABLE, createProxy } from '../server/proxy.mjs';
 import { openDatabase } from '../server/db.mjs';
-import { FREE_MODELS, OMNIROUTE_DEFAULT_BASE, XKIRO_DEFAULT_BASE, createBurstLimiter, creditsForTokens, freeModel, freeModels, freeTierStatus, fundedModels, isFrontier, omnirouteBase, omniRoutePool, routeFreeRequest, setXkiroCatalog, xkiroBase, xkiroCatalog, xkiroPool } from '../server/freetier.mjs';
+import { FREE_MODELS, OMNIROUTE_DEFAULT_BASE, XKIRO_DEFAULT_BASE, createBurstLimiter, creditsForTokens, freeKey, freeModel, freeModels, freeTierStatus, fundedModels, isFrontier, omnirouteBase, omniRoutePool, ownerKey, ownerKeyName, routeFreeRequest, setXkiroCatalog, xkiroBase, xkiroCatalog, xkiroPool } from '../server/freetier.mjs';
 import { createMeter, deltaLength, usageFrom } from '../server/meter.mjs';
 
 const workspace = '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f';
@@ -406,6 +406,53 @@ test('OmniRoute remains disabled unless a future adapter is explicitly implement
     assert.equal(response.status, 404);
     assert.match((await response.json()).error.message, /optional self-hosted route is disabled/i);
   });
+});
+
+test('an owner key brings the standard free pool up without a per-provider key', () => {
+  // The operator sets one credential and the tier comes up: the OpenRouter community pool
+  // authenticates through their account, and a stranger can type a first message with nothing
+  // pasted anywhere. Their key never reaches the browser — /api/providers reports the models it
+  // unlocks, not the credential behind them.
+  const env = { OPENROUTER_OWNER_KEY: 'owner-key' };
+  assert.equal(ownerKey(env), 'owner-key');
+  assert.equal(ownerKeyName(env), 'OPENROUTER_OWNER_KEY');
+  assert.equal(freeKey(freeModel('mistralai/mistral-nemo:free', env), env).key, 'owner-key');
+  assert.equal(fundedModels(env).some(m => m.provider === 'openrouter'), true);
+  assert.equal(freeTierStatus(env).enabled, true, 'the browser is told the tier is live');
+  assert.ok(freeTierStatus(env).models.includes('mistralai/mistral-nemo:free'));
+  // The generic dashboard name means the same thing, and names itself in diagnostics.
+  assert.equal(ownerKey({ SETTINGS_OWNER_API_KEY: 'owner-key' }), 'owner-key');
+  assert.equal(ownerKeyName({ SETTINGS_OWNER_API_KEY: 'owner-key' }), 'SETTINGS_OWNER_API_KEY');
+  assert.equal(ownerKeyName({ SETTINGS_OWNER_API_KEY: 'a', OPENROUTER_OWNER_KEY: 'b' }), 'SETTINGS_OWNER_API_KEY');
+});
+
+test('the owner key reaches the OpenRouter pool and no other provider', () => {
+  // One credential belongs to one endpoint. An OpenRouter-shaped key sent to Groq's host or the
+  // Hugging Face router would trade a working free tier for a guaranteed 401, so the owner key
+  // stands in for the gateway pool only; every other pool keeps needing its own provider key.
+  const env = { OPENROUTER_OWNER_KEY: 'owner-key' };
+  assert.equal(freeKey(freeModel('groq/llama-3.1-8b-instant', env), env).key, '');
+  assert.equal(fundedModels(env).some(m => m.provider === 'groq'), false);
+  assert.equal(fundedModels(env).some(m => m.provider === 'huggingface'), false);
+  const withHf = { ...env, HF_TOKEN: 'hf-token' };
+  assert.equal(fundedModels(withHf).some(m => m.provider === 'huggingface'), true);
+  assert.equal(freeKey(freeModel('Qwen/Qwen2.5-7B-Instruct', withHf), withHf).source, 'HF_TOKEN');
+});
+
+test('a provider key outranks the owner key, and an unusable owner key funds nothing', () => {
+  const both = { OPENROUTER_OWNER_KEY: 'owner-key', OPENROUTER_API_KEY: 'provider-key' };
+  const sourced = freeKey(freeModel('mistralai/mistral-nemo:free', both), both);
+  assert.equal(sourced.key, 'provider-key', 'OPENROUTER_API_KEY is not shadowed by the owner key');
+  assert.equal(sourced.source, 'OPENROUTER_API_KEY');
+  // Surrounding whitespace is a paste and is stripped; a character that cannot go in a header at
+  // all is refused, because Node throws while building the request and the failure looks like DNS.
+  assert.equal(ownerKey({ OPENROUTER_OWNER_KEY: '  owner-key\n' }), 'owner-key');
+  assert.equal(ownerKey({ OPENROUTER_OWNER_KEY: 'bad\u0000key' }), '');
+  assert.equal(ownerKey({}), '');
+  assert.equal(fundedModels({ OPENROUTER_OWNER_KEY: 'bad\u0000key' }).length, 0);
+  assert.equal(freeTierStatus({ OPENROUTER_OWNER_KEY: 'bad\u0000key' }).enabled, false);
+  // Switching the tier off still wins over any owner key.
+  assert.equal(fundedModels({ ...both, FREE_TIER_DISABLED: 'true' }).length, 0);
 });
 
 test('XKIRO_BASE_URL steers the gateway, and a bad value falls back rather than breaking', async () => {
