@@ -6,8 +6,8 @@ import type { FreeTier } from './store';
 //
 // The zero-config tier only works if the server holds provider keys, so the browser asks
 // before promising anything: the model dropdown marks free entries live or locked from this
-// answer, and a deployment with no keys falls back to the scripted preview instead of failing
-// on the visitor's first message.
+// answer, and a deployment with no keys reports that managed access is unavailable rather than
+// fabricating a response or silently switching execution modes.
 
 /**
  * Hey Buddy's own paid plans, as this deployment reports them.

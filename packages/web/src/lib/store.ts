@@ -9,7 +9,7 @@ export interface Attachment { name: string; chars: number; }
 export interface ToolTrace { tool: string; args: Record<string, unknown>; summary: string; ok: boolean; }
 export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; at: string; persona?: string; model?: string; tokens?: number; latencyMs?: number; tokensPerSecond?: number; tools?: ToolTrace[]; runId?: string; attachments?: Attachment[]; photos?: { name: string; thumb: string }[]; error?: string; }
 export interface Session { id: string; title: string; persona: string; createdAt: string; updatedAt: string; messages: ChatMessage[]; }
-export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode | 'demo'; tokens: number; credits: number; }
+export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode; tokens: number; credits: number; }
 export interface Balance { pool: number; used: number; remaining: number; month: string; source: 'server' | 'local'; }
 /** What the deployment will fund for a visitor with no key. Read from /api/providers and /api/state. */
 export interface FreeTier { enabled: boolean; models: string[]; providers: Record<string, string>; monthlyCredits: number; perHour: number; }
@@ -75,7 +75,7 @@ export function serverBalance(pool: number, used: number, month = monthKey()): B
   const spent = Math.round(Math.max(0, used) * 100) / 100;
   return { pool, used: spent, remaining: Math.max(0, Math.round((pool - spent) * 100) / 100), month, source: 'server' };
 }
-export function makeEntry(input: { sessionId: string; model: string; mode: InferenceMode | 'demo'; tokens: number }): LedgerEntry {
+export function makeEntry(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number }): LedgerEntry {
   return { id: crypto.randomUUID(), at: new Date().toISOString(), sessionId: input.sessionId, model: input.model, tier: tierFor(input.model), mode: input.mode, tokens: Math.max(0, Math.round(input.tokens)), credits: creditsFor(input.model, input.tokens, input.mode) };
 }
 
@@ -128,7 +128,7 @@ export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
 
 export async function persistSession(session: Session): Promise<void> { await storage.saveSession(session); void sync.push({ sessions: [session] }); }
 export async function persistRun(run: Run): Promise<void> { await storage.saveRun(run); if (run.status !== 'running') void sync.push({ runs: [run] }); }
-export async function recordUsage(input: { sessionId: string; model: string; mode: InferenceMode | 'demo'; tokens: number }): Promise<LedgerEntry> {
+export async function recordUsage(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number }): Promise<LedgerEntry> {
   const entry = makeEntry(input); await storage.saveLedger(entry); void sync.push({ ledger: [entry] }); return entry;
 }
 export async function clearWorkspaceData(): Promise<void> {
@@ -137,7 +137,7 @@ export async function clearWorkspaceData(): Promise<void> {
 }
 
 export function exportRun(run: Run): string {
-  return `# Hey Buddy — ${run.workflow}\n\nMode: ${run.mode === 'demo' ? 'SCRIPTED PREVIEW — not AI-generated' : 'Hosted inference'}\nModel: ${run.model}\nStatus: ${run.status}\nStarted: ${run.startedAt}\n\n## Goal\n${run.goal}\n\n${run.steps.map(s => `## ${s.agent}: ${s.title}\nStatus: ${s.status}\n\n${s.output ?? s.error ?? 'No output.'}`).join('\n\n')}\n\n---\nReported tokens: ${run.tokens} (0 may mean usage was not reported)\nProvider requests: ${run.calls}\nRetrieved notes: ${run.contextTitles.join(', ') || 'none'}\n`;
+  return `# Hey Buddy — ${run.workflow}\n\nMode: Hosted inference\nModel: ${run.model}\nStatus: ${run.status}\nStarted: ${run.startedAt}\n\n## Goal\n${run.goal}\n\n${run.steps.map(s => `## ${s.agent}: ${s.title}\nStatus: ${s.status}\n\n${s.output ?? s.error ?? 'No output.'}`).join('\n\n')}\n\n---\nReported tokens: ${run.tokens} (0 may mean usage was not reported)\nProvider requests: ${run.calls}\nRetrieved notes: ${run.contextTitles.join(', ') || 'none'}\n`;
 }
 export function exportSession(session: Session): string {
   return `# ${session.title}\n\nAgent: ${session.persona}\nStarted: ${session.createdAt}\n\n${session.messages.map(m => `## ${m.role === 'user' ? 'You' : (m.persona ?? 'Agent')} · ${new Date(m.at).toLocaleString()}\n\n${m.content}${m.tools?.length ? `\n\nTools: ${m.tools.map(t => `${t.tool} ${JSON.stringify(t.args)} (${t.ok ? 'ok' : 'failed'})`).join('; ')}` : ''}`).join('\n\n')}\n`;

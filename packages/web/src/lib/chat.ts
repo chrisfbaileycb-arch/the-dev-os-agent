@@ -16,10 +16,6 @@ const MAX_TOOL_CALLS = 3;
 const transcript = (history: ChatMessage[]) => history.slice(-12).map(m => `${m.role === 'user' ? 'USER' : 'AGENT'}: ${m.content.slice(0, 4000)}`).join('\n\n');
 const argsSummary = (args: Record<string, unknown>) => { const s = JSON.stringify(args); return s.length > 80 ? `${s.slice(0, 77)}...` : s; };
 
-function scripted(persona: Persona, input: string, notes: Knowledge[], photos: number, tools: number): string {
-  return `SCRIPTED PREVIEW — not an AI response\n\n${persona.name} would answer here. Your message (${input.length} characters) was received, ${notes.length} matching note${notes.length === 1 ? '' : 's'} would be attached${photos ? `, ${photos} photo${photos === 1 ? '' : 's'} would be sent to a vision model` : ''}, and ${tools ? `${tools} tool${tools === 1 ? '' : 's'} would be available.` : 'no tools are involved for this agent.'}\n\nOpen Settings, pick a free model, and add a key or platform credits to get a real reply.`;
-}
-
 export async function chatTurn(t: TurnInput): Promise<TurnResult> {
   const persona = personaById(t.personaId);
   const notes = retrieve(t.input, t.knowledge);
@@ -29,7 +25,6 @@ export async function chatTurn(t: TurnInput): Promise<TurnResult> {
   const specs: ToolSpec[] = t.tools ?? [];
   const context = [...notes.map(n => `[note: ${n.title}]\n${n.content.slice(0, 6000)}`), ...t.attachments.map(a => `[attached: ${a.name}]\n${a.content.slice(0, 12000)}`)].join('\n\n');
   const started = performance.now();
-  if (t.connection.mode === 'demo') { await new Promise(r => setTimeout(r, 400)); const text = scripted(persona, t.input, notes, photos.length, specs.length); t.onDelta?.(text); return { text, tokens: 0, latencyMs: Math.round(performance.now() - started), tokensPerSecond: 0, tools: [], contextTitles: notes.map(n => n.title) }; }
   const system = composePrompt(persona) + (specs.length ? `\n\n${toolProtocol(specs)}` : '');
   const tools: ToolTrace[] = []; let firstToken = 0; let tokens = 0; let followUps = '';
   const photoNote = photos.length ? `\n\n(${photos.length} photo${photos.length === 1 ? '' : 's'} attached: ${photos.map(p => p.name).join(', ')})` : '';

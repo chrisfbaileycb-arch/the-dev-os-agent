@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isSafeProjectPath, parseProject, stitchFragments } from '../src/lib/project';
+import { isSafeProjectPath, parseProject, stitchFragments, wrapScriptDocument } from '../src/lib/project';
+import { highlightCode } from '../src/lib/highlight';
 
 const fence = (info: string, body: string) => `\`\`\`${info}\n${body}\n\`\`\``;
 
@@ -154,8 +155,34 @@ describe('parseProject', () => {
     });
   });
 
-  // Raw-document fallback: some providers emit the complete HTML document bare in the reply
-  // text, outside any fence. It still builds a runnable one-file project.
+  describe('raw JavaScript wrapping', () => {
+    it('wraps a raw executable JS fence in a responsive HTML5 shell', () => {
+      const script = 'const canvas = document.createElement("canvas"); document.body.append(canvas);';
+      const project = parseProject(fence('javascript', script));
+      expect(project?.kind).toBe('html');
+      expect(project?.files[0]?.content).toContain('<!DOCTYPE html>');
+      expect(project?.files[0]?.content).toContain('<meta name="viewport"');
+      expect(project?.files[0]?.content).toContain('background: #111');
+      expect(project?.files[0]?.content).toContain(script);
+    });
+
+    it('exports the wrapper with a complete document and inline styles', () => {
+      const result = wrapScriptDocument('requestAnimationFrame(() => {});', 'canvas { display: block; }');
+      expect(result).toMatch(/^<!DOCTYPE html>[\s\S]*<html[\s\S]*<body>[\s\S]*<script>/);
+      expect(result).toContain('canvas { display: block; }');
+    });
+  });
+
+  describe('highlightCode', () => {
+    it('escapes source HTML before adding token spans', () => {
+      const result = highlightCode('const x = "<script>alert(1)</script>";');
+      expect(result).not.toContain('<script>alert');
+      expect(result).toContain('&lt;script&gt;');
+      expect(result).toContain('syntax-keyword');
+      expect(result).toContain('syntax-string');
+    });
+  });
+
   describe('raw-document fallback', () => {
     it('reads a complete document carried bare in the reply as a project', () => {
       const reply = 'Here is your page:\n\n<!DOCTYPE html>\n<html><body><h1>Hello</h1></body></html>\n\nLet me know if you want changes.';

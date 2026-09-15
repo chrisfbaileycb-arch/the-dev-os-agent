@@ -188,7 +188,7 @@ test('/api/providers publishes the discovered catalogue with the tier of every m
     assert.deepEqual(body.free.models, ['a/free']);
     assert.equal(body.free.enabled, true);
     assert.equal(body.gatewayCatalog.discovered, true);
-    assert.equal(body.gatewayCatalog.url, XKIRO_DEFAULT_BASE);
+    assert.equal(body.gatewayCatalog.url, null, 'provider endpoints remain server-side');
     assert.deepEqual(body.gatewayCatalog.models.map(m => [m.id, m.label, m.tier, m.free]), [
       ['a/free', 'Free One', 'free', true],
       ['a/paid', 'Paid One', 'paid', false],

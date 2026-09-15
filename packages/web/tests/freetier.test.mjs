@@ -224,7 +224,7 @@ test('/api/providers advertises the tier without ever leaking a key', async () =
     // And the discovery report rides along, so an operator can see why the pool is the size it is.
     assert.equal(body.gatewayCatalog.discovered, false);
     assert.deepEqual(body.gatewayCatalog.models, []);
-    assert.equal(body.gatewayCatalog.url, XKIRO_DEFAULT_BASE);
+    assert.equal(body.gatewayCatalog.url, null, 'provider endpoints remain server-side');
   });
   // The health check must still answer 200 on a deployment with nothing configured.
   await withProxy({ env: {}, transport: async () => { throw Error('must not call'); } }, async url => {
@@ -400,23 +400,12 @@ test('omnirouteBase validates like xkiroBase and defaults to nothing', () => {
     assert.equal(omnirouteBase({ OMNIROUTE_BASE_URL: bad }), OMNIROUTE_DEFAULT_BASE, bad);
 });
 
-test('OmniRoute joins the free pool only when the operator names ids and the deployment holds the key', () => {
-  const env = { OMNIROUTE_API_KEY: 'k', OMNIROUTE_FREE_MODELS: 'auto, auto/coding' };
-  assert.equal(freeModel('auto', env)?.provider, 'omniroute');
-  assert.equal(freeModel('auto/coding', env)?.provider, 'omniroute');
-  // Either half missing funds nothing. freeModel is the allowlist lookup; the key gate is
-  // applied by fundedModels/fundingFor, exactly as it is for every other provider entry.
-  assert.deepEqual(fundedModels({ OMNIROUTE_API_KEY: 'k' }).filter(m => m.provider === 'omniroute'), [], 'a key without a list funds nothing');
-  assert.deepEqual(fundedModels({ OMNIROUTE_FREE_MODELS: 'auto' }).filter(m => m.provider === 'omniroute'), [], 'a list without a key funds nothing');
-  assert.equal(freeModel('auto/chaos', env), undefined, 'an id outside the list is refused');
-  // The names mean nothing on a gateway whose free-ness depends on how the operator routed it, so
-  // FRONTIER does not veto this list the way it guards the static Groq and OpenRouter entries.
-  const status = freeTierStatus(env, []);
-  assert.deepEqual(status.models, ['auto', 'auto/coding']);
-  assert.equal(status.providers['auto'], 'omniroute');
-  assert.equal(freeTierStatus({ ...env, FREE_TIER_DISABLED: 'true' }, []).enabled, false);
-  // And the request reaches the gateway with the id exactly as the operator named it.
-  assert.deepEqual(routeFreeRequest(freeModel('auto/coding', env)), { model: 'auto/coding' });
+test('OmniRoute remains disabled unless a future adapter is explicitly implemented', async () => {
+  await withProxy({ env: { OMNIROUTE_API_KEY: 'omni-key', OMNIROUTE_BASE_URL: 'https://my-omniroute.example/v1', OMNIROUTE_FREE_MODELS: 'auto' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    const response = await chat(url, { provider: 'omniroute', model: 'auto', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 404);
+    assert.match((await response.json()).error.message, /optional self-hosted route is disabled/i);
+  });
 });
 
 test('XKIRO_BASE_URL steers the gateway, and a bad value falls back rather than breaking', async () => {

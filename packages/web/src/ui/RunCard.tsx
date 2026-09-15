@@ -67,6 +67,6 @@ export default function RunCard({ run }: { run: Run }) {
       {shown && <div className="run-stage-head"><strong>{shown.agent}</strong><small>{shown.title}</small>{shown.model && <small className="mono">· {shown.model}</small>}</div>}
       <pre className="run-output" aria-live="polite">{shown?.output ?? shown?.error ?? 'Stages report here as they finish.'}</pre>
     </>}
-    <small className="run-meta">{run.mode === 'demo' ? 'scripted preview' : run.model} · {run.calls} request{run.calls === 1 ? '' : 's'} · {run.tokens.toLocaleString()} tokens{run.origin === 'server' ? ' · background worker' : ''}</small>
+    <small className="run-meta">{run.model} · {run.calls} request{run.calls === 1 ? '' : 's'} · {run.tokens.toLocaleString()} tokens{run.origin === 'server' ? ' · background worker' : ''}</small>
   </div>;
 }

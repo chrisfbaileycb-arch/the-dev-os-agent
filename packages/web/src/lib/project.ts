@@ -140,6 +140,22 @@ function parsePackageJson(text: string): Record<string, string> {
 
 const REACT_ENTRY_PRIORITY = ['src/main.tsx', 'src/main.jsx', 'src/index.tsx', 'src/index.jsx', 'main.tsx', 'main.jsx', 'index.tsx', 'index.jsx', 'src/App.tsx', 'src/App.jsx', 'App.tsx', 'App.jsx'];
 
+/** Turn a raw browser script into the single-file document the preview can execute. */
+export function wrapScriptDocument(script: string, css = ''): string {
+  return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script>\n${script}\n</script></body></html>`;
+}
+
+function wrapHtmlFragment(html: string): string {
+  if (/<(?:!doctype\s+html|html\b)/i.test(html)) return html;
+  return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; min-height: 100vh; background: #111; }</style></head><body>${html}</body></html>`;
+}
+
+function looksLikeExecutableScript(text: string): boolean {
+  const code = text.trim();
+  return code.length > 0 && /(?:\b(?:const|let|var|function|class)\s+|=>|document\.|window\.|addEventListener\s*\(|getElementById\s*\(|requestAnimationFrame\s*\()/m.test(code);
+}
+
+
 function reactEntry(paths: string[]): string | null {
   for (const candidate of REACT_ENTRY_PRIORITY) if (paths.includes(candidate)) return candidate;
   return paths.find(p => /\.(tsx|jsx)$/.test(p)) ?? null;
@@ -178,14 +194,26 @@ export function parseProject(text: string): Project | null {
   const htmlFences = found.filter(f => f.lang === 'html' || f.lang === 'htm');
   if (htmlFences.length === 1) {
     const doc = htmlFences[0].body.replace(/\n$/, '');
-    const content = stitchFragments(doc, codeBlocks(text, new Set([doc]))) ?? doc;
+    const content = wrapHtmlFragment(stitchFragments(doc, codeBlocks(text, new Set([doc]))) ?? doc);
     return { files: [{ path: 'index.html', content }], entry: 'index.html', dependencies: {}, kind: 'html' };
   }
   // A complete document the reply carried directly, not inside any fence.
   const bare = rawDocument(text);
   if (bare) {
-    const content = stitchFragments(bare, codeBlocks(text, new Set([bare]))) ?? bare;
+    const content = wrapHtmlFragment(stitchFragments(bare, codeBlocks(text, new Set([bare]))) ?? bare);
     return { files: [{ path: 'index.html', content }], entry: 'index.html', dependencies: {}, kind: 'html' };
+  }
+  // A single raw JS fence is a common game response. Give it a DOM shell rather than showing it
+  // as inert transcript text; sibling CSS is preserved inside the generated style tag.
+  const scriptFences = found.filter(f => ['js', 'javascript'].includes(f.lang) && !f.path);
+  if (scriptFences.length === 1 && looksLikeExecutableScript(scriptFences[0].body)) {
+    const css = found.filter(f => f.lang === 'css' && !f.path).map(f => f.body).join('\n');
+    return { files: [{ path: 'index.html', content: wrapScriptDocument(scriptFences[0].body, css) }], entry: 'index.html', dependencies: {}, kind: 'html' };
+  }
+  // Also accept a complete/raw script in a response without markdown fences when it has clear DOM
+  // or browser-loop syntax. Plain prose remains a non-project.
+  if (!found.length && looksLikeExecutableScript(text) && !/<(?:html|body|script)\b/i.test(text)) {
+    return { files: [{ path: 'index.html', content: wrapScriptDocument(text.trim()) }], entry: 'index.html', dependencies: {}, kind: 'html' };
   }
   return null;
 }

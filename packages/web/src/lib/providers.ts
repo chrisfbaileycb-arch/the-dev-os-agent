@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'aihubmix' | 'huggingface' | 'omniroute' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -22,14 +22,10 @@ export const providers: Record<Provider, { name: string; tier: string; endpoint:
   // how the router routes. Seeds from their documented open-weights roster; Discover reads the
   // live list from /v1/models and the model field accepts anything typed, as everywhere else.
   huggingface: { name: 'Hugging Face', tier: 'Open models', endpoint: 'https://router.huggingface.co/v1', models: ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Llama-3.1-8B-Instruct', 'openai/gpt-oss-120b', 'deepseek-ai/DeepSeek-R1:auto', 'Qwen/Qwen2.5-Coder-32B-Instruct', 'zai-org/GLM-4.5', 'moonshotai/Kimi-K2-Instruct'] },
-  // OmniRoute is self-hosted gateway software, not a hosted service: every install serves its
-  // own OpenAI-compatible /v1 at its own origin, so unlike every provider above there is no
-  // public URL to pin. The deployment reaches the operator's install at OMNIROUTE_BASE_URL and
-  // funds exactly the ids OMNIROUTE_FREE_MODELS names — see server/freetier.mjs. The browser
-  // keeps no endpoint: Discover asks the proxy, which asks the gateway. The `auto` channels are
-  // the only ids OmniRoute's own docs guarantee on every install; concrete oc/… and provider
-  // ids come from Discover against the live gateway, never from a seed that can go stale.
-  omniroute: { name: 'OmniRoute', tier: 'Self-hosted', endpoint: '', models: ['auto', 'auto/coding', 'auto/fast', 'auto/cheap'] },
+  // Managed hosted route. The endpoint is intentionally empty in the browser: the server pins
+  // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.
+  'cheaper-inference': { name: 'Managed inference', tier: 'Orator managed', endpoint: '', models: [] },
+
   groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
   openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy
@@ -38,11 +34,10 @@ export const providers: Record<Provider, { name: string; tier: string; endpoint:
   // Google publishes an OpenAI-compatible surface for Gemini, so it needs no translation.
   google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
   cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
-  // A unified gateway fronting many model families through one OpenAI-compatible endpoint. No
-  // seed ids: this is the one provider whose catalogue the server discovers for us, so the model
-  // list comes from /api/providers and the six ids that used to sit here — three of which the
-  // gateway had never heard of — are gone.
   xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: [] },
+  // Optional future adapter only. It is deliberately not configured, discovered, or shown to
+  // customers in this phase; hosted Cheaper Inference is the initial managed route.
+  omniroute: { name: 'Optional self-hosted route', tier: 'Future adapter', endpoint: '', models: [] },
   custom: { name: 'Custom endpoint', tier: 'Custom', endpoint: '', models: [] },
 };
 const profiles = new Map<Provider, Connection>();
@@ -84,7 +79,7 @@ export function inferenceFor(model: string, current?: InferenceMode, funded?: st
  * list the moment /api/providers answers, which is before the dock is usable.
  */
 export function zeroConfigConnection(): Connection {
-  return { ...defaultConnection('xkiro'), mode: 'remote', model: '', inference: 'free' };
+  return { ...defaultConnection('cheaper-inference'), mode: 'remote', model: '', inference: 'free' };
 }
 export function loadConnection(provider: Provider): Connection {
   if (profiles.has(provider)) return { ...profiles.get(provider)! };

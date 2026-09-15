@@ -60,8 +60,24 @@ export function xkiroBase(env = process.env) {
  * to reason about the order they ran in.
  */
 let discoveredXkiro = [];
+let discoveredCheaperInference = [];
 
-/** Publish a discovered free list. Ids only; the gateway's own labels live in discovery.mjs. */
+/** Publish the operator-approved managed model list without exposing its credential. */
+export function setCheaperInferenceCatalog(models) {
+  const ids = (Array.isArray(models) ? models : []).map(model => typeof model === 'string' ? model : model?.id).filter(id => typeof id === 'string' && id.trim() && id.length <= 200).map(id => id.trim());
+  discoveredCheaperInference = [...new Set(ids)];
+}
+export const cheaperInferenceCatalog = () => [...discoveredCheaperInference];
+
+/** Models the operator explicitly approved for the managed hosted route. */
+export function cheaperInferencePool(env = process.env, discovered = discoveredCheaperInference) {
+  if (env.CHEAPER_INFERENCE_ENABLED !== 'true' || !env.CHEAPER_INFERENCE_API_KEY) return [];
+  const configured = (env.CHEAPER_INFERENCE_ALLOWED_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!configured.length) return [];
+  const live = new Set((Array.isArray(discovered) ? discovered : []).map(id => String(id).toLowerCase()));
+  return configured.filter(id => live.has(id.toLowerCase()));
+}
+
 export function setXkiroCatalog(ids) {
   const clean = (Array.isArray(ids) ? ids : [])
     .filter(id => typeof id === 'string' && id.trim() && id.length <= 200)
@@ -196,7 +212,7 @@ export function freeModels(env = process.env, discovered = discoveredXkiro) {
     ...guarded,
     ...hf,
     ...xkiroPool(env, discovered).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
-    ...omniRoutePool(env).map(id => ({ id, provider: 'omniroute', envKey: 'OMNIROUTE_API_KEY' })),
+    ...cheaperInferencePool(env).map(id => ({ id, provider: 'cheaper-inference', envKey: 'CHEAPER_INFERENCE_API_KEY' })),
   ];
 }
 
@@ -252,6 +268,7 @@ export function routeFreeRequest(entry) {
   // org/model form the router's OpenAI surface expects, and its routing policies (:fastest,
   // :cheapest) are legal suffixes a deployment may name deliberately.
   if (entry.provider === 'huggingface') return { model: entry.id };
+  if (entry.provider === 'cheaper-inference') return { model: entry.id };
   // OmniRoute names its own ids — `auto`, `auto/coding`, concrete `oc/…` entries — and the
   // gateway is the authority on what any of them resolves to. Nothing is stripped or rewritten.
   if (entry.provider === 'omniroute') return { model: entry.id };

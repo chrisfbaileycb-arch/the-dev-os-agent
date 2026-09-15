@@ -27,7 +27,7 @@ describe('catalog and credit weights', () => {
   });
   it('charges credits only in platform mode', () => {
     expect(creditsFor('groq/llama-3.1-8b-instant', 2000, 'credits')).toBe(1); expect(creditsFor('deepseek/deepseek-r1', 1000, 'credits')).toBe(15);
-    expect(creditsFor('deepseek/deepseek-r1', 1000, 'byok')).toBe(0); expect(creditsFor('deepseek/deepseek-r1', 1000, 'demo')).toBe(0); expect(creditsFor('deepseek/deepseek-r1', 0, 'credits')).toBe(0);
+    expect(creditsFor('deepseek/deepseek-r1', 1000, 'byok')).toBe(0); expect(creditsFor('deepseek/deepseek-r1', 0, 'credits')).toBe(0);
     expect(creditsFor('groq/llama-3.1-8b-instant', 1, 'credits')).toBe(0.01); expect(estimateTokens('abcdefgh')).toBe(2);
   });
 });
@@ -285,10 +285,13 @@ describe('chat turn', () => {
     expect(result.text).toBe('The page title is Shop.'); expect(result.tools).toHaveLength(1); expect(result.tools[0].ok).toBe(true); expect(traces[0]).toContain('Shop'); expect(result.tokens).toBe(80);
     expect(calls).toEqual(['/api/chat', '/api/browse', '/api/chat']); expect(deltas.some(d => d.startsWith('TOOL'))).toBe(false);
   });
-  it('stays scripted in preview mode and never calls the network', async () => {
-    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
-    const result = await chatTurn({ connection: { mode: 'demo', endpoint: '', model: '', token: '', maxTokens: 512 }, personaId: 'coder', history: [], input: 'Reconcile March', attachments: [], knowledge: [{ id: 'n', title: 'March ledger', content: 'March totals reconcile to the bank', createdAt: '' }], signal: new AbortController().signal });
-    expect(result.text).toContain('SCRIPTED PREVIEW'); expect(result.text).toContain('Coder'); expect(result.contextTitles).toEqual(['March ledger']); expect(fetchMock).not.toHaveBeenCalled();
+  it('always sends chat through the live inference gateway', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => sse('Live response'));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await chatTurn({ connection: { ...defaultConnection('groq'), token: 'key' }, personaId: 'coder', history: [], input: 'Reconcile March', attachments: [], knowledge: [{ id: 'n', title: 'March ledger', content: 'March totals reconcile to the bank', createdAt: '' }], signal: new AbortController().signal });
+    expect(result.text).toBe('Live response');
+    expect(result.contextTitles).toEqual(['March ledger']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

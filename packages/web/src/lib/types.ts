@@ -1,7 +1,7 @@
 import type { Provider } from './providers';
 import type { InferenceMode } from './catalog';
 import type { Persona } from './roster';
-export type Mode = 'demo' | 'remote';
+export type Mode = 'remote';
 export type Workflow = 'build' | 'research' | 'review';
 export interface Connection { provider?: Provider; saveKey?: boolean; serverAccessToken?: string; mode: Mode; inference?: InferenceMode; endpoint: string; model: string; token: string; maxTokens: number; }
 export interface Knowledge { id: string; title: string; content: string; createdAt: string; }

@@ -1,222 +1,142 @@
 import { useMemo, useState } from 'react';
-import { Check, Coins, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wallet } from 'lucide-react';
-import { findModel, weightFor, type InferenceMode } from '../lib/catalog';
+import { Check, Coins, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
+import { findModel } from '../lib/catalog';
 import { modelChoices } from '../lib/modelChoices';
-import { inferenceFor, providers, switchProvider, type Keyring, type Provider } from '../lib/providers';
+import { providers, switchProvider, type Keyring, type Provider } from '../lib/providers';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
-import type { GatewayCatalog } from '../lib/deployment';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
-import { REFERRAL_ALLOWANCE, REFERRAL_BREADTH, REFERRAL_DISCLOSURE, referralEnabled, referralLink } from '../lib/referral';
-
-// Settings and model hub.
-//
-// This page used to be a wall of model cards: two tiers, eighteen cards, each with a name, a
-// provider, a credit weight and a sentence of prose. Six of those cards were free models, and on
-// this deployment every one of them read "not funded here" — so the largest, most prominent block
-// on the page was a list of things that did not work, and finding the five that did meant reading
-// all eighteen. A card grid is the right shape for a handful of curated choices and the wrong one
-// for a list the server decides and can hold forty entries.
-//
-// So the free tier is a dropdown, built from what this deployment actually funds, and it sits on
-// its own with nothing else in it. Bringing your own key is a separate block below, which is where
-// arbitrary model ids and provider keys belong. The two are never mixed, because they answer two
-// different questions: "what can I use right now for nothing" and "what do I want to pay for".
+import { cheaperInferenceDashboard } from '../lib/cheaperInference';
 
 export interface SettingsProps {
   connection: Connection; setConnection: (c: Connection) => void;
-  /** Owned by App, because the dock's model picker reads it too. */
   keys: Keyring; setKeys: (next: Keyring) => void; keyed: Set<Provider>;
   models: string[]; checking: boolean; discover: () => void; save: () => void; forget: () => void;
-  balance: Balance; freeBalance: Balance; free: FreeTier; gateway: string | null; gatewayCatalog: GatewayCatalog;
+  balance: Balance; freeBalance: Balance; free: FreeTier;
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
 }
 
-/**
- * The providers that get their own key field, in the order they are offered.
- *
- * `custom` is left out: it is not an account you hold a key for, it is an endpoint you point at,
- * and it is configured with its base URL in the model hub above.
- */
-const KEYED: Provider[] = ['openai', 'anthropic', 'google', 'xkiro', 'openrouter', 'groq', 'cohere', 'aihubmix', 'huggingface', 'omniroute'];
+/** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
+const BYOK_PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic', 'google', 'groq', 'cohere', 'aihubmix', 'huggingface', 'xkiro'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
-  openai: 'sk-… from platform.openai.com',
-  anthropic: 'sk-ant-… from console.anthropic.com',
-  google: 'From Google AI Studio',
-  xkiro: 'From your xKiro dashboard',
-  openrouter: 'sk-or-… from openrouter.ai',
-  groq: 'gsk_… from console.groq.com',
-  cohere: 'From dashboard.cohere.com',
-  aihubmix: 'From aihubmix.com — free tier, no card',
-  huggingface: 'hf_… token from hf.co/settings/tokens',
-  omniroute: 'Any value — set OMNIROUTE_API_KEY on the server to unlock funding',
+  openrouter: 'Your OpenRouter key',
+  openai: 'Your OpenAI key',
+  anthropic: 'Your Anthropic key',
+  google: 'Your Google AI Studio key',
+  groq: 'Your Groq key',
+  cohere: 'Your Cohere key',
+  aihubmix: 'Your AIHubMix key',
+  huggingface: 'Your Hugging Face token',
+  xkiro: 'Your xKiro key',
 };
-
-/** The vendor an id belongs to, for grouping a long list into readable sections. */
-function family(id: string): string {
-  const prefix = id.includes('/') ? id.slice(0, id.indexOf('/')) : 'other';
-  return prefix.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
 
 export default function Settings(p: SettingsProps) {
   const c = p.connection;
-  const provider: Provider = c.provider ?? 'custom';
-  const current = findModel(c.model);
-  const inference: InferenceMode = c.inference ?? 'byok';
-  const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch });
-  /** The manual model-id field starts hidden: discovery is the normal path, and the raw field is the escape hatch. */
+  const provider: Provider = BYOK_PROVIDERS.includes(c.provider as Provider) ? c.provider as Provider : 'openrouter';
+  const inference = c.inference === 'free' ? 'free' : 'byok';
   const [manualModel, setManualModel] = useState(false);
+  const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch, mode: 'remote' });
 
-  /**
-   * A key belongs to a provider, not to the session, so all of them are editable at once and
-   * whichever one the chosen model needs is the one that gets sent. The ring lives in App, so a key
-   * typed here unlocks that vendor in the dock's dropdown immediately — no save, and no effect on
-   * any other provider. The active provider's field also writes the connection's own token, so it
-   * takes effect on the next message.
-   */
   function setKey(id: Provider, value: string) {
     p.setKeys({ ...p.keys, [id]: value });
     if (id === provider) set({ token: value });
   }
-
-  /** The free list, grouped by vendor and labelled by the gateway. Nothing here is hardcoded. */
-  const freeGroups = useMemo(() => {
-    const labels = new Map(p.gatewayCatalog.models.map(m => [m.id, m.label]));
-    const groups = new Map<string, { id: string; label: string }[]>();
-    for (const id of p.free.models) {
-      const key = family(id);
-      const label = labels.get(id) ?? findModel(id)?.label ?? id;
-      groups.set(key, [...(groups.get(key) ?? []), { id, label }]);
-    }
-    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [p.free.models, p.gatewayCatalog.models]);
-
-  /** What the Select Model dropdown offers: the live discovery list, filtered to chat models and labelled readably. */
-  const choices = useMemo(() => modelChoices(p.models, p.gatewayCatalog.models), [p.models, p.gatewayCatalog.models]);
-  const selectedInChoices = choices.some(ch => ch.id === c.model);
-
-  const onFreeTier = inference === 'free';
-  const freeSelection = onFreeTier && p.free.models.includes(c.model) ? c.model : '';
-
-  /** Pick a free model. This block only ever funds through the free tier, so it says so outright. */
-  function pickFree(id: string) {
-    if (!id) return;
-    const served = p.free.providers[id];
-    const next = (served && Object.hasOwn(providers, served) ? served : 'xkiro') as Provider;
-    p.setConnection({ ...switchProvider(c, next), mode: 'remote', model: id, inference: 'free' });
+  function pickProvider(id: Provider) {
+    const next = switchProvider(c, id);
+    p.setConnection({ ...next, mode: 'remote', inference: 'byok' });
   }
-  /** Pick a suggested key-funded model. The visitor's chosen payment mode is left alone. */
-  function pickKeyed(id: string, forProvider: Provider) {
-    if (!id) return;
-    const base = forProvider === provider ? c : switchProvider(c, forProvider);
-    p.setConnection({ ...base, mode: 'remote', model: id, inference: inferenceFor(id, base.inference === 'free' ? undefined : base.inference, p.free.models) });
+  function pickModel(id: string) {
+    if (id) set({ model: id, inference: 'byok' });
   }
-  function pickProvider(id: Provider) { if (id === provider) { set({ mode: 'remote' }); return; } p.setConnection({ ...switchProvider(c, id), mode: 'remote' }); }
-  function pickInference(next: InferenceMode) {
-    // Switching onto the free tier with a model it does not cover would send a request the server
-    // refuses, so the first funded model comes along with the switch.
-    if (next === 'free' && !p.free.models.includes(c.model)) { p.setConnection({ ...c, inference: 'free', model: p.free.models[0] ?? c.model }); return; }
-    set({ inference: next });
+  function pickInference(next: 'free' | 'byok') {
+    if (next === 'free' && p.free.models.length && !p.free.models.includes(c.model)) {
+      set({ inference: 'free', model: p.free.models[0] });
+    } else set({ inference: next });
   }
+
+  const choices = useMemo(() => modelChoices(p.models), [p.models]);
+  const selectedInChoices = choices.some(choice => choice.id === c.model);
   const recent = p.ledger.slice().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8);
-  const meter = onFreeTier ? p.freeBalance : p.balance;
+  const meter = inference === 'free' ? p.freeBalance : p.balance;
+  const managed = inference === 'free';
 
   return <div className="page">
-    <div className="page-head"><div><h1>Settings and model hub</h1><p>Pick a model, decide how it is paid for, and keep your keys where you want them. Nothing here needs an account.</p></div></div>
+    <div className="page-head">
+      <div>
+        <h1>Settings</h1>
+        <p>Choose how Orator reasons. Orator keeps the workflow, verification, and delivery experience consistent while handling the underlying intelligence safely.</p>
+      </div>
+    </div>
+
     <div className="two-col wide">
       <div className="stack">
         <section className="panel">
-          <div className="panel-head"><h2>Model</h2><label className="switch"><input type="checkbox" checked={c.mode === 'demo'} disabled={p.busy} onChange={e => set({ mode: e.target.checked ? 'demo' : 'remote' })} />Scripted preview (no AI, no network)</label></div>
-          <p className="help">Pick a provider, then Discover Models to read the live list it actually serves — no guessed ids, no stale suggestions — and choose from what came back. Anything chosen here is paid for by your own key or by platform credits, never by the free tier.</p>
-          <div className="form-grid">
-            <label>Provider<select value={provider} disabled={p.busy || c.mode === 'demo'} onChange={e => pickProvider(e.target.value as Provider)}>{(Object.keys(providers) as Provider[]).map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
-            {provider === 'custom' && <label>API base URL<input type="url" disabled={p.busy || c.mode === 'demo'} value={c.endpoint} placeholder="https://your-inference.example/v1" onChange={e => set({ endpoint: e.target.value })} /></label>}
-            <label className="grow">Select Model<span className="row">
-              <select aria-label="Model" value={selectedInChoices ? c.model : ''} disabled={p.busy || c.mode === 'demo' || choices.length === 0} onChange={e => pickKeyed(e.target.value, provider)}>
-                {choices.length === 0 && <option value="">{p.checking ? 'Discovering available models…' : 'No models discovered yet'}</option>}
-                {choices.map(ch => <option key={ch.id} value={ch.id}>{ch.label} ({ch.id})</option>)}
-              </select>
-              <button className="button primary small" disabled={p.busy || p.checking || c.mode === 'demo' || (provider === 'custom' && !c.endpoint)} onClick={p.discover}>{p.checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover Models</button>
-            </span></label>
-            {p.checking && <p className="help">Discovering available models…</p>}
-            {!p.checking && choices.length === 0 && <p className="help">The dropdown fills from what your provider serves — hit Discover Models to read it. Nothing is prefilled from a guess.</p>}
-            <button type="button" className="text-button" onClick={() => setManualModel(m => !m)}>{manualModel ? 'Hide the manual model field' : 'Can\u2019t find your model? Enter its ID manually'}</button>
-            {manualModel && <label className="grow">Model ID<span className="row"><input list="model-catalog" disabled={p.busy || c.mode === 'demo'} value={c.model} placeholder="Model served by your provider" onChange={e => set({ model: e.target.value, inference: inferenceFor(e.target.value, c.inference, p.free.models) })} /><datalist id="model-catalog">{p.models.map(m => <option key={m} value={m} />)}</datalist></span></label>}
-            <label>Output limit<select disabled={p.busy} value={c.maxTokens} onChange={e => set({ maxTokens: Number(e.target.value) })}>{[512, 1024, 2048, 4096].map(n => <option key={n} value={n}>{n.toLocaleString()} tokens</option>)}</select></label>
+          <h2>How inference is paid for</h2>
+          <div className="mode-picker two">
+            <button className={managed ? 'mode selected' : 'mode'} disabled={p.busy || !p.free.enabled} aria-pressed={managed} onClick={() => pickInference('free')}>
+              <Sparkles size={16} strokeWidth={1.75} /><strong>Free Tier</strong>
+              <small>{p.free.enabled ? 'Built-in managed access is available.' : 'This deployment is not currently offering managed access.'}</small>
+            </button>
+            <button className={!managed ? 'mode selected' : 'mode'} disabled={p.busy} aria-pressed={!managed} onClick={() => pickInference('byok')}>
+              <KeyRound size={16} strokeWidth={1.75} /><strong>Bring Your Own Key</strong>
+              <small>Use an approved provider account while Orator remains the experience.</small>
+            </button>
           </div>
-          {c.mode === 'remote' && c.model && !current && !p.free.models.includes(c.model) && <p className="help">Unlisted model: charged at {weightFor(c.model)} credits per 1K tokens on platform credits, judged from its name. Free-tier funding covers the models in the list above only.</p>}
-          {provider === 'xkiro' && p.gateway && <p className="help">This deployment reaches xKiro at <strong className="mono">{p.gateway}</strong>. That is the resolved value of XKIRO_BASE_URL — if it is not the address you expect, the variable is the thing to correct, and a wrong-but-valid host shows up only as a failed connection.</p>}
-          {provider === 'omniroute' && <p className="help">OmniRoute is self-hosted: this deployment reaches your install at <strong className="mono">OMNIROUTE_BASE_URL</strong> (HTTPS, including /v1). Free-tier funding is exactly what <strong className="mono">OMNIROUTE_FREE_MODELS</strong> names — comma-separated ids such as <span className="mono">auto, auto/coding</span> — and requires <strong className="mono">OMNIROUTE_API_KEY</strong> to be set (any value works against an install with auth off). Discover reads the live model list from your gateway. Until those are set on the server, requests answer “not configured”.</p>}
-          {provider === 'custom' && <p className="help">HTTPS only, and the origin must be listed in CUSTOM_API_ORIGINS on the server. A home PC running Ollama or LM Studio is reached through an administrator bridge, never through localhost on a hosted server.</p>}
+
+          {managed ? <div className="managed-confirm" role="status">
+            <Sparkles size={20} strokeWidth={1.75} />
+            <div><strong>You are using the built-in managed tier.</strong><p>All queries are handled automatically. Orator chooses an eligible route, applies its privacy and capability rules, validates the result, and continues safely if a route is unavailable.</p></div>
+          </div> : <>
+            <p className="help">Orator sends requests through its protected gateway. Select the provider you already use, enter its key, and choose a model from the provider's live catalog. Your key is used only for that provider and is never bundled into the app.</p>
+            <div className="form-grid">
+              <label>Provider<select value={provider} disabled={p.busy} onChange={e => pickProvider(e.target.value as Provider)}>{BYOK_PROVIDERS.map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
+              <label>API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.token || p.keys[provider] || ''} placeholder={KEY_HINTS[provider]} onChange={e => setKey(provider, e.target.value)} /></label>
+              <label className="grow">Preferred model<span className="row">
+                <select aria-label="Preferred model" value={selectedInChoices ? c.model : ''} disabled={p.busy || p.checking || choices.length === 0} onChange={e => pickModel(e.target.value)}>
+                  {choices.length === 0 && <option value="">{p.checking ? 'Loading available models…' : 'Discover models from this provider'}</option>}
+                  {choices.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+                </select>
+                <button className="button primary small" disabled={p.busy || p.checking || !c.token} onClick={p.discover}>{p.checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover</button>
+              </span></label>
+            </div>
+            <button type="button" className="text-button" onClick={() => setManualModel(value => !value)}>{manualModel ? 'Hide manual model ID' : 'Can’t find your model? Enter its ID'}</button>
+            {manualModel && <label>Model ID<input value={c.model} maxLength={200} placeholder="Provider model ID" onChange={e => pickModel(e.target.value)} /></label>}
+            <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember this key in this browser</label>
+            <p className="help">Keys stay in this browser only when you choose Remember. They are not sent to third-party scripts, placed in the app bundle, or returned by the server.</p>
+          </>}
+          <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={p.save}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={p.forget}><Trash2 size={13} />Forget saved keys</button></div>
         </section>
 
         <section className="panel">
-          <h2>How inference is paid for</h2>
-          <div className="mode-picker three">
-            <button className={inference === 'free' ? 'mode selected' : 'mode'} disabled={p.busy || !p.free.enabled} aria-pressed={inference === 'free'} onClick={() => pickInference('free')}>
-              <Sparkles size={16} strokeWidth={1.75} /><strong>Free tier</strong>
-              <small>{p.free.enabled ? `No key at all. ${p.free.monthlyCredits.toLocaleString()} credits a month, ${p.free.perHour} requests an hour.` : 'Not available: this deployment funds no free models right now.'}</small>
-            </button>
-            <button className={inference === 'byok' ? 'mode selected' : 'mode'} disabled={p.busy} aria-pressed={inference === 'byok'} onClick={() => pickInference('byok')}>
-              <KeyRound size={16} strokeWidth={1.75} /><strong>Bring your own key</strong>
-              <small>Your provider bills you directly. No credits are ever drawn.</small>
-            </button>
-            <button className={inference === 'credits' ? 'mode selected' : 'mode'} disabled={p.busy} aria-pressed={inference === 'credits'} onClick={() => pickInference('credits')}>
-              <Wallet size={16} strokeWidth={1.75} /><strong>Platform credits</strong>
-              <small>This deployment's full model pool, unlocked by an administrator token.</small>
-            </button>
-          </div>
-          {inference === 'free' ? <p className="help">Nothing to enter. Requests route through this deployment's own provider keys, restricted to the free models listed above, and every request is metered on the server against the allowance shown to the right. This is a deliberate choice and it stays chosen: picking a model here will not move you off the free tier, and picking one in the section above will not move you onto it. When the allowance runs out, add your own key here and the same models keep working — free accounts at any of these providers are enough.</p>
-            : inference === 'byok' ? <>
-              <p className="help">One key per provider. The model you pick decides which one is used, so a key you already hold works straight away — you do not need an account at all of them, and each key unlocks its own vendor only. A key takes effect as soon as you type it, in this page and in the dock's model list, without waiting for Save; saving is what decides whether it is still here after you close the tab. Choosing a model the deployment happens to fund no longer switches you back to the free tier; if that is what you want, say so with the Free tier button.</p>
-              <div className="key-grid">
-                {KEYED.map(id => <label key={id} className={id === provider ? 'key-field active' : 'key-field'}>
-                  <span>{providers[id].name}{id === provider && <em>in use</em>}{id !== provider && p.keyed.has(id) && <em>unlocked</em>}</span>
-                  <input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={id === provider ? c.token : p.keys[id]} placeholder={KEY_HINTS[id] ?? 'Your provider key'} onChange={e => setKey(id, e.target.value)} />
-                </label>)}
-              </div>
-              <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember these keys in this browser</label>
-              <p className="help">Every request runs through this deployment's proxy so the key never has to leave your tab for a third-party script to see — it is attached to the outbound call and never written to the server's disk or logs. Remembered keys live in this browser's localStorage, unencrypted and readable by any script on this origin, so use a restricted key on a device you trust. Leave the box unticked and they last only until you close the tab.</p>
-              {referralEnabled() && <p className="help referral-note">
-                <ExternalLink size={12} strokeWidth={1.75} />
-                <span>
-                  Developer, or prefer your own direct API key?{' '}
-                  <a {...referralLink()}>Get {REFERRAL_ALLOWANCE} on xKiro with our partner link</a>
-                  {' — '}{REFERRAL_DISCLOSURE} Those are xKiro's figures for their own service ({REFERRAL_BREADTH}), worth checking on their site. Any Groq, OpenRouter, OpenAI, Anthropic or Google key works here just as well.
-                </span>
-              </p>}
-            </> : <>
-              <label>Deployment access token<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.serverAccessToken ?? ''} placeholder="Given to you by the administrator" onChange={e => set({ serverAccessToken: e.target.value })} /></label>
-              <p className="help">Platform credits route through the deployment's own provider keys and need this token. It stays in memory for the session. Each request draws credits from the monthly allowance shown to the right; your own key is not used.</p>
-            </>}
-          <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={p.save}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={p.forget}><Trash2 size={13} />Forget saved keys</button></div>
+          <h2><ShieldCheck size={15} strokeWidth={1.75} /> Orator routing</h2>
+          <p className="help">Orator is provider-neutral. It selects routes by task capability, context, privacy, availability, entitlement, latency, and cost policy—not by a model's price label. Free, open-weight, economical, local, and premium models are evaluated on capability and acceptance criteria.</p>
+          <p className="help">The initial managed route is Cheaper Inference. OpenRouter, direct providers, and Hugging Face remain supported fallbacks when your policy and configuration allow them. Self-hosted OmniRoute is an optional future adapter and is not required for this app.</p>
+          <a className="button small" href={cheaperInferenceDashboard} target="_blank" rel="noreferrer"><ExternalLink size={13} />Managed inference dashboard</a>
         </section>
       </div>
 
       <div className="stack">
         <section className="panel">
-          <div className="panel-head"><h2>{onFreeTier ? 'Free allowance' : 'Credits'}</h2><span className="pill">{onFreeTier ? <Sparkles size={12} /> : <Coins size={12} />}{meter.remaining.toLocaleString()} of {meter.pool.toLocaleString()} left</span></div>
+          <div className="panel-head"><h2>{managed ? 'Managed allowance' : 'Credits'}</h2><span className="pill">{managed ? <Sparkles size={12} /> : <Coins size={12} />}{meter.remaining.toLocaleString()} of {meter.pool.toLocaleString()} left</span></div>
           <div className="meter" role="progressbar" aria-valuemin={0} aria-valuemax={meter.pool} aria-valuenow={meter.used} aria-label="Credits used this month"><span style={{ width: `${meter.pool ? Math.min(100, (meter.used / meter.pool) * 100) : 0}%` }} /></div>
-          <p className="help">{meter.used.toLocaleString()} credits used in {meter.month}. {onFreeTier
-            ? 'Free-tier usage is measured on the server from the tokens that actually streamed, at 0.5 credits per 1K, so this number is the deployment\'s own record rather than an estimate made here.'
-            : `Balance ${p.serverReachable ? 'is stored on the server' : 'is computed in this browser; the server was not reachable'}. Weights: fast models 0.5, standard 3, reasoning 15 credits per 1K tokens.`} Requests on your own key are logged at zero.</p>
-          {recent.length > 0 && <div className="ledger-wrap"><table className="ledger"><thead><tr><th>When</th><th>Model</th><th>Mode</th><th className="num">Tokens</th><th className="num">Credits</th></tr></thead><tbody>{recent.map(e => <tr key={e.id}><td>{new Date(e.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td><td className="mono">{e.model}</td><td>{e.mode}</td><td className="num">{e.tokens.toLocaleString()}</td><td className="num">{e.credits.toLocaleString()}</td></tr>)}</tbody></table></div>}
+          <p className="help">{meter.used.toLocaleString()} credits used in {meter.month}. {managed ? 'Managed usage is measured server-side from actual streamed usage.' : 'Requests on your own key do not draw Orator credits.'}</p>
+          {recent.length > 0 && <div className="ledger-wrap"><table className="ledger"><thead><tr><th>When</th><th>Model</th><th>Mode</th><th className="num">Tokens</th><th className="num">Credits</th></tr></thead><tbody>{recent.map(entry => <tr key={entry.id}><td>{new Date(entry.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td><td className="mono">{entry.model}</td><td>{entry.mode}</td><td className="num">{entry.tokens.toLocaleString()}</td><td className="num">{entry.credits.toLocaleString()}</td></tr>)}</tbody></table></div>}
         </section>
 
         <section className="panel">
-          <h2><ShieldCheck size={15} strokeWidth={1.75} /> Where things run</h2>
-          <p className="help"><strong>In your tab:</strong> the interface, the agent team, keyword retrieval, and your notes.<br /><strong>On this server:</strong> the streaming proxy, the free-tier meter, gateway model discovery, the URL crawler, the GitHub and MCP connectors, the sandbox browser, and a copy of your sessions and ledger keyed by an anonymous workspace id.<br /><strong>On your provider:</strong> model inference. Provider usage may cost money on your own key.<br /><strong>Not included:</strong> shell access, code changes, logins on other sites, vector embeddings, model hosting.</p>
+          <h2><ShieldCheck size={15} strokeWidth={1.75} /> Privacy and execution</h2>
+          <p className="help"><strong>In your browser:</strong> the Orator interface, agent identity, workspace notes, and workflow coordination.<br /><strong>On this server:</strong> policy enforcement, protected streaming transport, provider health, usage accounting, and workspace synchronization.<br /><strong>With an approved inference service:</strong> only the minimum authorized project context needed for the current task.</p>
         </section>
 
         <section className="panel">
           <h2><MonitorDown size={15} strokeWidth={1.75} /> Install on this device</h2>
-          <p className="help">On a Chromebook, or in Chrome on Windows, Mac, or Linux, Hey Buddy can live on your shelf or dock and open in its own window. Installed, it opens offline and the scripted preview keeps working; hosted runs need a connection.</p>
-          {isInstalled() ? <p className="help">Installed. You are using the app window now.</p> : p.canInstall ? <button className="button small" onClick={() => void promptInstall()}><MonitorDown size={13} />Install app</button> : <p className="help">Your browser has not offered to install yet. In Chrome, use the install icon at the right end of the address bar, or choose Install from the browser menu.</p>}
+          <p className="help">Install Orator on Chrome, Windows, Mac, Linux, or a Chromebook. The same customer experience works across devices; hosted reasoning needs a connection.</p>
+          {isInstalled() ? <p className="help">Installed. You are using the app window now.</p> : p.canInstall ? <button className="button small" onClick={() => void promptInstall()}><MonitorDown size={13} />Install app</button> : <p className="help">Your browser has not offered to install yet. Use the browser's Install option when it appears.</p>}
         </section>
 
         <section className="panel danger">
           <h2>Clear workspace</h2>
-          <p className="help">Deletes sessions, runs, the ledger, notes, connectors, custom agents you wrote, and saved connection details from this browser and from the server copy.</p>
+          <p className="help">Deletes sessions, runs, usage records, notes, connectors, custom agents, and saved connection details from this browser and the server copy.</p>
           <button className="button danger small" disabled={p.busy} onClick={p.requestClear}><Trash2 size={13} />Clear everything</button>
         </section>
       </div>

@@ -27,8 +27,8 @@ export interface DockProps {
   attachments: Attached[]; photos: Photo[];
   addFiles: (files: File[]) => void; removeAttachment: (name: string) => void; removePhoto: (name: string) => void;
   openConnectors: () => void; connectorCount: number;
-  model: string; inference: InferenceMode; demo: boolean; free: FreeTier; labels: Record<string, string>; reach: Reach; keyed: Set<Provider>;
-  pickModel: (id: string, mode?: InferenceMode) => void; pickPreview: () => void; modelNeedsKey: (m: CatalogModel) => void;
+  model: string; inference: InferenceMode; free: FreeTier; labels: Record<string, string>; reach: Reach; keyed: Set<Provider>;
+  pickModel: (id: string, mode?: InferenceMode) => void; modelNeedsKey: (model: CatalogModel) => void;
   busy: boolean; ready: boolean; send: () => void; stop: () => void;
   listening: boolean; voiceSupported: boolean; toggleVoice: () => void;
   tokens: { draft: number; context: number };
@@ -79,7 +79,7 @@ export default function Dock(p: DockProps) {
           <option value="chat">{DIRECT_MODE_LABEL}</option>
           <optgroup label={WORKFLOW_GROUP_LABEL}>{(Object.keys(workflows) as Workflow[]).map(w => <option key={w} value={w}>{workflows[w].label}</option>)}</optgroup>
         </select><ChevronDown size={12} /></label>
-        <ModelPicker model={p.model} inference={p.inference} demo={p.demo} free={p.free} labels={p.labels} reach={p.reach} keyed={p.keyed} disabled={p.busy} onPick={p.pickModel} onPreview={p.pickPreview} onNeedsKey={p.modelNeedsKey} />
+        <ModelPicker model={p.model} inference={p.inference} free={p.free} labels={p.labels} reach={p.reach} keyed={p.keyed} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} />
         <button className={p.connectorCount ? 'chip-button live' : 'chip-button'} title="Connectors: GitHub, web, documents, MCP" onClick={p.openConnectors} disabled={p.busy}><Plug size={13} strokeWidth={1.75} /><span className="chip-label">Connectors</span>{p.connectorCount ? <em>{p.connectorCount}</em> : null}</button>
         <span className="dock-counters" title="Estimated tokens in your message and in the attached context"><em>{p.tokens.draft.toLocaleString()}</em> draft · <em>{p.tokens.context.toLocaleString()}</em> context</span>
         <span className="dock-send">

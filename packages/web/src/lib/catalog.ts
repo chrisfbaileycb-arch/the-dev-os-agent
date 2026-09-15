@@ -106,8 +106,8 @@ export function weightFor(model: string): number {
   return CREDIT_WEIGHTS.standard;
 }
 export function tierFor(model: string): Tier { return findModel(model)?.tier ?? (weightFor(model) === CREDIT_WEIGHTS.fast ? 'free' : 'pro'); }
-/** Credits for a completed request. Two-decimal precision; nothing for BYOK or the scripted preview. */
-export function creditsFor(model: string, tokens: number, mode: InferenceMode | 'demo'): number {
+/** Credits for a completed request. Two-decimal precision; BYOK runs are never charged. */
+export function creditsFor(model: string, tokens: number, mode: InferenceMode): number {
   if ((mode !== 'credits' && mode !== 'free') || !(tokens > 0)) return 0;
   return Math.ceil((tokens * weightFor(model)) / 10) / 100;
 }

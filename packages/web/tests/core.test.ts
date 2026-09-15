@@ -98,26 +98,22 @@ describe('Hugging Face provider', () => {
 });
 
 describe('OmniRoute provider', () => {
-  // Self-hosted gateway software: one OpenAI-compatible endpoint per install, so unlike every
-  // hosted provider there is no public URL to pin. The browser keeps no endpoint — Discover asks
-  // the proxy, which asks the operator's install — and funding is the operator's own declaration
-  // (OMNIROUTE_FREE_MODELS on the server), never a client-side guess.
-  it('is registered with the auto-family seeds and no browser endpoint', () => {
+  it('keeps OmniRoute as an unconfigured future adapter', () => {
     expect(providers.omniroute).toBeDefined();
     expect(providers.omniroute.endpoint).toBe('');
-    expect(providers.omniroute.models.slice(0, 4)).toEqual(['auto', 'auto/coding', 'auto/fast', 'auto/cheap']);
+    expect(providers.omniroute.models).toEqual([]);
   });
 
-  it('builds a default connection that carries no hardcoded destination', () => {
+  it('builds an empty default connection until the future adapter is configured', () => {
     const c = defaultConnection('omniroute');
     expect(c.provider).toBe('omniroute');
     expect(c.endpoint).toBe('');
-    expect(c.model).toBe('auto');
+    expect(c.model).toBe('');
   });
 
-  it('carries catalog entries that never claim free or byok', () => {
-    // Nothing here can honestly promise a cost on the visitor's side: whether a run costs
-    // anything depends on which providers the operator connected to their install.
+  it('keeps future OmniRoute catalog entries non-free and non-customer-selectable', () => {
+    // Cost depends on a future operator installation, so these entries cannot claim a customer
+    // price classification. The picker deliberately omits the disabled adapter from its groups.
     expect(findModel('auto')?.provider).toBe('omniroute');
     expect(findModel('auto')?.tier).toBe('pro');
     expect(findModel('auto/coding')?.tier).toBe('pro');
@@ -153,5 +149,14 @@ describe('worker orchestration', () => {
   it('retries transient failures within the two-attempt limit', async () => { let count = 0; const call = vi.fn(async () => { if (++count === 1) throw new ProviderError('Temporary outage', true); return { text: 'ok', tokens: 1 }; }); const run = await executeRun(message(), new AbortController().signal, () => {}, call); expect(run.status).toBe('completed'); expect(run.calls).toBe(6); expect(run.steps[0].attempts).toBe(1); });
   it('stops after bounded transient retries', async () => { const call = vi.fn(async () => { throw new ProviderError('Temporary outage', true); }); const run = await executeRun(message(), new AbortController().signal, () => {}, call); expect(run.status).toBe('failed'); expect(call).toHaveBeenCalledTimes(2); });
   it('cancels active and downstream work', async () => { const controller = new AbortController(); const call = vi.fn(async () => { controller.abort(new DOMException('Stopped', 'AbortError')); throw controller.signal.reason; }); const run = await executeRun(message(), controller.signal, () => {}, call); expect(run.status).toBe('cancelled'); expect(run.steps.every(s => s.status === 'cancelled')).toBe(true); expect(call).toHaveBeenCalledTimes(1); });
-  it('labels scripted preview and makes no provider calls', async () => { const input = message(); input.connection.mode = 'demo'; const call = vi.fn(); const run = await executeRun(input, new AbortController().signal, () => {}, call); expect(run.status).toBe('completed'); expect(run.calls).toBe(0); expect(run.tokens).toBe(0); expect(call).not.toHaveBeenCalled(); expect(run.steps.every(s => s.output?.includes('SCRIPTED PREVIEW'))).toBe(true); });
+  it('always executes workflow stages through the live provider callback', async () => {
+    const input = message();
+    const call = vi.fn(async () => ({ text: 'live provider output', tokens: 1 }));
+    const run = await executeRun(input, new AbortController().signal, () => {}, call);
+    expect(run.status).toBe('completed');
+    expect(run.calls).toBe(5);
+    expect(run.tokens).toBe(5);
+    expect(call).toHaveBeenCalled();
+    expect(run.steps.every(s => s.output === 'live provider output')).toBe(true);
+  });
 });

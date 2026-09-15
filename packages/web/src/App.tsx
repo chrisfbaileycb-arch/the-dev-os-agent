@@ -7,7 +7,8 @@ import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
-import OutputPanel, { type PreviewSplit } from './ui/OutputPanel';
+import { usePaneResize } from './ui/SplitPane';
+import OutputPanel, { type LayoutPreset } from './ui/OutputPanel';
 import Pricing from './ui/Pricing';
 import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
@@ -86,12 +87,26 @@ export default function App() {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
   const [previewOpen, setPreviewOpen] = useState(false);
-  /**
-   * The chat/preview split, remembered like the rail is. `even` is the AI-Studio two-pane default;
-   * the other two focus one side without ever fully hiding the other.
-   */
-  const [previewSplit, setPreviewSplit] = useState<PreviewSplit>(() => { try { const v = localStorage.getItem('hb-split'); return v === 'chat' || v === 'preview' ? v : 'even'; } catch { return 'even'; } });
-  const chooseSplit = (next: PreviewSplit) => { try { localStorage.setItem('hb-split', next); } catch { /* storage unavailable; the choice lasts the session */ } setPreviewSplit(next); };
+  /** Percentage of the chat canvas when output is open. The two extreme presets collapse one side. */
+  const [chatPercent, setChatPercent] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem('hb-chat-percent'));
+      if (Number.isFinite(saved)) return Math.max(0, Math.min(100, saved));
+      const legacy = localStorage.getItem('hb-split');
+      return legacy === 'chat' ? 70 : legacy === 'preview' ? 30 : 50;
+    } catch { return 50; }
+  });
+  const resizeChat = (percent: number) => {
+    const next = Math.max(20, Math.min(80, percent));
+    try { localStorage.setItem('hb-chat-percent', String(next)); } catch { /* storage unavailable */ }
+    setChatPercent(next);
+  };
+  const chooseLayout = (preset: LayoutPreset) => {
+    const next = preset === 'chat' ? 100 : preset === 'balanced' ? 50 : preset === 'focus' ? 30 : 0;
+    try { localStorage.setItem('hb-chat-percent', String(next)); } catch { /* storage unavailable */ }
+    setChatPercent(next);
+  };
+  const dividerProps = usePaneResize(resizeChat);
   const [mcp, setMcpState] = useState<McpConnection[]>(loadConnections);
   const [settings, setSettingsState] = useState<ConnectorSettings>(loadSettings);
   const [stats, setStats] = useState<Stats | null>(null); const [listening, setListening] = useState(false);
@@ -105,12 +120,11 @@ export default function App() {
 
   const active = sessions.find(s => s.id === activeId) ?? null;
   const persona = personaById(active?.persona ?? personaId);
-  const demo = connection.mode === 'demo';
   const inference = connection.inference ?? 'byok';
   // Gateway labels, so a discovered id reads as a model name everywhere it is shown.
   const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog), [deployment.gatewayCatalog]);
-  const label = modelLabel(connection.model, demo, labels);
-  const tierLabel = demo ? 'no model' : tierFor(connection.model || '');
+  const label = modelLabel(connection.model, labels);
+  const tierLabel = tierFor(connection.model || '');
   // What can be paid for right now, from the keyring rather than from the active connection alone.
   const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: inference === 'credits' && Boolean(connection.serverAccessToken?.trim()) }), [deployment.free, keys, connection.token, connection.provider, connection.serverAccessToken, inference]);
   const keyed = useMemo(() => keyedProviders(reach), [reach]);
@@ -134,8 +148,8 @@ export default function App() {
     });
 
     void loadDeployment(controller.signal, {
-      // A free-plan instance takes a moment to wake. Saying so beats a silent wait that ends in
-      // the scripted preview.
+      // A free-plan instance may take a moment to wake. Saying so beats a silent wait that ends in
+      // an unavailable managed tier.
       onRetry: () => { if (!controller.signal.aborted) setNotice('Waking this deployment up — the first request after a quiet spell takes a few seconds.'); },
     }).then(d => {
       if (controller.signal.aborted) return;
@@ -152,10 +166,7 @@ export default function App() {
           const chosen = (served && Object.hasOwn(providers, served) ? served : c.provider ?? 'xkiro') as Provider;
           return { ...c, model: id, provider: chosen, endpoint: providers[chosen].endpoint };
         }
-        // Only a deployment that answered and funds nothing sends us to the scripted preview. A
-        // server that never answered is a different thing entirely, and forcing demo mode on it
-        // was how a slow wake-up turned into "no AI, no network" for the rest of the session.
-        return d.reachable ? { ...c, mode: 'demo' } : c;
+        return c;
       });
       if (!d.free.enabled && d.reachable) setNotice(FREE_TIER_WARMING);
       else if (!d.reachable) setNotice('Could not reach this deployment, so no model is selected yet. Reload to try again, or add your own key in Settings.');
@@ -231,7 +242,7 @@ export default function App() {
    * its own ledger row locally and syncs it.
    */
   async function charge(sessionId: string, count: number) {
-    if (inference === 'free' && !demo) {
+    if (inference === 'free') {
       const reading = await sync.usage();
       if (!reading) return;
       setFreeBalance(serverBalance(reading.freePool, reading.freeUsed));
@@ -242,7 +253,7 @@ export default function App() {
       return;
     }
     try {
-      const entry = await recordUsage({ sessionId, model: demo ? 'scripted-preview' : connection.model, mode: demo ? 'demo' : inference, tokens: count });
+      const entry = await recordUsage({ sessionId, model: connection.model, mode: inference, tokens: count });
       const next = [entry, ...ledgerRef.current]; ledgerRef.current = next; setLedger(next);
       setBalance(b => computeBalance(next, b.pool, b.source));
     } catch (e) { setNotice(errorText(e)); }
@@ -258,9 +269,8 @@ export default function App() {
     return errorText(e);
   }
   function preflight(): string | null {
-    if (demo) return null;
     try { validateConnection(connection); } catch (e) { return errorText(e); }
-    if (!online) return 'You are offline. Hosted models need a connection; the scripted preview still works.';
+    if (!online) return 'You are offline. Hosted models need a connection.';
     if (inference === 'free') {
       if (!deployment.free.enabled) return FREE_TIER_WARMING;
       if (!deployment.free.models.includes(connection.model)) return `${connection.model || 'No model'} is not on this deployment's free list. Pick a free model from the dropdown.`;
@@ -314,7 +324,7 @@ export default function App() {
     const problem = preflight(); if (problem) { setNotice(problem); return; }
     if (mode !== 'chat' && photos.length) { setNotice('Photos go with chat messages. Workflows work from text; remove the photo or switch to Chat.'); return; }
     // A workflow is five requests, so a BYOK visitor is asked once per session before it spends.
-    if (mode !== 'chat' && !demo && inference === 'byok' && !approvedRuns.current) { setConfirm('run'); return; }
+    if (mode !== 'chat' && inference === 'byok' && !approvedRuns.current) { setConfirm('run'); return; }
     const session = ensureSession(); const files = attachments; const shots = photos;
     const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, at: now(), attachments: files.map(a => ({ name: a.name, chars: a.content.length })), photos: shots.map(ph => ({ name: ph.name, thumb: ph.thumb })) };
     const title = session.messages.length ? session.title : text.replace(/\s+/g, ' ').slice(0, 60);
@@ -350,7 +360,7 @@ export default function App() {
     const runId = crypto.randomUUID();
     const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: `${workflows[workflow].label} · led by ${persona.name}`, model: label, runId };
     patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
-    updateRun({ id: runId, goal: text, workflow, mode: connection.mode, model: demo ? 'Scripted preview · no model' : connection.model, status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id, origin: 'browser' });
+    updateRun({ id: runId, goal: text, workflow, mode: connection.mode, model: connection.model, status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id, origin: 'browser' });
     const fail = (message: string) => {
       worker.current?.terminate(); worker.current = null; setBusy(false); setNotice(message);
       const current = runsRef.current.find(r => r.id === runId);
@@ -417,11 +427,11 @@ export default function App() {
     <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} />
     <div className="main">
       {(!online || notice) && <div className="notices">
-        {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. The scripted preview still works; hosted models need a connection.</span></div>}
+        {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. Hosted models need a connection.</span></div>}
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
       </div>}
       <div className="content">
-        {page === 'workspace' && <div className={previewOpen ? `workspace with-preview split-${previewSplit}` : 'workspace'}>
+        {page === 'workspace' && <div className={previewOpen ? 'workspace with-preview' : 'workspace'} style={previewOpen ? { gridTemplateColumns: `224px minmax(0, ${chatPercent}fr) 8px minmax(0, ${100 - chatPercent}fr)` } : undefined}>
           <aside className="sessions">
             <div className="sessions-head"><strong>Sessions</strong><button className="icon-button" aria-label="New session" title="New session" disabled={busy} onClick={newSession}><Plus size={14} /></button></div>
             {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => { setActiveId(s.id); setPersonaId(s.persona); }}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
@@ -439,7 +449,7 @@ export default function App() {
             <div className="messages">
               {!active?.messages.length && <div className="starter">
                 <h1>Your AI crew. Always in your corner.</h1>
-                <p>Ask a question, paste an error, or ask for code — the Assistant answers directly, with no setup and no connectors to switch on. Drop in a file if it helps, and pick a different agent or write your own whenever you want one. {deployment.free.enabled ? 'No sign-up and no API key: your first message streams on a free model this deployment funds.' : 'Add a provider key in Settings for real replies, or try the scripted preview.'}</p>
+                <p>Ask a question, paste an error, or ask for code — the Assistant answers directly, with no setup and no connectors to switch on. Drop in a file if it helps, and pick a different agent or write your own whenever you want one. {deployment.free.enabled ? 'No sign-up and no API key: your first message streams on a model this deployment funds.' : 'Add a provider key in Settings for real replies.'}</p>
                 {deployment.free.enabled && inference === 'free' && <p className="starter-badge"><Sparkles size={13} strokeWidth={2} />Running on {label} · {freeBalance.remaining.toLocaleString()} free credits left this month</p>}
                 <div className="starter-grid">{starters.map((s, i) => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={i} className="starter-card" onClick={() => { choosePersona(s.persona); setMode(s.mode); setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
               </div>}
@@ -462,27 +472,33 @@ export default function App() {
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
               openConnectors={() => openConnectors()} connectorCount={connectorCount}
-              model={connection.model} inference={inference} demo={demo} free={deployment.free} labels={labels} reach={reach} keyed={keyed}
-              pickModel={pickModel} pickPreview={() => setConnection(c => ({ ...c, mode: 'demo' }))} modelNeedsKey={modelNeedsKey}
+              model={connection.model} inference={inference} free={deployment.free} labels={labels} reach={reach} keyed={keyed}
+              pickModel={pickModel} modelNeedsKey={modelNeedsKey}
               busy={busy} ready={ready} send={send} stop={stop}
               listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice}
               tokens={tokens}
             />
           </section>
-          {previewOpen && <OutputPanel
-            content={active?.messages.slice().reverse().find(m => m.role === 'assistant')?.content ?? ''}
-            close={() => setPreviewOpen(false)}
-            github={settings.github}
-            openConnectors={() => openConnectors('github')}
-            split={previewSplit} setSplit={chooseSplit}
-          />}
+          {previewOpen && <>
+            <button className="pane-divider" data-pane-divider {...dividerProps}><span /></button>
+            <OutputPanel
+              content={active?.messages.slice().reverse().find(m => m.role === 'assistant')?.content ?? ''}
+              close={() => setPreviewOpen(false)}
+              github={settings.github}
+              openConnectors={() => openConnectors('github')}
+              chatPercent={chatPercent}
+              setChatPercent={resizeChat}
+              setLayout={chooseLayout}
+              streaming={busy}
+            />
+          </>}
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings gateway={deployment.gateway} gatewayCatalog={deployment.gatewayCatalog} connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
+        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
       </div>
-      <StatusBar model={label} tier={tierLabel} mode={payLabel(inference, demo)} stats={stats} balance={activeBalance} freeTier={inference === 'free' && !demo} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
+      <StatusBar model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
     <Connectors

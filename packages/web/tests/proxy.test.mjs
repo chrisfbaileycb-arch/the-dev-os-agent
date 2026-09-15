@@ -182,7 +182,7 @@ test('Anthropic is translated to /v1/messages, headers and all', async () => {
   const payload = JSON.parse(captured.body);
   assert.equal(payload.system, 'be brief');
   assert.deepEqual(payload.messages, [{ role: 'user', content: 'hello' }]);
-  assert.equal(payload.max_tokens, 1024);
+  assert.equal(payload.max_tokens, 4096);
   assert.equal(payload.stream_options, undefined, 'an unknown field is a 400 there, not an ignored hint');
 });
 
@@ -289,14 +289,14 @@ test('an upstream that answers badly logs the status it answered with', async ()
   assert.match(lines[0], /upstream xkiro api\.xkiro\.com\/v1\/chat\/completions -> HTTP 404/);
 });
 
-test('/api/providers names the gateway it will actually call', async () => {
-  // A well-formed but wrong XKIRO_BASE_URL passes every check and surfaces only as a connection
-  // failure. Publishing the resolved base makes that visible before anyone sends a message.
+test('/api/providers keeps provider endpoints server-side', async () => {
+  // Named provider destinations are selected by the server and are not configuration data for
+  // the browser. Publishing them is unnecessary and makes the transport boundary harder to audit.
   await withProxy({ env: {} }, async url => {
-    assert.equal((await (await fetch(url + '/api/providers')).json()).gateway, 'https://api.xkiro.com/v1');
+    assert.equal((await (await fetch(url + '/api/providers')).json()).gateway, null);
   });
   await withProxy({ env: { XKIRO_BASE_URL: 'https://gateway.example.com/v1' } }, async url => {
-    assert.equal((await (await fetch(url + '/api/providers')).json()).gateway, 'https://gateway.example.com/v1');
+    assert.equal((await (await fetch(url + '/api/providers')).json()).gateway, null);
   });
 });
 
@@ -388,43 +388,28 @@ test('an error response is read, not discarded', async () => {
   }
 });
 
-test('OmniRoute routes to the operator install with the server key and an unmodified id', async () => {
-  const env = { OMNIROUTE_API_KEY: 'omni-key', OMNIROUTE_BASE_URL: 'https://my-omniroute.example/v1', OMNIROUTE_FREE_MODELS: 'auto, auto/coding' };
-  const captures = [];
-  await withProxy({ env, transport: async (url, options) => { captures.push({ url, ...options }); return stream('data: [DONE]\n\n'); } }, async url => {
-    // Keyless: funded from the server key, via the allowlist.
-    assert.equal((await chatFree(url, { provider: 'omniroute', model: 'auto', messages: [{ role: 'user', content: 'hi' }] })).status, 200);
-    // BYOK: the visitor's own credential against the same pinned origin.
-    assert.equal((await post(url, { ...base, provider: 'omniroute', model: 'auto/fast', apiKey: 'visitor-credential' })).status, 200);
+test('OmniRoute requests are rejected while the optional adapter is disabled', async () => {
+  await withProxy({ env: { OMNIROUTE_API_KEY: 'omni-key', OMNIROUTE_BASE_URL: 'https://my-omniroute.example/v1', OMNIROUTE_FREE_MODELS: 'auto' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    const response = await post(url, { ...base, provider: 'omniroute', model: 'auto', apiKey: 'visitor-credential' });
+    assert.equal(response.status, 404);
+    assert.match((await response.json()).error.message, /optional self-hosted route is disabled/i);
   });
-  assert.equal(captures.length, 2);
-  assert.equal(captures[0].url, 'https://my-omniroute.example/v1/chat/completions', 'the destination is the operator origin, not anything the request body named');
-  assert.equal(captures[0].headers.Authorization, 'Bearer omni-key', 'a keyless free request carries the deployment key');
-  assert.equal(captures[1].headers.Authorization, 'Bearer visitor-credential', 'BYOK carries the visitor key to the same pinned origin');
-  const body = JSON.parse(captures[1].body);
-  // OmniRoute names its own ids; nothing is stripped or rewritten on the way through.
-  assert.equal(body.model, 'auto/fast');
-  assert.equal(body.stream, true);
-  assert.deepEqual(body.stream_options, { include_usage: true }, 'usage is requested so token counts still work');
-  assert.equal(usageReportable('omniroute', { nativeCohere: false, nativeAnthropic: false }), true);
+  assert.equal(usageReportable('omniroute', { nativeCohere: false, nativeAnthropic: false }), true, 'the transport contract remains ready for a future adapter');
 });
 
-test('a deployment without OMNIROUTE_BASE_URL says so plainly instead of failing obscurely', async () => {
-  await withProxy({ env: { OMNIROUTE_API_KEY: 'k', OMNIROUTE_FREE_MODELS: 'auto' }, transport: async () => { throw Error('must not call'); } }, async url => {
+test('a disabled OmniRoute request never uses its configured localhost-style adapter settings', async () => {
+  await withProxy({ env: { OMNIROUTE_API_KEY: 'k', OMNIROUTE_BASE_URL: 'https://my-omniroute.example/v1' }, transport: async () => { throw Error('must not call'); } }, async url => {
     const response = await chatFree(url, { provider: 'omniroute', model: 'auto', messages: [{ role: 'user', content: 'hi' }] });
-    assert.equal(response.status, 503);
-    const body = await response.json();
-    assert.match(body.error.message, /OMNIROUTE_BASE_URL/);
+    assert.equal(response.status, 404);
+    assert.match((await response.json()).error.message, /disabled/i);
   });
 });
 
-test('a visitor cannot fund an OmniRoute id the operator did not list', async () => {
-  const env = { OMNIROUTE_API_KEY: 'omni-key', OMNIROUTE_BASE_URL: 'https://my-omniroute.example/v1', OMNIROUTE_FREE_MODELS: 'auto' };
-  await withProxy({ env, transport: async () => { throw Error('must not call'); } }, async url => {
-    // On the allowlist but narrowed out — and a URL in the body steers nothing.
-    const response = await chatFree(url, { provider: 'omniroute', model: 'auto/coding', baseUrl: 'https://attacker.example/v1', messages: [{ role: 'user', content: 'hi' }] });
-    assert.equal(response.status, 401);
-    assert.equal((await response.json()).error.code, 'key_required');
+test('client-supplied provider URLs cannot re-enable the disabled OmniRoute adapter', async () => {
+  await withProxy({ env: {}, transport: async () => { throw Error('must not call'); } }, async url => {
+    const response = await post(url, { ...base, provider: 'omniroute', model: 'auto', baseUrl: 'https://attacker.example/v1', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(response.status, 404);
+    assert.match((await response.json()).error.message, /disabled/i);
   });
 });
 

@@ -25,7 +25,7 @@ export function checkOrigin(req, env) {
 }
 export function validateSession(s) { if (!s || !isId(s.id) || typeof s.title !== 'string' || s.title.length > 200 || !isIso(s.updatedAt) || !isIso(s.createdAt) || !Array.isArray(s.messages) || s.messages.length > 500 || typeof s.persona !== 'string') throw new HttpError(400, 'Invalid session.'); if (JSON.stringify(s).length > 1_000_000) throw new HttpError(413, 'Session is too large.'); }
 export function validateRun(r) { if (!r || !isId(r.id) || !isIso(r.startedAt) || !Array.isArray(r.steps) || typeof r.goal !== 'string') throw new HttpError(400, 'Invalid run.'); if (JSON.stringify(r).length > 1_000_000) throw new HttpError(413, 'Run is too large.'); }
-export function validateEntry(e) { if (!e || !isId(e.id) || !isIso(e.at) || typeof e.model !== 'string' || e.model.length > 200 || !['free', 'pro'].includes(e.tier) || !['credits', 'byok', 'demo', 'free'].includes(e.mode) || !Number.isInteger(e.tokens) || e.tokens < 0 || e.tokens > 10_000_000 || typeof e.credits !== 'number' || !Number.isFinite(e.credits) || e.credits < 0 || e.credits > 1_000_000) throw new HttpError(400, 'Invalid ledger entry.'); }
+export function validateEntry(e) { if (!e || !isId(e.id) || !isIso(e.at) || typeof e.model !== 'string' || e.model.length > 200 || !['free', 'byok', 'pro'].includes(e.tier) || !['credits', 'byok', 'free'].includes(e.mode) || !Number.isInteger(e.tokens) || e.tokens < 0 || e.tokens > 10_000_000 || typeof e.credits !== 'number' || !Number.isFinite(e.credits) || e.credits < 0 || e.credits > 1_000_000) throw new HttpError(400, 'Invalid ledger entry.'); }
 
 export function createState({ env = process.env, db }) {
   const pool = Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000);

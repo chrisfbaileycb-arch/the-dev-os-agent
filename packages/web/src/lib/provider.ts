@@ -8,9 +8,8 @@ export function validateEndpoint(value: string): string {
   return url.toString().replace(/\/+$/, '');
 }
 export function validateConnection(c: Connection): void {
-  if (c.mode === 'demo') return;
-  // A zero-config run is routed entirely by the server from its own allowlist, so the browser
-  // has no endpoint to validate and never supplies one.
+  // Managed requests are routed entirely by the server, so the browser never validates or sends
+  // a provider endpoint for them.
   if (c.inference !== 'free' && (!c.provider || c.provider === 'custom')) validateEndpoint(c.endpoint);
   if (!c.model.trim() || c.model.length > 200) throw new Error('Choose a model from your provider.');
   if (!Number.isInteger(c.maxTokens) || c.maxTokens < 64 || c.maxTokens > 4096) throw new Error('Output limit must be between 64 and 4096 tokens.');

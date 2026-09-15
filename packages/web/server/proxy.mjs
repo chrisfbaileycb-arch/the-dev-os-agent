@@ -3,7 +3,8 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, omnirouteBase, routeFreeRequest, xkiroBase } from './freetier.mjs';
+import { createBurstLimiter, creditsForTokens, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
+import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
 import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog } from './discovery.mjs';
 import { billingStatus } from './billing.mjs';
@@ -39,17 +40,10 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     // Hugging Face's Inference Providers router is likewise OpenAI-compatible for chat and
     // lists its live roster at /v1/models, so it too needs only a fixed home.
     huggingface: 'https://router.huggingface.co/v1',
+    'cheaper-inference': cheaperInferenceBase(env),
     xkiro: xkiroBase(env),
   };
-  // OmniRoute is software the operator runs at their own origin, so its base is configured,
-  // not pinned — the same trust level as XKIRO_BASE_URL, and with the same validation. Unlike
-  // xKiro there is no public default, so an unset OMNIROUTE_BASE_URL must fail here with a
-  // clear message rather than resolve to '' and later throw a puzzling fetch error.
-  if (provider === 'omniroute') {
-    const base = omnirouteBase(env);
-    if (!base) throw new HttpError(503, 'OmniRoute is not configured on this deployment. Set OMNIROUTE_BASE_URL to your install\'s address, including /v1.');
-    return { base };
-  }
+  if (provider === 'omniroute') throw new HttpError(404, 'The optional self-hosted route is disabled.');
   if (fixed[provider]) return { base: fixed[provider], nativeCohere: provider === 'cohere', nativeAnthropic: provider === 'anthropic' };
   if (provider !== 'custom') throw new HttpError(400, 'Unsupported provider.');
   let url; try { url = new URL(baseUrl); } catch { throw new HttpError(400, 'Invalid custom baseUrl.'); }
@@ -100,7 +94,7 @@ export function keyFor(body, env = process.env) {
   const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
   if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
-  return cleanKey(env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', aihubmix: 'AIHUBMIX_API_KEY', huggingface: 'HF_TOKEN', omniroute: 'OMNIROUTE_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]]);
+  return cleanKey(env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', aihubmix: 'AIHUBMIX_API_KEY', huggingface: 'HF_TOKEN', 'cheaper-inference': 'CHEAPER_INFERENCE_API_KEY', omniroute: 'OMNIROUTE_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]]);
 }
 /**
  * Who pays for this request, decided entirely on the server.
@@ -230,7 +224,7 @@ export function outputLimit(provider, model, max) {
  * token count into a failed run. Requested only where it is known to be supported.
  */
 export const usageReportable = (provider, target) =>
-  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'aihubmix', 'huggingface', 'omniroute', 'xkiro'].includes(provider);
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
 
 /**
  * An OpenAI-shaped chat request as Anthropic's /v1/messages wants it.
@@ -284,13 +278,17 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       // is a no-op on every request but the first of the hour.
       if (path === '/api/providers' && req.method === 'GET') {
         await discover(env, { log });
+        if (env.CHEAPER_INFERENCE_ENABLED === 'true') {
+          try { setCheaperInferenceCatalog(await discoverCheaperInference(env)); }
+          catch (error) { log(`[proxy] Cheaper Inference discovery unavailable: ${error?.message || 'discovery failed'}`); }
+        }
         json(res, 200, {
-          ollamaBridge: env.OLLAMA_BRIDGE_URL || null,
-          gateway: xkiroBase(env),
+          ollamaBridge: null,
+          gateway: null,
           // Everything the gateway serves, with the tier it reported for each. The free half funds
           // the free tier; the paid half is what a visitor picks from on their own key, which is
           // why the whole catalogue is published rather than only the part this deployment pays for.
-          gatewayCatalog: { url: xkiroBase(env), models: catalogModels(), ...catalogStatus() },
+          gatewayCatalog: { url: null, models: catalogModels(), ...catalogStatus() },
           free: freeTierStatus(env),
           billing: billingStatus(env),
         });
@@ -309,20 +307,31 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Expected an object.');
       // A keyless request can only be funded from the discovered pool, so the pool has to exist
       // before the funding decision is made. A request carrying its own key never waits for this.
-      if (!(typeof body.apiKey === 'string' && body.apiKey.trim())) await discover(env, { log });
-      const funding = fundingFor(body, env);
+      if (!(typeof body.apiKey === 'string' && body.apiKey.trim())) {
+        await discover(env, { log });
+        if (env.CHEAPER_INFERENCE_ENABLED === 'true') {
+          try { setCheaperInferenceCatalog(await discoverCheaperInference(env)); }
+          catch (error) { log(`[proxy] Cheaper Inference discovery unavailable: ${error?.message || 'discovery failed'}`); }
+        }
+      }
+      let funding;
+      if (body.provider === 'cheaper-inference' && body.apiKey === undefined && env.CHEAPER_INFERENCE_ENABLED === 'true') {
+        funding = fundingFor(body, env);
+      } else {
+        funding = fundingFor(body, env);
+      }
       // A zero-config request is funded per model, so the provider comes from the allowlist
       // entry rather than from the request body.
       const provider = funding.mode === 'free' ? funding.entry.provider : body.provider;
       const target = await resolveTarget(provider, body.baseUrl, env, resolve);
       const apiKey = funding.apiKey;
-      if (!apiKey && provider !== 'custom' && !(path === '/api/models' && provider === 'openrouter')) {
+      if (!apiKey && provider !== 'custom' && !(path === '/api/models' && (provider === 'openrouter' || provider === 'cheaper-inference'))) {
         // A model on the free allowlist that is simply not funded right now reads as a warming-up
         // tier, not as the visitor's mistake; anything else genuinely needs their own key.
         if (funding.malformedKey) logUpstream(provider, target.base, `${funding.malformedKey} is set but holds a character that cannot go in a header — check for a stray newline or space`, log);
         throw freeModel(body.model, env)
           ? new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable')
-          : new HttpError(401, 'That model needs a key. Pick a free model, or add your own OpenRouter or Groq key in Settings.', 'key_required');
+          : new HttpError(401, 'That model needs a key. Pick a free model, or add your own provider key in Settings.', 'key_required');
       }
       // Authenticated visitors use their account's canonical workspace_id rather than the
       // anonymous browser-minted header. The session cookie is self-contained and signed, so
@@ -345,7 +354,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
       if (path === '/api/chat') {
         if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || !validContent(m.content))) throw new HttpError(400, 'messages must contain standard role/content text pairs, optionally with up to five image parts.');
         if (target.nativeCohere && body.messages.some(m => Array.isArray(m.content))) throw new HttpError(400, 'Cohere native chat does not accept images here. Choose a vision model on OpenRouter or Groq.');
-        const requested = body.max_tokens ?? 1024;
+        const requested = body.max_tokens ?? 4096;
         if (!Number.isInteger(requested) || requested < 1 || requested > 4096) throw new HttpError(400, 'max_tokens must be 1–4096.');
         // Server-funded output is capped regardless of what the browser asked for.
         const max = funding.mode === 'free' ? Math.min(requested, freeOutputCap) : requested;
@@ -355,6 +364,11 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
           : JSON.stringify({ model: routed.model, ...(routed.models ? { models: routed.models } : {}), messages: body.messages, stream: true, ...outputLimit(provider, routed.model, max), ...(usageReportable(provider, target) ? { stream_options: { include_usage: true } } : {}) });
         suffix = target.nativeCohere ? '/chat' : target.nativeAnthropic ? '/messages' : '/chat/completions';
       } else suffix = '/models';
+      if (path === '/api/models' && provider === 'cheaper-inference') {
+        const models = await discoverCheaperInference(env);
+        json(res, 200, { data: models.map(model => ({ id: model.id })) });
+        return true;
+      }
       const upstreamUrl = path === '/api/models' && target.nativeCohere ? 'https://api.cohere.com/v1/models' : target.base + suffix;
       if (target.nativeAnthropic && path === '/api/models') headers.Accept = 'application/json';
       let response;

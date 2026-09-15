@@ -45,12 +45,8 @@ export async function executeRun(message: StartMessage, signal: AbortSignal, emi
   agents.forEach(a => a.start());
   const partial = new Map<string, string>(); const streamedAt = new Map<string, number>();
   const tasks = makeTasks(workflow); const cache = new PromptCache();
-  const run: Run = { id: message.runId, goal, workflow, mode: connection.mode, model: connection.mode === 'demo' ? 'Scripted preview · no model' : connection.model, status: 'running', startedAt: new Date().toISOString(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: context.map(d => d.title), sessionId: message.sessionId, persona: message.persona };
+  const run: Run = { id: message.runId, goal, workflow, mode: connection.mode, model: connection.model, status: 'running', startedAt: new Date().toISOString(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: context.map(d => d.title), sessionId: message.sessionId, persona: message.persona };
   const snapshot = () => { run.steps = tasks.map(t => { const model = modelForStage(stageModels, t.type, connection.model); return { id: t.id, title: t.title, agent: agents.find(a => a.id === t.assignedAgentId)?.name ?? roles.find(r => r.capabilities.includes(t.type))?.name ?? 'Agent', status: t.status, output: typeof t.output === 'string' ? t.output : partial.get(t.id), error: t.error, attempts: t.retryCount, ...(model !== connection.model ? { model } : {}) }; }); emit(structuredClone(run)); };
-  const demo = async (task: Task): Promise<Completion> => {
-    await wait(450, signal);
-    return { tokens: 0, text: `SCRIPTED PREVIEW — not an AI response\n\n${task.title}\n\nGoal: ${goal.slice(0, 700)}\n\n${task.type === 'planning' ? 'The Dispatcher frames the goal and hands a plan to two specialists working side by side.' : task.type === 'research' ? 'This stage examines matching workspace notes. No web search is performed.' : task.type === 'design' ? 'This stage develops an alternative solution alongside the researcher.' : task.type === 'review' ? 'This stage reviews both specialist outputs before synthesis.' : 'The Scribe would write the deliverable here. Pick a model in Settings and add a key or platform credits to get a real one.'}\n\nRetrieved notes: ${context.length ? context.map(d => d.title).join(', ') : 'none'}.\nUpstream stages: ${task.dependencies.length}.` };
-  };
   async function runTask(task: Task): Promise<void> {
     while (true) {
       signal.throwIfAborted(); const agent = selectAgent(agents, task); if (!agent) throw new Error('No agent available for task.');
@@ -66,7 +62,7 @@ export async function executeRun(message: StartMessage, signal: AbortSignal, emi
         const cacheKey = JSON.stringify([stageConnection.endpoint, stageConnection.model, stageConnection.maxTokens, system, prompt]);
         const cached = cache.get(cacheKey); let result: Completion;
         if (cached !== undefined) { run.cacheHits++; result = { text: cached, tokens: 0 }; }
-        else { if (stageConnection.mode === 'remote') run.calls++; result = stageConnection.mode === 'demo' ? await demo(task) : await call(stageConnection, system, prompt, signal, text => { partial.set(task.id, text); const now = Date.now(); if (now - (streamedAt.get(task.id) || 0) > 75) { streamedAt.set(task.id, now); snapshot(); } }); cache.set(cacheKey, result.text); }
+        else { run.calls++; result = await call(stageConnection, system, prompt, signal, text => { partial.set(task.id, text); const now = Date.now(); if (now - (streamedAt.get(task.id) || 0) > 75) { streamedAt.set(task.id, now); snapshot(); } }); cache.set(cacheKey, result.text); }
         signal.throwIfAborted(); run.tokens += result.tokens; task.complete(result.text); agent.completeTask(task.id); snapshot(); return;
       } catch (e) {
         if (signal.aborted) { task.cancel(); agent.terminate(); snapshot(); return; }
