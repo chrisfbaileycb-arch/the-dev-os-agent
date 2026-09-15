@@ -21,7 +21,7 @@
 //   Durable.  A gateway that is briefly unreachable must not empty the free tier. The last good
 //             catalogue keeps serving, and only the retry clock shortens.
 
-import { setXkiroCatalog, xkiroBase } from './freetier.mjs';
+import { setOpenRouterCatalog, setXkiroCatalog, xkiroBase } from './freetier.mjs';
 
 /**
  * How this deployment identifies itself upstream. Node's HTTP client sends no User-Agent at all,
@@ -120,11 +120,32 @@ export async function fetchCatalog(env = process.env, { fetchImpl = fetch, timeo
 let cache = { models: [], at: 0, nextAt: 0, ok: false, error: null };
 let inflight = null;
 
+/**
+ * OpenRouter's own catalogue, asked the same way the gateway's is.
+ *
+ * The OpenRouter free pool used to be three ids written into freetier.mjs by hand. That is the
+ * same mistake the gateway list was: OpenRouter adds and retires `:free` ids continuously, so a
+ * hand-kept list is wrong within weeks — and it was also the *reason* the pool looked so small.
+ * The user-visible complaint was "if I'm an OpenRouter key I should have access to all OpenRouter
+ * models in that chat window", and the answer is that OpenRouter publishes the whole price list at
+ * GET /models, so there is nothing to guess: every entry whose prompt and completion pricing are
+ * both zero is a model this deployment can fund at no cost.
+ *
+ * This is a separate cache from the gateway's because the two have nothing to do with each other —
+ * different host, different key, different failure mode. A gateway outage must not empty the
+ * OpenRouter pool and vice versa.
+ */
+let orCache = { models: [], at: 0, nextAt: 0, ok: false, error: null };
+let orInflight = null;
+
 /** Drop everything discovered. Tests only — production has no reason to forget a good catalogue. */
 export function resetCatalog() {
   cache = { models: [], at: 0, nextAt: 0, ok: false, error: null };
   inflight = null;
   setXkiroCatalog([]);
+  orCache = { models: [], at: 0, nextAt: 0, ok: false, error: null };
+  orInflight = null;
+  setOpenRouterCatalog([]);
 }
 
 /** The discovered catalogue as it stands, without triggering a fetch. */
@@ -175,4 +196,79 @@ export async function ensureCatalog(env = process.env, options = {}) {
     return cache;
   })();
   return inflight;
+}
+
+/** The public OpenRouter catalogue endpoint. No key needed to read prices. */
+export const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
+
+/**
+ * The zero-cost ids in an OpenRouter catalogue, by OpenRouter's own published pricing.
+ *
+ * Two shapes have to be accepted because the endpoint has carried both: a `pricing` block of
+ * per-token strings, and the older per-1K numbers. Anything that is not unambiguously zero is
+ * excluded — an id whose price cannot be read is not free, it is unknown, and funding an unknown
+ * price is how an operator gets a bill. `:free` in the id is accepted only as a *corroborating*
+ * signal alongside a missing pricing block, never on its own, because the suffix is a naming
+ * convention rather than a contract.
+ */
+export function freeOpenRouterIds(payload) {
+  const entries = Array.isArray(payload?.data) ? payload.data : [];
+  const isZero = value => value === 0 || value === '0' || value === '0.0' || value === '0.000000' || (value !== '' && value !== null && value !== undefined && Number(value) === 0);
+  const ids = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || typeof entry.id !== 'string') continue;
+    const id = entry.id.trim();
+    if (!id || id.length > 200) continue;
+    const pricing = entry.pricing;
+    const hasBoth = pricing && typeof pricing === 'object' && ('prompt' in pricing || 'input' in pricing) && ('completion' in pricing || 'output' in pricing);
+    const priced = hasBoth && isZero(pricing.prompt ?? pricing.input) && isZero(pricing.completion ?? pricing.output);
+    // A `:free` id with no readable pricing is still taken, because OpenRouter's own suffix is the
+    // provider stating the price in the name; a priced id must have said zero in the pricing block.
+    const suffixed = !hasBoth && /:free$/i.test(id);
+    if (priced || suffixed) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Read OpenRouter's catalogue and publish its zero-cost ids to the free tier.
+ *
+ * Same discipline as the gateway path — single-flight, TTL, keep the last good answer on failure —
+ * with one difference: this needs a key to be *funded* but not to be *read*, and the key is sent
+ * when present because an account's catalogue can be wider than the anonymous one. A deployment
+ * holding only OPENROUTER_OWNER_KEY still discovers, because that credential can fund the pool.
+ */
+export async function ensureOpenRouterCatalog(env = process.env, options = {}) {
+  const now = options.now ?? Date.now();
+  const ttl = Number(options.ttlMs ?? CATALOG_TTL_MS);
+  const retry = Number(options.retryMs ?? CATALOG_RETRY_MS);
+  if (orCache.nextAt && now < orCache.nextAt) return orCache;
+  if (orInflight) return orInflight;
+  orInflight = (async () => {
+    const fetchImpl = options.fetchImpl ?? fetch;
+    try {
+      const key = [env.OPENROUTER_API_KEY, env.OPENROUTER_OWNER_KEY, env.SETTINGS_OWNER_API_KEY].map(k => typeof k === 'string' ? k.trim() : '').find(k => k && /^[\x20-\x7e]*$/.test(k)) ?? '';
+      const headers = { Accept: 'application/json', 'User-Agent': USER_AGENT, ...(key ? { Authorization: `Bearer ${key}` } : {}) };
+      const response = await fetchImpl(OPENROUTER_MODELS_URL, { headers, signal: AbortSignal.timeout(Number(options.timeoutMs ?? 10_000)) });
+      if (!response.ok) throw new Error(`${OPENROUTER_MODELS_URL} answered HTTP ${response.status}`);
+      const payload = await response.json();
+      const ids = freeOpenRouterIds(payload);
+      orCache = { models: ids, at: now, nextAt: now + ttl, ok: true, error: null };
+      setOpenRouterCatalog(ids);
+    } catch (error) {
+      const detail = error?.message || 'discovery failed';
+      orCache = { ...orCache, nextAt: now + retry, error: detail };
+      (options.log ?? console.error)(`[discovery] OpenRouter catalogue unavailable: ${detail}`);
+    } finally {
+      orInflight = null;
+    }
+    return orCache;
+  })();
+  return orInflight;
+}
+
+/** The OpenRouter free ids as discovered, for /api/providers and the operator's diagnostics. */
+export const openRouterFreeIds = () => [...orCache.models];
+export function openRouterCatalogStatus() {
+  return { discovered: orCache.ok, count: orCache.models.length, at: orCache.at ? new Date(orCache.at).toISOString() : null, error: orCache.error };
 }

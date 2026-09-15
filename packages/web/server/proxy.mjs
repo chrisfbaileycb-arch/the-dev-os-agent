@@ -3,11 +3,11 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKey, freeModel, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
+import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { modelsUrl, normalizeModelList } from './models.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
-import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog } from './discovery.mjs';
+import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog, ensureOpenRouterCatalog, openRouterCatalogStatus } from './discovery.mjs';
 import { billingStatus } from './billing.mjs';
 import { createMeter } from './meter.mjs';
 
@@ -116,13 +116,14 @@ export function fundingFor(body, env = process.env) {
   const entry = freeModel(body.model, env);
   // The entry's own provider key, or the operator's owner key where that key can serve this pool
   // (see freeKey in freetier.mjs). Either way the credential is resolved here, on the server, and
-  // never travels to the browser.
-  const funded = freeKey(entry, env);
+  // never travels to the browser. When the provider's cell holds several keys the rotation picks
+  // the next one, so free-tier traffic spreads across the operator's accounts.
+  const funded = rotateFreeKey(entry, env);
   const configured = entry && env[entry.envKey];
   // A key that is set but unusable is not the same as one that is unset, and that difference is
   // the entire diagnosis. Reported here so the handler can name the variable in the log.
   if (!funded.key) return { mode: 'none', apiKey: '', ...(malformed(configured) ? { malformedKey: entry.envKey } : {}) };
-  return { mode: 'free', apiKey: funded.key, entry };
+  return { mode: 'free', apiKey: funded.key, entry, keySource: funded.source };
 }
 
 // Text content, or OpenAI-style parts: text plus up to five bounded data-URL or https images.
@@ -260,7 +261,7 @@ const windows = new Map();
  * `discover` is injectable so tests stay hermetic: the real one reaches the gateway over the
  * network, and a unit test asserting how a Groq request is funded has no business doing that.
  */
-export function createProxy({ env: baseEnv = process.env, settings = null, transport = upstream, resolve = lookup, db = null, log = console.error, discover = ensureCatalog } = {}) {
+export function createProxy({ env: baseEnv = process.env, settings = null, transport = upstream, resolve = lookup, db = null, log = console.error, discover = ensureCatalog, discoverOpenRouter = ensureOpenRouterCatalog } = {}) {
   // The environment as this request should read it: the admin dashboard's stored keys and knobs
   // laid over the process environment (see server/settings.mjs). Resolved per request, so a key
   // entered in the dashboard funds the very next message with no restart.
@@ -287,6 +288,10 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // is a no-op on every request but the first of the hour.
       if (path === '/api/providers' && req.method === 'GET') {
         await discover(env, { log });
+        // The OpenRouter pool is discovered on the same trip. Both are cached for the hour, so this
+        // costs one request on a cold boot and nothing thereafter, and the dropdown a visitor sees
+        // on first load already contains every free model rather than growing under them.
+        await discoverOpenRouter(env, { log });
         if (env.CHEAPER_INFERENCE_ENABLED === 'true') {
           try { setCheaperInferenceCatalog(await discoverCheaperInference(env)); }
           catch (error) { log(`[proxy] Cheaper Inference discovery unavailable: ${error?.message || 'discovery failed'}`); }
@@ -298,6 +303,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
           // the free tier; the paid half is what a visitor picks from on their own key, which is
           // why the whole catalogue is published rather than only the part this deployment pays for.
           gatewayCatalog: { url: null, models: catalogModels(), ...catalogStatus() },
+          // What OpenRouter itself said was zero-cost, so an operator can see the free pool is
+          // being read from the provider and not from a list in this repository.
+          openRouterCatalog: openRouterCatalogStatus(),
           free: freeTierStatus(env),
           // The plan tier the operator drew up in the dashboard: models a subscriber runs on the
           // deployment's keys with the access token. Published so the dropdown can show them.
@@ -321,6 +329,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // before the funding decision is made. A request carrying its own key never waits for this.
       if (!(typeof body.apiKey === 'string' && body.apiKey.trim())) {
         await discover(env, { log });
+        await discoverOpenRouter(env, { log });
         if (env.CHEAPER_INFERENCE_ENABLED === 'true') {
           try { setCheaperInferenceCatalog(await discoverCheaperInference(env)); }
           catch (error) { log(`[proxy] Cheaper Inference discovery unavailable: ${error?.message || 'discovery failed'}`); }
@@ -391,22 +400,44 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       }
       const upstreamUrl = path === '/api/models' ? modelsUrl(provider, target.base) : target.base + suffix;
       if (target.nativeAnthropic && path === '/api/models') headers.Accept = 'application/json';
+      const setKey = key => { if (target.nativeAnthropic) headers['x-api-key'] = key; else headers.Authorization = `Bearer ${key}`; };
+      // How many keys this request may try. A free-tier chat request funded from a stacked field
+      // gets one attempt per key, so a rate-limited account rolls over to the next instead of
+      // failing the visitor; everything else, and every single-key deployment, gets exactly one
+      // attempt and behaves as it did before.
+      const pool = funding.mode === 'free' && path === '/api/chat' ? freeKeyPool(funding.entry, env) : [];
+      const maxAttempts = Math.max(1, pool.length);
       let response;
-      try {
-        response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
-      } catch (error) {
-        // Nothing answered: DNS, TCP or TLS failed, so there is no status code to report and
-        // nothing the visitor can do. This used to fall through to the generic 502 "Could not
-        // connect to provider", which is both unhelpful to them and, on a free-tier request,
-        // wrong — the deployment's own configuration is what failed, and that reads as a tier
-        // that is not ready. Either way the operator needs the cause, so it is logged here:
-        // this is the only place that knows which host was unreachable and why.
-        if (controller.signal.aborted) throw new HttpError(504, 'Provider request timed out.');
-        logUpstream(provider, upstreamUrl, `unreachable: ${error?.code || error?.message || 'connection failed'}`, log);
-        if (funding.mode === 'free') throw new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable');
-        throw new HttpError(502, `Could not reach ${hostOf(upstreamUrl)}. Check the provider endpoint and that this host can reach it.`);
+      let status = 502;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
+        } catch (error) {
+          // Nothing answered: DNS, TCP or TLS failed, so there is no status code to report and
+          // nothing the visitor can do. This used to fall through to the generic 502 "Could not
+          // connect to provider", which is both unhelpful to them and, on a free-tier request,
+          // wrong — the deployment's own configuration is what failed, and that reads as a tier
+          // that is not ready. Either way the operator needs the cause, so it is logged here:
+          // this is the only place that knows which host was unreachable and why. Another key
+          // would not change an unreachable host, so this is not retried.
+          if (controller.signal.aborted) throw new HttpError(504, 'Provider request timed out.');
+          logUpstream(provider, upstreamUrl, `unreachable: ${error?.code || error?.message || 'connection failed'}`, log);
+          if (funding.mode === 'free') throw new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable');
+          throw new HttpError(502, `Could not reach ${hostOf(upstreamUrl)}. Check the provider endpoint and that this host can reach it.`);
+        }
+        status = response.statusCode || 502;
+        if (status >= 200 && status < 300) break;
+        // A rate limit is per credential, which is exactly what a stacked field exists to spread
+        // across. Anything else — a rejected key, a missing model, a 5xx — is the same answer for
+        // every key in the pool, so it is reported rather than retried.
+        if (status === 429 && attempt + 1 < maxAttempts) {
+          logUpstream(provider, upstreamUrl, `HTTP 429 — ${funding.keySource} rate-limited, trying the next key in ${funding.entry.envKey}_POOL`, log);
+          await peek(response);
+          setKey(rotateFreeKey(funding.entry, env).key);
+          continue;
+        }
+        break;
       }
-      const status = response.statusCode || 502;
       if (status < 200 || status >= 300) {
         // Read what it said before discarding it. A bare status is not a diagnosis: 403 from an
         // API gateway may be a rejected key, a plan that does not cover the model, or a bot

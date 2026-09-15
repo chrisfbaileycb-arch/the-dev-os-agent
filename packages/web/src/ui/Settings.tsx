@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Check, Coins, CreditCard, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { Check, Coins, CreditCard, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
@@ -8,6 +8,8 @@ import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
 import { cheaperInferenceDashboard } from '../lib/cheaperInference';
+import ThemePicker from './ThemePicker';
+import type { ThemeChoice } from '../lib/theme';
 
 export interface SettingsProps {
   connection: Connection; setConnection: (c: Connection) => void;
@@ -18,6 +20,8 @@ export interface SettingsProps {
   /** Whether this deployment has an admin dashboard switched on, so the link to it can say so. */
   adminConfigured: boolean; openAdmin: () => void;
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
+  /** The visitor's colour palette, and the one place it changes (see lib/theme.ts). */
+  theme: ThemeChoice; setTheme: (choice: ThemeChoice) => void;
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
@@ -153,6 +157,12 @@ export default function Settings(p: SettingsProps) {
         </section>
 
         <section className="panel">
+          <h2><Palette size={15} strokeWidth={1.75} /> Appearance</h2>
+          <p className="help">Pick the surface you want to work on. The choice is remembered in this browser and applies immediately — no reload, and no dependency on what the operating system is doing.</p>
+          <ThemePicker value={p.theme} onChange={p.setTheme} />
+        </section>
+
+        <section className="panel">
           <h2><ShieldCheck size={15} strokeWidth={1.75} /> Privacy and execution</h2>
           <p className="help"><strong>In your browser:</strong> the Orator interface, agent identity, workspace notes, and workflow coordination.<br /><strong>On this server:</strong> policy enforcement, protected streaming transport, provider health, usage accounting, and workspace synchronization.<br /><strong>With an approved inference service:</strong> only the minimum authorized project context needed for the current task.</p>
         </section>
@@ -165,7 +175,7 @@ export default function Settings(p: SettingsProps) {
 
         <section className="panel">
           <h2><Wrench size={15} strokeWidth={1.75} /> Running this deployment?</h2>
-          <p className="help">The admin dashboard is where the operator enters provider keys on the server, decides which models are free and which are on the paid plan, and sets the free-tier limits — no redeploy needed. {p.adminConfigured ? 'It is switched on for this deployment.' : 'It opens once ADMIN_TOKEN is set in the hosting environment.'}</p>
+          <p className="help">The admin dashboard is where the operator enters provider keys on the server, decides which models are free and which are on the paid plan, and sets the free-tier limits — no redeploy needed. {p.adminConfigured ? 'You are signed in to it on this browser.' : 'It is open: the first visit asks you to choose a password, so no hosting environment edit is needed.'}</p>
           <button className="button small" onClick={p.openAdmin}><ShieldCheck size={13} />Open the admin dashboard</button>
         </section>
 

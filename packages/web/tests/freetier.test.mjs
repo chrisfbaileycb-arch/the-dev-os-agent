@@ -5,7 +5,8 @@ import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { FREE_TIER_UNAVAILABLE, createProxy } from '../server/proxy.mjs';
 import { openDatabase } from '../server/db.mjs';
-import { FREE_MODELS, OMNIROUTE_DEFAULT_BASE, XKIRO_DEFAULT_BASE, createBurstLimiter, creditsForTokens, freeKey, freeModel, freeModels, freeTierStatus, fundedModels, isFrontier, omnirouteBase, omniRoutePool, ownerKey, ownerKeyName, routeFreeRequest, setXkiroCatalog, xkiroBase, xkiroCatalog, xkiroPool } from '../server/freetier.mjs';
+import { FREE_MODELS, OMNIROUTE_DEFAULT_BASE, XKIRO_DEFAULT_BASE, createBurstLimiter, creditsForTokens, freeKey, freeKeyPool, freeModel, freeModels, freeTierStatus, fundedModels, isFrontier, omnirouteBase, omniRoutePool, ownerKey, ownerKeyName, resetKeyRotation, rotateFreeKey, routeFreeRequest, setXkiroCatalog, xkiroBase, xkiroCatalog, xkiroPool } from '../server/freetier.mjs';
+import { openSettings } from '../server/settings.mjs';
 import { createMeter, deltaLength, usageFrom } from '../server/meter.mjs';
 
 const workspace = '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f';
@@ -25,7 +26,7 @@ async function withProxy(options, fn) {
   // Discovery is stubbed out by default: these tests assert how requests are funded and routed,
   // and reaching a live gateway to do it would make them slow, flaky, and dependent on somebody
   // else's uptime. tests/discovery.test.mjs is where the real catalogue is exercised.
-  const handler = createProxy({ discover: async () => {}, ...options });
+  const handler = createProxy({ discover: async () => {}, discoverOpenRouter: async () => {}, ...options });
   const server = createServer((req, res) => { handler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); }
@@ -471,4 +472,60 @@ test('XKIRO_BASE_URL steers the gateway, and a bad value falls back rather than 
     });
   } finally { restore(); }
   assert.equal(captured.url, 'https://eu.xkiro.example/v1/chat/completions');
+});
+test('a stacked key field rotates the free tier and survives one account being rate-limited', async () => {
+  const env = { GROQ_API_KEY_POOL: ['groq-key-1', 'groq-key-2', 'groq-key-3'], GROQ_API_KEY: 'groq-key-1' };
+  const entry = freeModel('groq/llama-3.3-70b-versatile', env);
+  resetKeyRotation();
+  // Round-robin, not failover: consecutive requests land on consecutive keys.
+  assert.deepEqual([0, 1, 2, 3].map(() => rotateFreeKey(entry, env).key), ['groq-key-1', 'groq-key-2', 'groq-key-3', 'groq-key-1']);
+  // The cursor is shared, so after those four calls the next one is the second key again.
+  assert.equal(rotateFreeKey(entry, env).source, 'GROQ_API_KEY[2/3]');
+
+  resetKeyRotation();
+  const seen = [];
+  let call = 0;
+  await withProxy({
+    env,
+    transport: async (_url, options) => {
+      seen.push(options.headers.Authorization);
+      // The first key is out of quota; the second is not. The visitor must still get an answer.
+      return ++call === 1 ? stream(JSON.stringify({ error: { message: 'Rate limit exceeded: free-tier requests per day' } }), 429, 'application/json') : stream('dn\n');
+    },
+  }, async url => {
+    assert.equal((await chat(url, base)).status, 200, 'a rate-limited first key rolls over to the next');
+  });
+  assert.deepEqual(seen, ['Bearer groq-key-1', 'Bearer groq-key-2']);
+
+  resetKeyRotation();
+  // Non-rate-limit failures are the same answer for every key, so they are not retried.
+  const attempts = [];
+  await withProxy({ env, transport: async (_url, options) => { attempts.push(options.headers.Authorization); return stream(JSON.stringify({ error: { message: 'Invalid API key' } }), 401, 'application/json'); } }, async url => {
+    assert.equal((await chat(url, base)).status, 503, 'a free-tier 401 still reads as a warming-up tier');
+  });
+  assert.equal(attempts.length, 1);
+
+  resetKeyRotation();
+  // One key, or none declared, behaves exactly as it did before rotation existed.
+  assert.deepEqual(freeKeyPool(entry, { GROQ_API_KEY: 'only' }), ['only']);
+  assert.equal(rotateFreeKey(entry, { GROQ_API_KEY: 'only' }).key, 'only');
+});
+
+test('the dashboard publishes a stacked key field as the pool the router reads', async () => {
+  const db = openDatabase(':memory:');
+  const settings = await openSettings({ db, env: {} });
+  await settings.setKey('groq', 'k-one\nk-two\nk-three');
+  // Downstream reads one key from the plain name; the pool rides alongside under `_POOL`.
+  assert.equal(settings.env().GROQ_API_KEY, 'k-one');
+  assert.deepEqual(settings.env().GROQ_API_KEY_POOL, ['k-one', 'k-two', 'k-three']);
+  const row = settings.keyStatus().find(r => r.provider === 'groq');
+  assert.equal(row.env, 'GROQ_API_KEY');
+  assert.equal(row.source, 'dashboard');
+  assert.equal(row.hint, '3 keys', 'the count is shown, the keys themselves are not');
+  assert.equal(row.count, 3);
+  // A single key still reads as its own hint, so nothing changes for a one-key deployment.
+  await settings.setKey('groq', 'only-one-key');
+  assert.deepEqual(settings.env().GROQ_API_KEY_POOL, undefined);
+  assert.equal(settings.env().GROQ_API_KEY, 'only-one-key');
+  assert.equal(settings.keyStatus().find(r => r.provider === 'groq').hint, '…-key');
 });

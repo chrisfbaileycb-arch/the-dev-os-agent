@@ -87,6 +87,24 @@ export function setXkiroCatalog(ids) {
 export const xkiroCatalog = () => [...discoveredXkiro];
 
 /**
+ * The OpenRouter ids discovered as zero-cost, published by server/discovery.mjs.
+ *
+ * Module state for the same reason `discoveredXkiro` is: the funding decision in the proxy is
+ * synchronous. Before this existed the OpenRouter pool was three ids written by hand, which made
+ * "I have an OpenRouter key, where are all the free models?" a fair question with no good answer
+ * — the answer is the several dozen `:free` ids OpenRouter actually serves, and they are readable
+ * from its own catalogue.
+ */
+let discoveredOpenRouter = [];
+export function setOpenRouterCatalog(ids) {
+  const clean = (Array.isArray(ids) ? ids : [])
+    .filter(id => typeof id === 'string' && id.trim() && id.length <= 200)
+    .map(id => id.trim());
+  discoveredOpenRouter = [...new Set(clean)];
+}
+export const openRouterCatalog = () => [...discoveredOpenRouter];
+
+/**
  * The xKiro ids this deployment offers free.
  *
  * XKIRO_FREE_MODELS used to replace the pool wholesale, which meant a typo in a dashboard field
@@ -178,6 +196,41 @@ export function freeKey(entry, env = process.env) {
 }
 
 /**
+ * Pool rotation for the free tier.
+ *
+ * A key cell may hold several keys (see keyPool in settings.mjs), and the point of holding several
+ * is that a run must survive one of them being rate-limited: the free tier's whole promise is that
+ * a stranger can send a message and get an answer. This walks the pool for the provider that funds
+ * the entry, starting wherever the last attempt left off, so consecutive requests spread across the
+ * accounts instead of all landing on the first one — a round-robin, not a failover, because a
+ * per-account rate limit is the thing being worked around rather than an outage.
+ *
+ * The pool is read from `env[envKey + '_POOL']`, which the settings overlay builds from the
+ * dashboard's multi-line field; the environment may also supply one directly. When there is no
+ * pool this returns the single key from freeKey, so a deployment with one key behaves exactly as
+ * before and nothing downstream needs to know whether rotation is in play.
+ */
+const poolCursor = new Map();
+export function freeKeyPool(entry, env = process.env) {
+  const single = freeKey(entry, env);
+  if (!entry) return [];
+  const declared = env[`${entry.envKey}_POOL`];
+  const pool = Array.isArray(declared) && declared.length ? declared.map(cleanCredential).filter(Boolean) : [];
+  if (!pool.length) return single.key ? [single.key] : [];
+  return pool;
+}
+/** The key to try on this attempt: the next one in the rotation, or the pool head if unseeded. */
+export function rotateFreeKey(entry, env = process.env) {
+  const pool = freeKeyPool(entry, env);
+  if (pool.length <= 1) return { key: pool[0] ?? '', source: freeKey(entry, env).source, pool: pool.length };
+  const at = (poolCursor.get(entry.envKey) ?? 0) % pool.length;
+  poolCursor.set(entry.envKey, at + 1);
+  return { key: pool[at], source: `${entry.envKey}[${at + 1}/${pool.length}]`, pool: pool.length };
+}
+/** Test seam: forget where the rotation had reached. */
+export function resetKeyRotation() { poolCursor.clear(); }
+
+/**
  * The environment variable that holds each provider's key on this deployment. One map, used by
  * the free tier (which key funds an entry), the paid tier (which key funds a plan model), the
  * credits branch of the proxy, and the admin dashboard (which key is being entered). The
@@ -211,7 +264,7 @@ export const PROVIDER_KEY_VARS = {
  * `discoveredXkiro` is: the funding decision is synchronous. server/settings.mjs writes here.
  */
 let adminTiers = { mode: 'auto', free: [], paid: [] };
-const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider)
+const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider) && m.provider !== 'custom'
   ? { id: m.id.trim(), provider: m.provider, envKey: PROVIDER_KEY_VARS[m.provider], ...(typeof m.label === 'string' && m.label.trim() ? { label: m.label.trim().slice(0, 80) } : {}) }
   : null;
 export function setAdminTiers(tiers) {
@@ -291,7 +344,13 @@ export function freeModels(env = process.env, discovered = discoveredXkiro, tier
   // the whole pool.
   const chosen = tiers.free.map(m => ({ ...m }));
   if (tiers.mode === 'manual') return chosen;
-  const guarded = env.FREE_TIER_ALLOW_FRONTIER === 'true' ? STATIC_FREE : STATIC_FREE.filter(m => !isFrontier(m.id));
+  const liveOpenRouter = openRouterPool(env, discoveredOpenRouter);
+  // `openrouter/auto` is the cycling entry: OpenRouter is asked to try the first id and fall back
+  // through the rest of the list, so a momentarily rate-limited free model degrades to another
+  // free model rather than to a paid one. Its pool is the *live* one, so the fan-out covers every
+  // free id discovery found instead of the three this file was born with.
+  const guarded = (env.FREE_TIER_ALLOW_FRONTIER === 'true' ? STATIC_FREE : STATIC_FREE.filter(m => !isFrontier(m.id)))
+    .map(m => m.pool ? { ...m, pool: liveOpenRouter } : m);
   // HF serverless joins only when the deployment holds a token: without one these ids would
   // advertise as free and answer 503, which is the exact "warming up" lie the status message
   // exists to avoid.
@@ -299,8 +358,13 @@ export function freeModels(env = process.env, discovered = discoveredXkiro, tier
   const automatic = [
     ...guarded,
     ...hf,
+    // Every zero-cost id OpenRouter itself reports, plus the three-id static pool as a floor for a
+    // deployment whose discovery has not answered yet. The static entries are deduplicated against
+    // the discovered list below, so a live catalogue supersedes them rather than fighting them.
+    ...liveOpenRouter.map(id => ({ id, provider: 'openrouter', envKey: 'OPENROUTER_API_KEY' })),
     ...xkiroPool(env, discovered).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
     ...cheaperInferencePool(env).map(id => ({ id, provider: 'cheaper-inference', envKey: 'CHEAPER_INFERENCE_API_KEY' })),
+    ...omniRoutePool(env).map(id => ({ id, provider: 'omniroute', envKey: 'OMNIROUTE_API_KEY' })),
   ];
   // A model the operator also moved to the paid tier leaves the free pool, whatever the gateway
   // says about it: "paid here" is the operator's decision to make.
@@ -313,6 +377,32 @@ export function freeModels(env = process.env, discovered = discoveredXkiro, tier
     seen.add(key); out.push(entry);
   }
   return out;
+}
+
+/**
+ * The OpenRouter free pool: the three-id floor plus everything discovery found, operator-narrowed.
+ *
+ * `OPENROUTER_FREE_MODELS` behaves exactly like XKIRO_FREE_MODELS and for the same reason — it
+ * narrows, never widens. An id the live catalogue did not report as zero-cost is refused, so an
+ * operator typo shrinks the tier instead of putting a paid model on their card. Blank funds the
+ * whole discovered pool, which is the point: a visitor holding an OpenRouter account should see
+ * every free model that account reaches, not the three this file happened to name.
+ *
+ * Discovery takes precedence over the static floor, but the floor stays: on a fresh boot, before
+ * the first catalogue answer has landed, the three community ids are still fundable, so a
+ * keyless first message does not fail while a background request is in flight.
+ */
+export function openRouterPool(env = process.env, discovered = discoveredOpenRouter) {
+  const configured = (env.OPENROUTER_FREE_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
+  // The static floor leads and discovery follows. The order is the fallback order OpenRouter walks
+  // for `openrouter/auto`, so a stable, known-cheap head (a 3B model that answers) is worth more
+  // than whatever ordering the catalogue happened to return; the discovered ids widen the list at
+  // the tail rather than shuffling the front. Deduplication below means a discovered copy of a
+  // floor id does not appear twice.
+  const live = [...new Set([...OPENROUTER_FREE_POOL, ...discovered])];
+  if (!configured.length) return live;
+  const allowed = new Set(live.map(id => id.toLowerCase()));
+  return configured.filter(id => allowed.has(id.toLowerCase()));
 }
 
 /**

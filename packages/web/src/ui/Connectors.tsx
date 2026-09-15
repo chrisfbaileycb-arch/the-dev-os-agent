@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Database, FileText, Github, Globe, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { Database, FileText, Globe, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { GithubMark } from './GithubMark';
 import { refreshTools, type McpConnection } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
 import { useDismiss } from './useDismiss';
@@ -24,8 +25,8 @@ export interface ConnectorsProps {
   notify: (message: string) => void;
 }
 
-const TABS: { id: ConnectorTab; label: string; icon: typeof Github; blurb: string }[] = [
-  { id: 'github', label: 'GitHub', icon: Github, blurb: 'Repo reader and issue auditor' },
+const TABS: { id: ConnectorTab; label: string; icon: typeof GithubMark; blurb: string }[] = [
+  { id: 'github', label: 'GitHub', icon: GithubMark, blurb: 'Repo reader and issue auditor' },
   { id: 'web', label: 'Web', icon: Globe, blurb: 'URL crawler, no CORS limits' },
   { id: 'files', label: 'Documents', icon: FileText, blurb: 'Drag-and-drop knowledge index' },
   { id: 'mcp', label: 'Custom MCP', icon: Plug, blurb: 'External agent servers' },
