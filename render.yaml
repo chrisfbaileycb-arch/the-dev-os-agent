@@ -62,6 +62,14 @@ services:
       - key: DATA_FILE
         value: /tmp/heybuddy.sqlite
 
+      # --- Admin dashboard ---------------------------------------------------------------
+      # One token opens /admin, where provider keys, the free and paid model tiers, and the
+      # free-tier limits are managed live without a redeploy. Generate one (openssl rand -hex 24)
+      # and enter it in the dashboard; `sync: false` keeps it out of this file. Keys entered in
+      # /admin are stored sealed in the Postgres database above, so they survive restarts.
+      - key: ADMIN_TOKEN
+        sync: false
+
       # --- Zero-config free tier -------------------------------------------------------
       # Set one or both and visitors get a live streaming reply with no API key and no account:
       # the server funds an allowlisted set of free models from its own keys. Leave them unset

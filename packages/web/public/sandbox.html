@@ -15,16 +15,36 @@
 // blocked every generated app's inline bundle — sandboxed or not, the inherited policy still
 // applied. A real navigation does not inherit anything: this file is fetched as its own HTTP
 // response, and the server gives *this one path* its own, separately-scoped CSP that allows what
-// a generated app legitimately needs to run (see server/index.mjs). Everything else on this
-// origin keeps the strict policy; only this fixed, server-authored shell gets the looser one, and
-// what's injected into it never sees this origin's cookies or storage — the iframe embedding this
-// page still carries sandbox="allow-scripts" with no allow-same-origin, so this document's origin
-// is opaque no matter which URL served it.
-window.addEventListener('message', (event) => {
-  const data = event.data;
+// a generated app legitimately needs to run (see server/csp.mjs). Everything else on this origin
+// keeps the strict policy; only this fixed, server-authored shell gets the looser one, and what's
+// injected into it never sees this origin's cookies or storage — the iframe embedding this page
+// carries sandbox="allow-scripts" with no allow-same-origin, so this document's origin is opaque
+// no matter which URL served it.
+//
+// That opaque origin has one side effect worth handling here: `localStorage` and `sessionStorage`
+// throw a SecurityError in a document that has no origin, and a generated to-do list that saves
+// its items is the single most common thing people ask for. So a small script is prepended to
+// every page before it is written, giving the page in-memory storage that behaves like the real
+// thing for as long as the preview is open. It also reports the first uncaught runtime error in
+// a banner, since a page that silently does nothing is the least debuggable failure there is.
+var SHIM = '<script>(function(){' +
+  'function mem(){var m=new Map();return{get length(){return m.size},key:function(i){return Array.from(m.keys())[i]||null},getItem:function(k){return m.has(String(k))?m.get(String(k)):null},setItem:function(k,v){m.set(String(k),String(v))},removeItem:function(k){m.delete(String(k))},clear:function(){m.clear()}}}' +
+  'function blocked(n){try{var s=window[n];s.getItem;return false}catch(e){return true}}' +
+  '["localStorage","sessionStorage"].forEach(function(n){if(blocked(n)){try{Object.defineProperty(window,n,{value:mem(),configurable:true})}catch(e){}}});' +
+  'var shown=false;window.addEventListener("error",function(e){if(shown)return;shown=true;var b=document.createElement("pre");b.setAttribute("data-preview-error","");b.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;margin:0;padding:8px 10px;background:#fff3f2;color:#b8362b;border:1px solid #f0b8b2;border-radius:6px;font:12px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.15)";b.textContent="Runtime error: "+(e.message||"unknown")+(e.filename?"\\n"+e.filename.replace(/^.*\\//,"")+":"+e.lineno:"");(document.body||document.documentElement).appendChild(b)});' +
+  '})()<\/script>';
+
+function withShim(html) {
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, function (m) { return m + SHIM; });
+  if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, function (m) { return m + SHIM; });
+  return SHIM + html;
+}
+
+window.addEventListener('message', function (event) {
+  var data = event.data;
   if (!data || typeof data !== 'object' || typeof data.html !== 'string') return;
   document.open();
-  document.write(data.html);
+  document.write(withShim(data.html));
   document.close();
 });
 </script>

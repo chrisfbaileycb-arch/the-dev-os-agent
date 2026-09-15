@@ -27,22 +27,24 @@ export function validateSession(s) { if (!s || !isId(s.id) || typeof s.title !==
 export function validateRun(r) { if (!r || !isId(r.id) || !isIso(r.startedAt) || !Array.isArray(r.steps) || typeof r.goal !== 'string') throw new HttpError(400, 'Invalid run.'); if (JSON.stringify(r).length > 1_000_000) throw new HttpError(413, 'Run is too large.'); }
 export function validateEntry(e) { if (!e || !isId(e.id) || !isIso(e.at) || typeof e.model !== 'string' || e.model.length > 200 || !['free', 'byok', 'pro'].includes(e.tier) || !['credits', 'byok', 'free'].includes(e.mode) || !Number.isInteger(e.tokens) || e.tokens < 0 || e.tokens > 10_000_000 || typeof e.credits !== 'number' || !Number.isFinite(e.credits) || e.credits < 0 || e.credits > 1_000_000) throw new HttpError(400, 'Invalid ledger entry.'); }
 
-export function createState({ env = process.env, db }) {
-  const pool = Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000);
+export function createState({ env: baseEnv = process.env, db, settings = null }) {
+  // Dashboard settings over the process environment, resolved per request like the proxy does.
+  const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
   // The zero-config allowance is metered by the proxy, not by the browser, so the balance the
   // client shows for it is read back from the server rather than recomputed from local rows.
-  const budget = async workspace => ({ pool, freePool: monthlyPool(env), freeUsed: await db.usedThisMonth(workspace, new Date(), 'free'), free: freeTierStatus(env) });
+  const budget = async (workspace, env) => ({ pool: Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000), freePool: monthlyPool(env), freeUsed: await db.usedThisMonth(workspace, new Date(), 'free'), free: freeTierStatus(env) });
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://state').pathname;
     if (!['/api/state', '/api/state/clear', '/api/state/usage'].includes(path)) return false;
+    const env = currentEnv();
     try {
       checkOrigin(req, env);
       const workspace = req.headers['x-workspace-id'];
       if (typeof workspace !== 'string' || !ID.test(workspace)) throw new HttpError(400, 'A workspace id header is required.');
-      if (path === '/api/state' && req.method === 'GET') { json(res, 200, { ...(await db.state(workspace)), ...(await budget(workspace)) }); return true; }
+      if (path === '/api/state' && req.method === 'GET') { json(res, 200, { ...(await db.state(workspace)), ...(await budget(workspace, env)) }); return true; }
       // A cheap read the client polls after a zero-config turn, so the credit meter moves in
       // step with the server's own measurement instead of a guess made in the browser.
-      if (path === '/api/state/usage' && req.method === 'GET') { const [b, used, entry] = await Promise.all([budget(workspace), db.usedThisMonth(workspace), db.latestEntry(workspace, 'free')]); json(res, 200, { ...b, used, entry }); return true; }
+      if (path === '/api/state/usage' && req.method === 'GET') { const [b, used, entry] = await Promise.all([budget(workspace, env), db.usedThisMonth(workspace), db.latestEntry(workspace, 'free')]); json(res, 200, { ...b, used, entry }); return true; }
       if (req.method !== 'POST') throw new HttpError(405, 'Use GET or POST.');
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
       const body = await readBody(req);
@@ -53,7 +55,7 @@ export function createState({ env = process.env, db }) {
       const counts = await db.counts(workspace);
       if (counts.sessions + sessions.length > MAX_SESSIONS * 2 || counts.runs + runs.length > MAX_RUNS * 2) throw new HttpError(429, 'Workspace storage limit reached. Clear old sessions first.');
       await Promise.all([sessions.length && db.upsertSessions(workspace, sessions), runs.length && db.upsertRuns(workspace, runs), ledger.length && db.addLedger(workspace, ledger)]);
-      const [used, b] = await Promise.all([db.usedThisMonth(workspace), budget(workspace)]);
+      const [used, b] = await Promise.all([db.usedThisMonth(workspace), budget(workspace, env)]);
       json(res, 200, { ok: true, used, ...b }); return true;
     } catch (error) {
       json(res, error instanceof HttpError ? error.status : 500, { error: { message: error instanceof HttpError ? error.message : 'Workspace storage failed.' } }); return true;

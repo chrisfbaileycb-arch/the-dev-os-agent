@@ -3,7 +3,8 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { createBurstLimiter, creditsForTokens, freeKey, freeModel, freeTierStatus, monthlyPool, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
+import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKey, freeModel, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
+import { modelsUrl, normalizeModelList } from './models.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
 import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog } from './discovery.mjs';
@@ -94,7 +95,7 @@ export function keyFor(body, env = process.env) {
   const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
   if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
-  return cleanKey(env[{ openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', cohere: 'COHERE_API_KEY', aihubmix: 'AIHUBMIX_API_KEY', huggingface: 'HF_TOKEN', 'cheaper-inference': 'CHEAPER_INFERENCE_API_KEY', omniroute: 'OMNIROUTE_API_KEY', xkiro: 'XKIRO_API_KEY', custom: 'CUSTOM_API_KEY' }[body.provider]]);
+  return cleanKey(env[PROVIDER_KEY_VARS[body.provider]]);
 }
 /**
  * Who pays for this request, decided entirely on the server.
@@ -259,12 +260,17 @@ const windows = new Map();
  * `discover` is injectable so tests stay hermetic: the real one reaches the gateway over the
  * network, and a unit test asserting how a Groq request is funded has no business doing that.
  */
-export function createProxy({ env = process.env, transport = upstream, resolve = lookup, db = null, log = console.error, discover = ensureCatalog } = {}) {
-  const takeBurst = createBurstLimiter(env);
-  const freeOutputCap = Math.min(4096, Math.max(64, Number(env.FREE_MAX_OUTPUT_TOKENS ?? 1024) || 1024));
+export function createProxy({ env: baseEnv = process.env, settings = null, transport = upstream, resolve = lookup, db = null, log = console.error, discover = ensureCatalog } = {}) {
+  // The environment as this request should read it: the admin dashboard's stored keys and knobs
+  // laid over the process environment (see server/settings.mjs). Resolved per request, so a key
+  // entered in the dashboard funds the very next message with no restart.
+  const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
+  const takeBurst = createBurstLimiter(currentEnv);
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://proxy').pathname;
     if (!['/api/chat','/api/models','/api/providers'].includes(path)) return false;
+    const env = currentEnv();
+    const freeOutputCap = Math.min(4096, Math.max(64, Number(env.FREE_MAX_OUTPUT_TOKENS ?? 1024) || 1024));
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 120_000);
     res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
@@ -293,6 +299,9 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
           // why the whole catalogue is published rather than only the part this deployment pays for.
           gatewayCatalog: { url: null, models: catalogModels(), ...catalogStatus() },
           free: freeTierStatus(env),
+          // The plan tier the operator drew up in the dashboard: models a subscriber runs on the
+          // deployment's keys with the access token. Published so the dropdown can show them.
+          paid: paidTierStatus(env),
           billing: billingStatus(env),
         });
         return true;
@@ -324,8 +333,16 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
         funding = fundingFor(body, env);
       }
       // A zero-config request is funded per model, so the provider comes from the allowlist
-      // entry rather than from the request body.
-      const provider = funding.mode === 'free' ? funding.entry.provider : body.provider;
+      // entry rather than from the request body. A plan request is likewise routed by the tier
+      // entry, and refused for any model outside the operator's paid list once one exists: the
+      // access token unlocks the plan, not every key the deployment holds.
+      let provider = funding.mode === 'free' ? funding.entry.provider : body.provider;
+      if (funding.mode === 'credits' && path === '/api/chat' && paidModels(env).length) {
+        const plan = paidModel(body.model, env);
+        if (!plan) throw new HttpError(403, 'That model is not on this deployment\'s paid plan. Pick a plan model from the dropdown, or use your own key.', 'plan_model_required');
+        provider = plan.provider;
+        funding = { ...funding, apiKey: cleanKey(env[plan.envKey]) || funding.apiKey };
+      }
       const target = await resolveTarget(provider, body.baseUrl, env, resolve);
       const apiKey = funding.apiKey;
       if (!apiKey && provider !== 'custom' && !(path === '/api/models' && (provider === 'openrouter' || provider === 'cheaper-inference'))) {
@@ -372,7 +389,7 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
         json(res, 200, { data: models.map(model => ({ id: model.id })) });
         return true;
       }
-      const upstreamUrl = path === '/api/models' && target.nativeCohere ? 'https://api.cohere.com/v1/models' : target.base + suffix;
+      const upstreamUrl = path === '/api/models' ? modelsUrl(provider, target.base) : target.base + suffix;
       if (target.nativeAnthropic && path === '/api/models') headers.Accept = 'application/json';
       let response;
       try {
@@ -407,9 +424,11 @@ export function createProxy({ env = process.env, transport = upstream, resolve =
         let size = 0; const chunks = [];
         for await (const chunk of response) { size += chunk.length; if (size > 4_000_000) { response.destroy(); throw new HttpError(502, 'Model catalog too large.'); } chunks.push(chunk); }
         let data; try { data = JSON.parse(Buffer.concat(chunks).toString()); } catch { throw new HttpError(502, 'Invalid model catalog.'); }
-        const entries = target.nativeCohere ? data.models : data.data;
-        if (!Array.isArray(entries)) throw new HttpError(502, 'Unsupported model catalog format.');
-        json(res, 200, { data: entries.map(m => ({ id: target.nativeCohere ? m.name : m.id })).filter(m => typeof m.id === 'string').slice(0, 2000) }); return true;
+        // Ids, plus a label and a free flag where the provider gave one, so the dropdown can show
+        // everything a key reaches by name rather than by id, and mark what costs nothing.
+        const entries = normalizeModelList(provider, data);
+        if (!entries) throw new HttpError(502, 'Unsupported model catalog format.');
+        json(res, 200, { data: entries }); return true;
       }
       if (!String(response.headers['content-type']).includes('text/event-stream')) { response.destroy(); throw new HttpError(502, 'The provider did not return an SSE stream.'); }
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-store, no-transform', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' }); res.flushHeaders();

@@ -178,6 +178,50 @@ export function freeKey(entry, env = process.env) {
 }
 
 /**
+ * The environment variable that holds each provider's key on this deployment. One map, used by
+ * the free tier (which key funds an entry), the paid tier (which key funds a plan model), the
+ * credits branch of the proxy, and the admin dashboard (which key is being entered). The
+ * dashboard lays its stored keys over the process environment under these same names, so nothing
+ * downstream needs to know whether a key came from Render's dashboard or Hey Buddy's.
+ */
+export const PROVIDER_KEY_VARS = {
+  openrouter: 'OPENROUTER_API_KEY',
+  groq: 'GROQ_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GOOGLE_API_KEY',
+  cohere: 'COHERE_API_KEY',
+  xkiro: 'XKIRO_API_KEY',
+  aihubmix: 'AIHUBMIX_API_KEY',
+  huggingface: 'HF_TOKEN',
+  'cheaper-inference': 'CHEAPER_INFERENCE_API_KEY',
+  omniroute: 'OMNIROUTE_API_KEY',
+  custom: 'CUSTOM_API_KEY',
+};
+
+/**
+ * The model tiers the operator drew up in the admin dashboard.
+ *
+ * `free` entries join the zero-config pool — funded from the deployment's own key for that
+ * provider, no visitor key needed — and `paid` entries form the plan tier, which a visitor reaches
+ * with the deployment's access token (a subscription's credential) and which is likewise funded
+ * from the deployment's keys. In `auto` mode the free list is added to the pool this file
+ * discovers on its own; in `manual` mode it replaces that pool, so what is free is exactly what
+ * the operator said and nothing the gateway happened to label. Module state for the same reason
+ * `discoveredXkiro` is: the funding decision is synchronous. server/settings.mjs writes here.
+ */
+let adminTiers = { mode: 'auto', free: [], paid: [] };
+const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider)
+  ? { id: m.id.trim(), provider: m.provider, envKey: PROVIDER_KEY_VARS[m.provider], ...(typeof m.label === 'string' && m.label.trim() ? { label: m.label.trim().slice(0, 80) } : {}) }
+  : null;
+export function setAdminTiers(tiers) {
+  const source = tiers && typeof tiers === 'object' ? tiers : {};
+  const list = value => (Array.isArray(value) ? value : []).map(cleanEntry).filter(Boolean);
+  adminTiers = { mode: source.mode === 'manual' ? 'manual' : 'auto', free: list(source.free), paid: list(source.paid) };
+}
+export const adminTierConfig = () => ({ mode: adminTiers.mode, free: adminTiers.free.map(m => ({ ...m })), paid: adminTiers.paid.map(m => ({ ...m })) });
+
+/**
  * Frontier models, which this deployment never funds from its own key.
  *
  * The zero-config tier exists so a stranger can type one sentence and get an answer. It is paid
@@ -241,18 +285,60 @@ const STATIC_FREE = [
  * price, which is a stronger claim than any pattern — so they are taken as discovered, and
  * FREE_TIER_ALLOW_FRONTIER no longer has anything to unlock among them.
  */
-export function freeModels(env = process.env, discovered = discoveredXkiro) {
+export function freeModels(env = process.env, discovered = discoveredXkiro, tiers = adminTiers) {
+  // The operator's own free list, first: an entry they wrote is theirs to fund, so it carries no
+  // FRONTIER guard — the dashboard warns about the cost instead of refusing. In manual mode it is
+  // the whole pool.
+  const chosen = tiers.free.map(m => ({ ...m }));
+  if (tiers.mode === 'manual') return chosen;
   const guarded = env.FREE_TIER_ALLOW_FRONTIER === 'true' ? STATIC_FREE : STATIC_FREE.filter(m => !isFrontier(m.id));
   // HF serverless joins only when the deployment holds a token: without one these ids would
   // advertise as free and answer 503, which is the exact "warming up" lie the status message
   // exists to avoid.
   const hf = HF_POOL.some(id => isFrontier(id)) ? [] : (env.HF_TOKEN ? HF_POOL.map(id => ({ id, provider: 'huggingface', envKey: 'HF_TOKEN' })) : []);
-  return [
+  const automatic = [
     ...guarded,
     ...hf,
     ...xkiroPool(env, discovered).map(id => ({ id, provider: 'xkiro', envKey: 'XKIRO_API_KEY' })),
     ...cheaperInferencePool(env).map(id => ({ id, provider: 'cheaper-inference', envKey: 'CHEAPER_INFERENCE_API_KEY' })),
   ];
+  // A model the operator also moved to the paid tier leaves the free pool, whatever the gateway
+  // says about it: "paid here" is the operator's decision to make.
+  const paid = new Set(tiers.paid.map(m => m.id.toLowerCase()));
+  const seen = new Set(chosen.map(m => m.id.toLowerCase()));
+  const out = [...chosen];
+  for (const entry of automatic) {
+    const key = entry.id.toLowerCase();
+    if (seen.has(key) || paid.has(key)) continue;
+    seen.add(key); out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * The plan tier: models a subscriber runs on the deployment's keys, unlocked by the access token.
+ * Only entries whose provider key actually resolves are published — a paid model nobody can fund
+ * would be a locked door with nothing behind it.
+ */
+export function paidModels(env = process.env, tiers = adminTiers) {
+  return tiers.paid.filter(m => Boolean(freeKey(m, env).key));
+}
+export function paidModel(id, env = process.env, tiers = adminTiers) {
+  if (typeof id !== 'string') return undefined;
+  const wanted = id.trim().toLowerCase();
+  return paidModels(env, tiers).find(m => m.id.toLowerCase() === wanted);
+}
+export function paidTierStatus(env = process.env, tiers = adminTiers) {
+  const models = paidModels(env, tiers);
+  return {
+    // Reachable only when there is a token for a subscriber to hold; without one the tier is
+    // configured but not yet open, and the browser says so rather than selling it.
+    enabled: models.length > 0 && Boolean(cleanCredential(env.SERVER_CREDIT_ACCESS_TOKEN)),
+    configured: tiers.paid.length > 0,
+    models: models.map(m => m.id),
+    providers: Object.fromEntries(models.map(m => [m.id, m.provider])),
+    labels: Object.fromEntries(models.filter(m => m.label).map(m => [m.id, m.label])),
+  };
 }
 
 /** The static half on its own, for callers that only need the shape (tests, documentation). */
@@ -286,6 +372,8 @@ export function freeTierStatus(env = process.env, discovered = discoveredXkiro) 
     // sent every non-Groq free model to the OpenRouter endpoint the moment a visitor added
     // their own key. The server already knows; saying so costs one field.
     providers: Object.fromEntries(funded.map(m => [m.id, m.provider])),
+    // Labels the operator gave dashboard-chosen entries, so the dropdown can name them.
+    labels: Object.fromEntries(funded.filter(m => m.label).map(m => [m.id, m.label])),
     monthlyCredits: monthlyPool(env),
     perHour: burstLimit(env),
     weight: FREE_WEIGHT,
@@ -326,8 +414,11 @@ export function routeFreeRequest(entry) {
  */
 export function createBurstLimiter(env = process.env, now = () => Date.now()) {
   const windows = new Map();
-  const limit = burstLimit(env);
+  // `env` may be a getter, so a cap changed in the admin dashboard applies to the next request
+  // rather than to the next restart.
+  const current = () => burstLimit(typeof env === 'function' ? env() : env);
   return function take(ip) {
+    const limit = current();
     const at = now();
     for (const [key, value] of windows) if (at - value.start > 3_600_000) windows.delete(key);
     const window = windows.get(ip) ?? { start: at, count: 0 };

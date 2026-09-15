@@ -5,7 +5,7 @@ import type { GatewayModel } from './deployment';
 // without a provider. Three questions live here: which discovered ids are chat models worth
 // offering, what a human should read for each, and which one a fresh discovery should land on.
 
-export interface ModelChoice { id: string; label: string; }
+export interface ModelChoice { id: string; label: string; /** Free at the provider itself, by the provider's own signal. */ free?: boolean; }
 
 /**
  * Whether a discovered id is a chat/generative model at all.
@@ -27,9 +27,25 @@ export function labelFor(id: string, gateway: Pick<GatewayModel, 'id' | 'label'>
   return gateway.find(m => m.id === id)?.label ?? findModel(id)?.label ?? id;
 }
 
-/** A discovered list reduced to offerable chat models with readable labels. */
-export function modelChoices(discovered: string[], gateway: Pick<GatewayModel, 'id' | 'label'>[] = []): ModelChoice[] {
-  return discovered.filter(isChatModel).map(id => ({ id, label: labelFor(id, gateway) }));
+/** A discovered entry as /api/models now reports it: the provider's own label and free flag ride along when given. */
+export interface DiscoveredEntry { id: string; label?: string; free?: boolean; }
+
+/** A discovered list reduced to offerable chat models with readable labels. Accepts plain ids or labelled entries. */
+export function modelChoices(discovered: (string | DiscoveredEntry)[], gateway: Pick<GatewayModel, 'id' | 'label'>[] = []): ModelChoice[] {
+  return discovered
+    .map(entry => typeof entry === 'string' ? { id: entry } : entry)
+    .filter(entry => isChatModel(entry.id))
+    .map(entry => ({ id: entry.id, label: entry.label?.trim() || labelFor(entry.id, gateway), ...(entry.free ? { free: true } : {}) }));
+}
+
+/**
+ * Narrow a list by what the visitor typed. Every word must appear somewhere in the id or the
+ * label, in any order and any case, so "claude sonnet" and "sonnet claude" find the same rows.
+ */
+export function filterChoices<T extends ModelChoice>(choices: T[], query: string): T[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return choices;
+  return choices.filter(c => { const hay = `${c.id} ${c.label}`.toLowerCase(); return words.every(w => hay.includes(w)); });
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSafeProjectPath, parseProject, stitchFragments, wrapScriptDocument } from '../src/lib/project';
+import { inlineLocalAssets, isSafeProjectPath, parseProject, placeholderImage, resolveLocalRef, stitchFragments, wrapScriptDocument } from '../src/lib/project';
 import { highlightCode } from '../src/lib/highlight';
 
 const fence = (info: string, body: string) => `\`\`\`${info}\n${body}\n\`\`\``;
@@ -207,5 +207,57 @@ describe('parseProject', () => {
       const reply = `I could write that with:\n\n${fence('js', 'console.log(1)')}\n\nWant me to?`;
       expect(parseProject(reply)).toBeNull();
     });
+  });
+});
+
+describe('resolveLocalRef', () => {
+  const files = { 'index.html': '', 'styles.css': 'body{}', 'js/app.js': 'x', 'assets/logo.svg': '<svg/>' };
+  it('resolves bare, ./ and / forms of a project path', () => {
+    expect(resolveLocalRef('styles.css', files, 'index.html')).toBe('styles.css');
+    expect(resolveLocalRef('./styles.css', files, 'index.html')).toBe('styles.css');
+    expect(resolveLocalRef('/styles.css', files, 'index.html')).toBe('styles.css');
+    expect(resolveLocalRef('styles.css?v=3', files, 'index.html')).toBe('styles.css');
+  });
+  it('resolves relative to the entry directory first, then falls back to a unique basename', () => {
+    expect(resolveLocalRef('../styles.css', { ...files, 'public/index.html': '' }, 'public/index.html')).toBe('styles.css');
+    expect(resolveLocalRef('app.js', files, 'index.html')).toBe('js/app.js');
+    expect(resolveLocalRef('script/app.js', files, 'index.html')).toBe('js/app.js');
+  });
+  it('never treats a remote or data URL as a project file', () => {
+    expect(resolveLocalRef('https://cdn.example/x.css', files, 'index.html')).toBeNull();
+    expect(resolveLocalRef('//cdn.example/x.css', files, 'index.html')).toBeNull();
+    expect(resolveLocalRef('data:text/css,body{}', files, 'index.html')).toBeNull();
+    expect(resolveLocalRef('missing.css', files, 'index.html')).toBeNull();
+  });
+});
+
+describe('inlineLocalAssets', () => {
+  const files = {
+    'index.html': '<!doctype html><html><head><link rel="stylesheet" href="https://cdn.example/fa.css"><link href="./styles.css" rel="stylesheet"></head><body><img src="images/hero.jpg" alt="hero"><img src="https://pics.example/a.png"><img src="assets/logo.svg"><script src="app.js"></script><script type="module" src="./mod.js"></script></body></html>',
+    'styles.css': 'body { color: red; }',
+    'app.js': 'console.log("</script>")',
+    'mod.js': 'export {}',
+    'assets/logo.svg': '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+  };
+  const out = inlineLocalAssets(files['index.html'], files, 'index.html');
+  it('inlines the project stylesheet whatever attribute order the tag used, and leaves the CDN link alone', () => {
+    expect(out).toContain('<style data-inlined="styles.css">\nbody { color: red; }\n</style>');
+    expect(out).toContain('<link rel="stylesheet" href="https://cdn.example/fa.css">');
+    expect(out).not.toContain('href="./styles.css"');
+  });
+  it('inlines project scripts, keeping module type and escaping a closing tag inside the source', () => {
+    expect(out).toContain('<script data-inlined="app.js">');
+    expect(out).toContain('console.log("<\\/script>")');
+    expect(out).toContain('<script type="module" data-inlined="mod.js">');
+    expect(out).not.toMatch(/src="app\.js"/);
+  });
+  it('turns a project svg into a data URL, a missing local image into a placeholder, and leaves remote images as they are', () => {
+    expect(out).toContain('src="data:image/svg+xml;charset=utf-8,');
+    expect(out).toContain(`src="${placeholderImage('images/hero.jpg')}"`);
+    expect(out).toContain('<img src="https://pics.example/a.png">');
+  });
+  it('names the missing file in the placeholder so the gap reads as a gap and not as a bug', () => {
+    expect(decodeURIComponent(placeholderImage('images/hero.jpg'))).toContain('>hero.jpg<');
+    expect(decodeURIComponent(placeholderImage('<evil>.png'))).not.toContain('<evil>');
   });
 });

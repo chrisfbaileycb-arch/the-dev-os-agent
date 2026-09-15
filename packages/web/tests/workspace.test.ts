@@ -47,7 +47,7 @@ describe('ledger and workspace merge', () => {
   it('merges by newest session and unions runs and ledger, reporting what to push', () => {
     const s = (id: string, updatedAt: string, title: string): Session => ({ id, title, persona: 'operator', createdAt: updatedAt, updatedAt, messages: [] });
     const local = { sessions: [s('a', '2026-09-10T02:00:00.000Z', 'local newer'), s('c', '2026-09-10T01:00:00.000Z', 'local only')], runs: [], ledger: [entry({ id: 'l1' })] };
-    const server = { sessions: [s('a', '2026-09-10T01:00:00.000Z', 'server older'), s('b', '2026-09-10T01:00:00.000Z', 'server only')], runs: [], ledger: [entry({ id: 'l1' }), entry({ id: 'l2' })], pool: 100, freePool: 400, freeUsed: 0, free: { enabled: true, models: [], providers: {}, monthlyCredits: 400, perHour: 40 } };
+    const server = { sessions: [s('a', '2026-09-10T01:00:00.000Z', 'server older'), s('b', '2026-09-10T01:00:00.000Z', 'server only')], runs: [], ledger: [entry({ id: 'l1' }), entry({ id: 'l2' })], pool: 100, freePool: 400, freeUsed: 0, free: { enabled: true, models: [], providers: {}, labels: {}, monthlyCredits: 400, perHour: 40 } };
     const merged = merge(local, server);
     expect(merged.sessions.map(x => x.title).sort()).toEqual(['local newer', 'local only', 'server only']); expect(merged.ledger).toHaveLength(2);
     expect(merged.toPush.sessions.map(x => x.id)).toEqual(['a', 'c']); expect(merged.toPush.ledger).toHaveLength(0);
@@ -127,8 +127,8 @@ describe('payment routing', () => {
 });
 
 describe('what a visitor can pay for', () => {
-  const noFree = { enabled: false, models: [], providers: {}, monthlyCredits: 400, perHour: 40 };
-  const someFree = { enabled: true, models: ['deepseek/deepseek-v4-flash'], providers: { 'deepseek/deepseek-v4-flash': 'xkiro' }, monthlyCredits: 400, perHour: 40 };
+  const noFree = { enabled: false, models: [], providers: {}, labels: {}, monthlyCredits: 400, perHour: 40 };
+  const someFree = { enabled: true, models: ['deepseek/deepseek-v4-flash'], providers: { 'deepseek/deepseek-v4-flash': 'xkiro' }, labels: {}, monthlyCredits: 400, perHour: 40 };
   const reach = (over: Partial<Parameters<typeof keyedProviders>[0]> = {}) => ({ free: noFree, keys: emptyKeyring(), credits: false, ...over });
 
   it('unlocks a provider the moment its key is typed, and only that provider', () => {

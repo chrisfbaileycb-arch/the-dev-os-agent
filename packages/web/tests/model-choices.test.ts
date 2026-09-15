@@ -57,3 +57,14 @@ describe('defaultModel', () => {
     expect(defaultModel('anything', [], [])).toBeUndefined();
   });
 });
+
+describe('labelled entries and filtering', () => {
+  it('keeps a provider label and free flag when an entry carries them', async () => {
+    const { modelChoices, filterChoices } = await import('../src/lib/modelChoices');
+    const choices = modelChoices([{ id: 'x/y:free', label: 'Why', free: true }, 'plain-id', { id: 'text-embedding-3' }]);
+    expect(choices).toEqual([{ id: 'x/y:free', label: 'Why', free: true }, { id: 'plain-id', label: 'plain-id' }]);
+    expect(filterChoices(choices, 'WHY').map(c => c.id)).toEqual(['x/y:free']);
+    expect(filterChoices(choices, 'plain id').map(c => c.id)).toEqual(['plain-id']);
+    expect(filterChoices(choices, '')).toHaveLength(2);
+  });
+});

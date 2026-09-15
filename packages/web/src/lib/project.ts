@@ -217,3 +217,91 @@ export function parseProject(text: string): Project | null {
   }
   return null;
 }
+
+/**
+ * A reference inside an HTML file resolved to one of the project's own files, or null.
+ *
+ * The sandbox shell serves no project files — the whole project reaches it as one document — so
+ * every `href="styles.css"` and `src="app.js"` the model wrote has to be folded into that
+ * document, and the model does not write them consistently: `styles.css`, `./styles.css`,
+ * `/styles.css`, `css/styles.css` when the fence said `styles.css`, or the reverse. So the lookup
+ * tries the path relative to the entry file's directory, then the bare path, then a basename
+ * match when exactly one project file has that basename. A URL that points off the project
+ * (http, data, a protocol-relative CDN) is never a project file and is left alone.
+ */
+export function resolveLocalRef(ref: string, files: Record<string, string>, entry: string): string | null {
+  const raw = ref.trim().replace(/[?#].*$/, '');
+  if (!raw || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(raw)) return null;
+  const clean = raw.replace(/^\.?\//, '');
+  const dir = entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/')) : '';
+  const candidates = [dir ? `${dir}/${clean}` : clean, clean];
+  for (const candidate of candidates) {
+    const normalized = normalizeForLookup(candidate);
+    if (Object.hasOwn(files, normalized)) return normalized;
+  }
+  const base = clean.slice(clean.lastIndexOf('/') + 1).toLowerCase();
+  const byBase = Object.keys(files).filter(path => path.slice(path.lastIndexOf('/') + 1).toLowerCase() === base);
+  return byBase.length === 1 ? byBase[0] : null;
+}
+
+function normalizeForLookup(path: string): string {
+  const out: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') out.pop(); else out.push(part);
+  }
+  return out.join('/');
+}
+
+/** A neutral stand-in for an image the model referenced but could not produce: the path, on grey. */
+export function placeholderImage(name: string): string {
+  const label = name.replace(/^.*\//, '').slice(0, 40).replace(/[<>&"']/g, '');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"><rect width="640" height="400" fill="#e6e8ef"/><path d="M200 280l90-110 70 80 50-55 90 85z" fill="#c9cdd9"/><circle cx="430" cy="140" r="34" fill="#c9cdd9"/><text x="320" y="360" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="20" fill="#6b7083" text-anchor="middle">${label}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+const attr = (tag: string, name: string): string | null => {
+  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
+  return m ? (m[1] ?? m[2] ?? m[3] ?? '') : null;
+};
+
+/**
+ * Fold a project's own stylesheets, scripts and SVGs into its HTML entry, and give every image
+ * the model referenced but did not write a visible placeholder instead of a broken-image icon.
+ *
+ * A CDN reference (`https://…`) is untouched: the sandbox is allowed to fetch those itself. Only
+ * references that resolve to a file in this project are inlined, so a `<link>` to Font Awesome
+ * stays a `<link>` and a `<link>` to `styles.css` becomes the stylesheet's text in a `<style>`.
+ */
+export function inlineLocalAssets(html: string, files: Record<string, string>, entry: string): string {
+  let out = html;
+  out = out.replace(/<link\b[^>]*>/gi, tag => {
+    const rel = attr(tag, 'rel') ?? '';
+    const href = attr(tag, 'href');
+    if (!/stylesheet/i.test(rel) || !href) return tag;
+    const path = resolveLocalRef(href, files, entry);
+    if (!path || !/\.css$/i.test(path)) return tag;
+    return `<style data-inlined="${path}">\n${files[path]}\n</style>`;
+  });
+  out = out.replace(/<script\b([^>]*)>\s*<\/script>/gi, (tag, attrs: string) => {
+    const src = attr(tag, 'src');
+    if (!src) return tag;
+    const path = resolveLocalRef(src, files, entry);
+    if (!path) return tag;
+    const type = attr(tag, 'type');
+    const typeAttr = type && /module/i.test(type) ? ' type="module"' : '';
+    void attrs;
+    return `<script${typeAttr} data-inlined="${path}">\n${files[path].replace(/<\/script/gi, '<\\/script')}\n</script>`;
+  });
+  out = out.replace(/<img\b[^>]*>/gi, tag => {
+    const src = attr(tag, 'src');
+    if (!src || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(src.trim())) return tag;
+    const path = resolveLocalRef(src, files, entry);
+    const replacement = path && /\.svg$/i.test(path)
+      ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(files[path])}`
+      : path ? null : placeholderImage(src);
+    if (!replacement) return tag;
+    return tag.replace(/\bsrc\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i, `src="${replacement}"`);
+  });
+  return out;
+}

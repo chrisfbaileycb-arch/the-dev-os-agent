@@ -14,6 +14,8 @@ import { createFetcher } from './fetch.mjs';
 import { createGithub } from './github.mjs';
 import { createJobs, openJobs } from './jobs.mjs';
 import { createAuth } from './auth.mjs';
+import { createAdmin } from './admin.mjs';
+import { openSettings } from './settings.mjs';
 import { catalogStatus, ensureCatalog } from './discovery.mjs';
 import { cspFor } from './csp.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
@@ -32,8 +34,12 @@ if (process.env.DATABASE_URL) {
   console.log(`Workspace data: ${dataFile}`);
 }
 const jobs = openJobs(jobsSqlite);
+// Dashboard-managed keys, knobs and model tiers, laid over the process environment for every
+// handler that funds or describes a request. Loaded once here; the admin routes refresh it.
+const settings = await openSettings({ db, env: process.env });
+if (!process.env.ADMIN_TOKEN) console.log('Admin dashboard: off (set ADMIN_TOKEN to open /admin).');
 const auth = createAuth({ db, env: process.env });
-const handlers = [auth, createProxy({ db }), createState({ db }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs })];
+const handlers = [auth, createAdmin({ db, settings }), createProxy({ db, settings }), createState({ db, settings }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs })];
 // Finished jobs are a transient hand-off, not a record; the run itself lands in the workspace store.
 setInterval(() => jobs.prune(new Date(Date.now() - 24 * 3_600_000).toISOString()), 3_600_000).unref();
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png' };
@@ -44,7 +50,8 @@ const server = createServer(async (req, res) => {
   if (!['GET','HEAD'].includes(req.method)) { res.writeHead(405); res.end(); return; }
   try {
     const pathname = decodeURIComponent(new URL(req.url, 'http://app').pathname);
-    const file = resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
+    // /admin is the operator dashboard, a view inside the same single-page app.
+    const file = resolve(root, '.' + (pathname === '/' || pathname === '/admin' ? '/index.html' : pathname));
     if (!file.startsWith(root.endsWith(sep) ? root : root + sep)) throw new Error('Invalid path');
     if (!(await stat(file)).isFile()) throw new Error('Not a file');
     res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': cacheControl(file), 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': cspFor(file, root) });
@@ -57,11 +64,11 @@ server.listen(Number(process.env.PORT || 4173), '0.0.0.0', () => console.log('He
 // Warm the gateway catalogue at boot so the first visitor does not pay for the discovery request,
 // and so the log says on startup how large the free tier actually is. Never awaited and never
 // fatal: the server must come up and answer its health check whether or not the gateway is up.
-void ensureCatalog().then(() => {
+void ensureCatalog(settings.env()).then(() => {
   const status = catalogStatus();
   if (status.discovered) console.log(`Gateway catalogue: ${status.count} models, ${status.free} free.`);
   else console.error(`Gateway catalogue unavailable at startup: ${status.error}. The free tier stays closed until it answers.`);
 });
 // Refresh on the same clock as the cache TTL, so a model that changes tier is picked up without a
 // redeploy and a visitor never triggers a cold fetch mid-session.
-setInterval(() => void ensureCatalog(), 3_600_000).unref();
+setInterval(() => void ensureCatalog(settings.env()), 3_600_000).unref();
