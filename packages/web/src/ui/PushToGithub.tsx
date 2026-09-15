@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { CircleAlert, ExternalLink, GitBranch, Github, LoaderCircle, X } from 'lucide-react';
+import { CircleAlert, ExternalLink, GitBranch, LoaderCircle, X } from 'lucide-react';
+import { GithubMark } from './GithubMark';
 import { pushProject, type GithubSettings } from '../lib/connectors';
 import type { ProjectFile } from '../lib/project';
 import { useDismiss } from './useDismiss';
@@ -45,7 +46,7 @@ export default function PushToGithub(p: PushToGithubProps) {
 
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) p.close(); }}>
     <section className="drawer push-drawer" role="dialog" aria-modal="true" aria-labelledby="push-title">
-      <div className="drawer-head"><h2 id="push-title"><Github size={15} strokeWidth={1.75} /> Push to GitHub</h2><button className="icon-button" aria-label="Close" onClick={p.close} autoFocus><X size={16} /></button></div>
+      <div className="drawer-head"><h2 id="push-title"><GithubMark size={15} strokeWidth={1.75} /> Push to GitHub</h2><button className="icon-button" aria-label="Close" onClick={p.close} autoFocus><X size={16} /></button></div>
 
       {!hasToken && <p className="notice" role="status"><CircleAlert size={13} /><span>No GitHub token saved yet. Add one with write access to Contents in <button className="text-button" onClick={p.openConnectors}>Connectors → GitHub</button> first.</span></p>}
 
@@ -68,7 +69,7 @@ export default function PushToGithub(p: PushToGithubProps) {
 
       <div className="row gap">
         <button className="button primary" disabled={!hasToken || !repo || status.kind === 'busy'} onClick={() => void push()}>
-          {status.kind === 'busy' ? <LoaderCircle size={13} className="spin" /> : <Github size={13} />}
+          {status.kind === 'busy' ? <LoaderCircle size={13} className="spin" /> : <GithubMark size={13} />}
           Push {p.files.length} file{p.files.length === 1 ? '' : 's'}
         </button>
         <button className="button small" onClick={p.close}>Close</button>

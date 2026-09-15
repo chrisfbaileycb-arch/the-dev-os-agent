@@ -11,13 +11,13 @@ import { filterChoices, isChatModel, type ModelChoice } from '../lib/modelChoice
 // have taken effect without opening a second tab.
 
 type Source = 'dashboard' | 'environment' | 'none';
-interface ProviderRow { provider: string; name: string; env: string; console: string | null; source: Source; hint: string; unreadable: boolean; }
+interface ProviderRow { provider: string; name: string; env: string; console: string | null; source: Source; hint: string; count: number; unreadable: boolean; }
 interface Tunable { name: string; kind: 'number' | 'boolean' | 'secret'; label: string; source: Source; value: string; unreadable: boolean; }
 interface TierEntry { id: string; provider: string; label?: string; }
 interface Tiers { mode: 'auto' | 'manual'; free: TierEntry[]; paid: TierEntry[]; warnings: string[]; }
 interface Published { free: { enabled: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; monthlyCredits: number; perHour: number }; paid: { enabled: boolean; configured: boolean; models: string[] }; }
 interface Config { persistent: boolean; providers: ProviderRow[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
-interface Status { configured: boolean; authenticated: boolean; persistent: boolean; }
+interface Status { configured: boolean; authenticated: boolean; persistent: boolean; setup: boolean; source: Source; storage: boolean; }
 
 export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; }
 
@@ -35,6 +35,9 @@ export default function Admin(p: AdminProps) {
   const [config, setConfig] = useState<Config | null>(null);
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
+  const [password, setPassword] = useState('');
+  const [passwordAgain, setPasswordAgain] = useState('');
+  const [changing, setChanging] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [tunableDrafts, setTunableDrafts] = useState<Record<string, string>>({});
   const [catalogs, setCatalogs] = useState<Record<string, ModelChoice[]>>({});
@@ -57,6 +60,9 @@ export default function Admin(p: AdminProps) {
   const applyConfig = (c: Config) => { setConfig(c); setTiers(t => t && dirty ? { ...t, warnings: c.tiers.warnings } : c.tiers); };
 
   function signIn() { void run(() => api('/api/admin/login', { method: 'POST', body: JSON.stringify({ token }) }), () => { setToken(''); void refresh().catch(e => p.notify(errorText(e))); }); }
+  /** First run: claim the dashboard with a password of the owner's choosing, no environment edit. */
+  function setUp() { void run(() => api('/api/admin/setup', { method: 'POST', body: JSON.stringify({ token: password }) }), () => { setPassword(''); setPasswordAgain(''); p.notify('Dashboard password set. Enter your provider keys below.'); void refresh().catch(e => p.notify(errorText(e))); }); }
+  function changePassword() { void run(() => api('/api/admin/password', { method: 'PUT', body: JSON.stringify({ token: password }) }), () => { setPassword(''); setPasswordAgain(''); setChanging(false); p.notify('Dashboard password changed. Use it at the next sign-in.'); }); }
   function signOut() { void run(() => api('/api/admin/logout', { method: 'POST', body: '{}' }), () => { setConfig(null); setStatus(s => s ? { ...s, authenticated: false } : s); p.onSignedIn(false); }); }
   function saveKey(provider: string) { void run(() => api<Config>('/api/admin/keys', { method: 'PUT', body: JSON.stringify({ provider, key: drafts[provider] ?? '' }) }), c => { applyConfig(c); setDrafts(d => ({ ...d, [provider]: '' })); p.notify(`${c.providers.find(x => x.provider === provider)?.name ?? provider} key saved on the server. It funds the next request without a restart.`); }); }
   function removeKey(provider: string) { void run(() => api<Config>('/api/admin/keys', { method: 'PUT', body: JSON.stringify({ provider, key: '' }) }), c => { applyConfig(c); p.notify('Key removed. Any environment value for it applies again.'); }); }
@@ -84,21 +90,37 @@ export default function Admin(p: AdminProps) {
 
   if (!status) return <div className="page"><p className="help"><LoaderCircle size={14} className="spin" /> Checking the dashboard…</p></div>;
 
-  if (!status.configured) return <div className="page">
+  if (!status.configured && !status.setup) return <div className="page">
     <div className="page-head"><div><h1><ShieldCheck size={18} strokeWidth={1.75} /> Admin dashboard</h1><p>Provider keys, model tiers and free-tier limits, managed on the server without a redeploy.</p></div></div>
     <section className="panel">
       <h2>Switched off on this deployment</h2>
-      <p className="help">Set <code>ADMIN_TOKEN</code> in the hosting environment to a long random string (at least 12 characters, <code>openssl rand -hex 24</code> is a good one), restart the service, and sign in here with it. Nothing else is needed: keys entered afterwards are stored encrypted in the workspace database and take effect immediately.</p>
+      <p className="help">This deployment has no settings storage, so a dashboard password could not be kept between restarts. Set <code>ADMIN_TOKEN</code> in the hosting environment to a long random string (at least 12 characters, <code>openssl rand -hex 24</code> is a good one), restart the service, and sign in here with it. Adding <code>DATABASE_URL</code> or a persistent <code>DATA_FILE</code> switches the in-app setup on instead, so no environment edit is needed.</p>
       {!status.persistent && <p className="msg-error"><CircleAlert size={12} />This server has no settings storage, so dashboard values could not be kept between restarts.</p>}
     </section>
   </div>;
 
-  if (!status.authenticated || !config || !tiers) return <div className="page">
-    <div className="page-head"><div><h1><ShieldCheck size={18} strokeWidth={1.75} /> Admin dashboard</h1><p>Sign in with the deployment's admin token.</p></div></div>
+  // First run on a deployment that has storage but no credential yet: claim the dashboard here,
+  // rather than sending the owner to a hosting dashboard they may not have access to.
+  if (!status.configured && status.setup) return <div className="page">
+    <div className="page-head"><div><h1><ShieldCheck size={18} strokeWidth={1.75} /> Set up your dashboard</h1><p>Choose a password for this deployment. It is the only credential; store it somewhere safe.</p></div></div>
     <section className="panel" style={{ maxWidth: 460 }}>
-      <label>Admin token<input type="password" autoComplete="off" spellCheck={false} value={token} disabled={busy} onChange={e => setToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && token) signIn(); }} /></label>
+      <h2>Create the admin password</h2>
+      <p className="help">You are the first person here, so this deployment is yours to claim. The password is hashed with scrypt before it is stored and is never sent back to any browser. It opens the provider keys, the model tiers, and the free-tier limits — none of which exist yet.</p>
+      <label>Password<input type="password" autoComplete="new-password" spellCheck={false} value={password} disabled={busy} onChange={e => setPassword(e.target.value)} /></label>
+      <label>Repeat password<input type="password" autoComplete="new-password" spellCheck={false} value={passwordAgain} disabled={busy} onChange={e => setPasswordAgain(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && password.length >= 12 && password === passwordAgain) setUp(); }} /></label>
+      {password.length > 0 && password.length < 12 && <p className="msg-error"><CircleAlert size={12} />Use at least 12 characters.</p>}
+      {passwordAgain.length > 0 && password !== passwordAgain && <p className="msg-error"><CircleAlert size={12} />The two entries do not match.</p>}
+      <div className="row gap"><button className="button primary small" disabled={busy || password.length < 12 || password !== passwordAgain} onClick={setUp}>{busy ? <LoaderCircle size={13} className="spin" /> : <KeyRound size={13} />}Set password and open the dashboard</button></div>
+      <p className="help">Setting a password turns the setup form off permanently. If you also want shell-level access, an <code>ADMIN_TOKEN</code> in the environment takes precedence over this password.</p>
+    </section>
+  </div>;
+
+  if (!status.authenticated || !config || !tiers) return <div className="page">
+    <div className="page-head"><div><h1><ShieldCheck size={18} strokeWidth={1.75} /> Admin dashboard</h1><p>Sign in {status.source === 'environment' ? 'with the deployment\u2019s ADMIN_TOKEN.' : 'with your dashboard password.'}</p></div></div>
+    <section className="panel" style={{ maxWidth: 460 }}>
+      <label>{status.source === 'environment' ? 'Admin token' : 'Password'}<input type="password" autoComplete="current-password" spellCheck={false} value={token} disabled={busy} onChange={e => setToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && token) signIn(); }} /></label>
       <div className="row gap"><button className="button primary small" disabled={busy || !token} onClick={signIn}>{busy ? <LoaderCircle size={13} className="spin" /> : <KeyRound size={13} />}Sign in</button></div>
-      <p className="help">The token is checked on the server and becomes a twelve-hour cookie scoped to the admin routes. It is never stored in this browser.</p>
+      <p className="help">The credential is checked on the server and becomes a twelve-hour cookie scoped to the admin routes. It is never stored in this browser.</p>
     </section>
   </div>;
 
@@ -115,12 +137,12 @@ export default function Admin(p: AdminProps) {
 
     <section className="panel">
       <div className="panel-head"><h2><KeyRound size={15} strokeWidth={1.75} /> Provider keys</h2><span className="pill">{config.providers.filter(r => r.source !== 'none').length} of {config.providers.length} connected</span></div>
-      <p className="help">A key entered here is encrypted before it is stored and is never returned to any browser, this one included. It wins over the same variable in the hosting environment; remove it and the environment value applies again. Keys stack: every connected provider can fund models in the tiers below.</p>
+      <p className="help">A key entered here is encrypted before it is stored and is never returned to any browser, this one included. It wins over the same variable in the hosting environment; remove it and the environment value applies again. <strong>Stack several keys</strong> by putting one per line: the free tier rotates across them, so a rate-limited account rolls over to the next instead of failing the visitor, and the count shown beside the key is how many are in the rotation. Keys stack across providers too: every connected provider can fund models in the tiers below.</p>
       <div className="ledger-wrap"><table className="ledger admin-keys"><thead><tr><th>Provider</th><th>Status</th><th>Key</th><th></th></tr></thead><tbody>
         {config.providers.map(r => <tr key={r.provider}>
           <td><strong>{r.name}</strong><br /><small className="mono">{r.env}</small>{r.console && <> · <a href={r.console} target="_blank" rel="noreferrer" className="text-button">get a key <ExternalLink size={10} /></a></>}</td>
           <td>{r.unreadable ? <span className="pill warn">Re-enter</span> : <span className={r.source === 'none' ? 'pill' : 'pill ok'}>{r.source === 'none' ? <CircleAlert size={11} /> : <Check size={11} />}{sourceLabel[r.source]}{r.hint ? ` ${r.hint}` : ''}</span>}</td>
-          <td><input type="password" autoComplete="off" spellCheck={false} placeholder={r.source === 'none' ? 'Paste a key' : 'Paste a new key to replace'} value={drafts[r.provider] ?? ''} disabled={busy} onChange={e => setDrafts(d => ({ ...d, [r.provider]: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter' && drafts[r.provider]) saveKey(r.provider); }} /></td>
+          <td><textarea rows={r.count > 1 ? 2 : 1} autoComplete="off" spellCheck={false} placeholder={r.source === 'none' ? 'Paste a key, or one per line to stack' : 'Paste a new key, or one per line to replace'} value={drafts[r.provider] ?? ''} disabled={busy} onChange={e => setDrafts(d => ({ ...d, [r.provider]: e.target.value }))} /></td>
           <td className="row gap"><button className="button primary small" disabled={busy || !(drafts[r.provider] ?? '').trim()} onClick={() => saveKey(r.provider)}><Check size={12} />Save</button>{r.source === 'dashboard' && <button className="button small" title="Remove the stored key" aria-label={`Remove ${r.name} key`} disabled={busy} onClick={() => removeKey(r.provider)}><Trash2 size={12} /></button>}</td>
         </tr>)}
       </tbody></table></div>
@@ -167,6 +189,18 @@ export default function Admin(p: AdminProps) {
           <button className="button small" disabled={busy || !(t.name in tunableDrafts)} onClick={() => saveTunable(t.name)}><Check size={12} /></button>
         </span><small className="help">{t.unreadable ? 'Re-enter: sealed under an old secret.' : `${sourceLabel[t.source]} · ${t.name}`}</small></label>)}
       </div>
+    </section>
+
+    <section className="panel">
+      <h2>Dashboard password</h2>
+      <p className="help">{status.source === 'environment' ? 'This deployment signs in with ADMIN_TOKEN from the hosting environment. Change it there — the dashboard deliberately does not shadow it.' : 'Your dashboard password lives on this server, hashed with scrypt. It is what opens this page; it is also what the twelve-hour session cookie is signed with, so changing it signs out every other browser.'}</p>
+      {status.source === 'dashboard' && (changing
+        ? <div className="form-grid">
+            <label>New password<span className="row gap"><input type="password" autoComplete="new-password" spellCheck={false} value={password} disabled={busy} onChange={e => setPassword(e.target.value)} /><button className="button small" disabled={busy || password.length < 12} onClick={changePassword}><Check size={12} />Save</button></span><small className="help">At least 12 characters. You stay signed in; other sessions do not.</small></label>
+            <label>Repeat<span className="row gap"><input type="password" autoComplete="new-password" spellCheck={false} value={passwordAgain} disabled={busy} onChange={e => setPasswordAgain(e.target.value)} /></span>{passwordAgain.length > 0 && password !== passwordAgain && <small className="msg-error"><CircleAlert size={11} />The two entries do not match.</small>}</label>
+            <div className="row gap"><button className="button small" disabled={busy} onClick={() => { setChanging(false); setPassword(''); setPasswordAgain(''); }}>Cancel</button></div>
+          </div>
+        : <button className="button small" disabled={busy} onClick={() => setChanging(true)}><KeyRound size={13} />Change password</button>)}
     </section>
 
     <section className="panel">

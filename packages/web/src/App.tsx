@@ -32,6 +32,7 @@ import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
 import { activeCount, activeTools, clearSettings, loadSettings, saveSettings, type ConnectorSettings } from './lib/connectors';
 import type { Connection, Knowledge, Run, WorkerEvent } from './lib/types';
+import { loadTheme, saveTheme, type ThemeChoice } from './lib/theme';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
 const now = () => new Date().toISOString();
@@ -61,6 +62,10 @@ export default function App() {
   // /admin is the operator dashboard, a view inside this same app; the URL is kept in step below.
   const [page, setPage] = useState<Page>(() => location.pathname === '/admin' ? 'admin' : 'workspace');
   const [adminActive, setAdminActive] = useState(false);
+  // The palette is read once, from storage, and painted by main.tsx before the first render; the
+  // state here is only what the picker shows and what its writes go through.
+  const [theme, setTheme] = useState<ThemeChoice>(() => loadTheme());
+  const chooseTheme = (choice: ThemeChoice) => { saveTheme(choice); setTheme(choice); };
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('hb-rail') !== 'expanded'; } catch { return true; } });
   const canInstall = useInstallAvailable(); const online = useOnline();
   const [connection, setConnection] = useState<Connection>(() => { const c = initialProvider(); try { const t = localStorage.getItem('hb-plan-token'); if (t) c.serverAccessToken = t; } catch { /* storage unavailable */ } return c; });
@@ -549,7 +554,7 @@ export default function App() {
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
+        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} />}
         {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />

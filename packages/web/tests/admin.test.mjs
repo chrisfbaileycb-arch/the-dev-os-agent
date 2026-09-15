@@ -84,16 +84,50 @@ test('the dashboard is off without ADMIN_TOKEN and refuses a wrong token', async
   const settings = await openSettings({ db, env: {} });
   await withServer([createAdmin({ db, env: {}, settings, log: () => {} })], async url => {
     const status = await (await call(url, '/api/admin/status')).json();
-    assert.deepEqual(status, { configured: false, authenticated: false, persistent: true });
+    // No credential yet, but a deployment with storage offers first-run setup instead of refusing.
+    assert.deepEqual(status, { configured: false, authenticated: false, persistent: true, setup: true, source: 'none', storage: true });
     assert.equal((await call(url, '/api/admin/config')).status, 503);
   });
   const env = { ADMIN_TOKEN: TOKEN };
   const s2 = await openSettings({ db, env });
   await withServer([createAdmin({ db, env, settings: s2, log: () => {} })], async url => {
+    // With an environment token the setup route is closed for good and sign-in is the only way in.
+    assert.deepEqual(await (await call(url, '/api/admin/status')).json(), { configured: true, authenticated: false, persistent: true, setup: false, source: 'environment', storage: true });
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'another-long-password' }, origin: url })).status, 403);
     assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'wrong' }, origin: url })).status, 401);
     assert.equal((await call(url, '/api/admin/config')).status, 401);
     // A cross-origin write is refused before the token is even checked.
     assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: TOKEN }, origin: 'https://elsewhere.example' })).status, 403);
+  });
+});
+
+test('a deployment with no ADMIN_TOKEN can be set up from the page, once', async () => {
+  const db = openDatabase(':memory:');
+  const settings = await openSettings({ db, env: {} });
+  const handler = createAdmin({ db, env: {}, settings, log: () => {} });
+  await withServer([handler], async url => {
+    // The password is a one-time decision: too short is refused, cross-origin is refused.
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'short' }, origin: url })).status, 400);
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password' }, origin: 'https://elsewhere.example' })).status, 403);
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password' }, origin: url })).status, 200);
+    // Setting it closes setup and opens the dashboard with the password just chosen.
+    assert.deepEqual(await (await call(url, '/api/admin/status')).json(), { configured: true, authenticated: false, persistent: true, setup: false, source: 'dashboard', storage: true });
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-second-password-choice' }, origin: url })).status, 403);
+    assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'a-long-enough-password' }, origin: url })).status, 200);
+    assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'a-second-password-choice' }, origin: url })).status, 401);
+  });
+  // The session cookie is signed with something only this server holds, not with the empty string
+  // a missing ADMIN_TOKEN would otherwise leave behind: a forged cookie must not be accepted.
+  const env = {};
+  assert.equal(validSession(makeSession(env, 1_000), env, 2_000), true, 'the pre-setup env signs with the empty string');
+  await withServer([handler], async url => {
+    assert.equal((await call(url, '/api/admin/config', { headers: { cookie: 'hb_admin=' + makeSession(env, Date.now()) } })).status, 401);
+  });
+  // A deployment with no storage cannot remember a password, so setup is not offered at all.
+  const volatile = await openSettings({ db: { allSettings: async () => [] }, env: {} });
+  await withServer([createAdmin({ db: null, env: {}, settings: volatile, log: () => {} })], async url => {
+    assert.equal((await (await call(url, '/api/admin/status')).json()).setup, false);
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password' }, origin: url })).status, 503);
   });
 });
 
@@ -102,7 +136,7 @@ test('a stored key is sealed in the database, overlays the environment, and fund
   const env = { ADMIN_TOKEN: TOKEN, GROQ_API_KEY: 'env-groq' };
   const settings = await openSettings({ db, env });
   let seenAuth = null;
-  const proxy = createProxy({ env, settings, discover: async () => {}, transport: async (url, options) => { seenAuth = options.headers.Authorization; const { Readable } = await import('node:stream'); const s = Readable.from([Buffer.from('{"data":[{"id":"m"}]}')]); s.statusCode = 200; s.headers = { 'content-type': 'application/json' }; return s; } });
+  const proxy = createProxy({ env, settings, discover: async () => {}, discoverOpenRouter: async () => {}, transport: async (url, options) => { seenAuth = options.headers.Authorization; const { Readable } = await import('node:stream'); const s = Readable.from([Buffer.from('{"data":[{"id":"m"}]}')]); s.statusCode = 200; s.headers = { 'content-type': 'application/json' }; return s; } });
   await withServer([createAdmin({ db, env, settings, log: () => {} }), proxy], async url => {
     const cookie = await login(url);
     let config = await (await call(url, '/api/admin/config', { cookie })).json();

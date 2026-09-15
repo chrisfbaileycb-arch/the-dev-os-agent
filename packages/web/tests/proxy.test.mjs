@@ -12,7 +12,7 @@ const FREE_GATEWAY_MODEL = 'deepseek/deepseek-v4-flash';
 // Discovery is stubbed and the pool is seeded, so these tests never reach a live gateway. The real
 // catalogue is exercised in tests/discovery.test.mjs, which is the only place that should be.
 setXkiroCatalog([FREE_GATEWAY_MODEL]);
-async function withProxy(options, fn) { const handler = createProxy({ discover: async () => {}, ...options }); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
+async function withProxy(options, fn) { const handler = createProxy({ discover: async () => {}, discoverOpenRouter: async () => {}, ...options }); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
 function stream(text, status = 200, type = 'text/event-stream') { const s = Readable.from([Buffer.from(text)]); s.statusCode = status; s.headers = { 'content-type': type }; return s; }
 const post = (url, body, route = '/api/chat', headers = {}) => fetch(url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
 // A keyless request, so the server funds it from its own key and the free-tier paths apply.

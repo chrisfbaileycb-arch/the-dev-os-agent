@@ -81,13 +81,37 @@ export async function discoverForProvider(provider, env, fetchImpl = fetch) {
 export function createAdmin({ db = null, env: baseEnv = process.env, settings, log = console.error, fetchImpl = fetch, now = () => Date.now() } = {}) {
   const attempts = new Map();
   const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
-  const configured = () => typeof baseEnv.ADMIN_TOKEN === 'string' && baseEnv.ADMIN_TOKEN.trim().length >= 12;
+  /**
+   * Two ways in, in this order: an ADMIN_TOKEN in the environment, or a password set from the
+   * page. The environment wins when both exist, so an operator who manages the service from
+   * Render's dashboard keeps that control and a password set in a moment of curiosity cannot
+   * lock them out. A deployment with neither is the one this file previously refused outright;
+   * it now offers first-run setup instead, because that is the only path that works when the
+   * person who owns the app has no shell and no environment editor.
+   */
+  const envToken = () => (typeof baseEnv.ADMIN_TOKEN === 'string' && baseEnv.ADMIN_TOKEN.trim().length >= 12 ? baseEnv.ADMIN_TOKEN.trim() : '');
+  const storedToken = () => Boolean(settings?.adminConfigured?.());
+  const configured = () => Boolean(envToken()) || storedToken();
+  /** A deployment with no storage cannot remember a password, so there is nothing to set up. */
+  const canSetUp = () => !envToken() && !storedToken() && Boolean(settings?.persistent);
+  const tokenSource = () => envToken() ? 'environment' : storedToken() ? 'dashboard' : 'none';
+  /**
+   * The environment the session cookie is signed with.
+   *
+   * `sessionSecret()` in this file derives its key from ADMIN_TOKEN, which does not exist on a
+   * deployment whose password lives in the database. Rather than leave sessions signed with the
+   * empty string — forgeable by anyone who reads this source — the stored scrypt hash stands in
+   * for it. The hash is unique per password and never leaves the server, so a cookie cannot be
+   * minted without it; changing the password invalidates every existing session as a bonus.
+   */
+  const sessionEnv = () => (envToken() ? baseEnv : { ...baseEnv, ADMIN_TOKEN: settings?.adminSessionSecret?.() || baseEnv.ADMIN_TOKEN });
 
   function authenticated(req) {
     if (!configured()) return false;
     const auth = req.headers.authorization;
-    if (typeof auth === 'string' && auth.startsWith('Bearer ') && equal(auth.slice(7).trim(), baseEnv.ADMIN_TOKEN.trim())) return true;
-    return validSession(cookieValue(req.headers.cookie), baseEnv, now());
+    const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    if (bearer) return (Boolean(envToken()) && equal(bearer, envToken())) || settings?.checkAdminToken?.(bearer) === true;
+    return validSession(cookieValue(req.headers.cookie), sessionEnv(), now());
   }
 
   function config() {
@@ -110,8 +134,25 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, l
     const path = new URL(req.url, 'http://admin').pathname;
     if (!path.startsWith('/api/admin/')) return false;
     try {
-      if (path === '/api/admin/status' && req.method === 'GET') { json(res, 200, { configured: configured(), authenticated: authenticated(req), persistent: Boolean(settings?.persistent) }); return true; }
-      if (!configured()) throw new HttpError(503, 'The admin dashboard is off. Set ADMIN_TOKEN (at least 12 characters) in the hosting environment and restart.');
+      if (path === '/api/admin/status' && req.method === 'GET') { json(res, 200, { configured: configured(), authenticated: authenticated(req), persistent: Boolean(settings?.persistent), setup: canSetUp(), source: tokenSource(), storage: Boolean(settings?.persistent) }); return true; }
+      // First-run setup. This is the one write that happens before any credential exists, so the
+      // Origin check below is the whole of its protection: a page on another origin cannot call it
+      // from a victim's browser. It also only works once — the moment a password (or an
+      // environment token) exists, `canSetUp()` is false and this answers 403 forever after.
+      if (path === '/api/admin/setup' && req.method === 'POST') {
+        checkOrigin(req, baseEnv);
+        if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
+        if (envToken() || storedToken()) throw new HttpError(403, 'A dashboard password is already set. Sign in instead.');
+        if (!settings?.persistent) throw new HttpError(503, 'This deployment has no settings storage, so a password cannot be saved. Set ADMIN_TOKEN in the hosting environment instead.');
+        const body = await readBody(req, 8_192);
+        const token = typeof body.token === 'string' ? body.token.trim() : '';
+        if (token.length < 12) throw new HttpError(400, 'Choose a password of at least 12 characters.');
+        await settings.setAdminToken(token);
+        log('[admin] dashboard password set from the setup form');
+        res.setHeader('Set-Cookie', cookieHeader(req, makeSession(sessionEnv(), now()), SESSION_MS / 1000));
+        json(res, 200, { ok: true }); return true;
+      }
+      if (!configured()) throw new HttpError(503, 'The admin dashboard is off. Set ADMIN_TOKEN in the hosting environment and restart.');
       if (!['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) throw new HttpError(405, 'Method not allowed.');
       if (req.method !== 'GET') { checkOrigin(req, baseEnv); if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new HttpError(415, 'Use application/json.'); }
 
@@ -121,15 +162,33 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, l
         const window = attempts.get(ip) ?? { start: at, count: 0 }; window.count++; attempts.set(ip, window);
         if (window.count > LOGIN_MAX) throw new HttpError(429, 'Too many sign-in attempts. Wait fifteen minutes.');
         const body = await readBody(req, 8_192);
-        if (!equal(typeof body.token === 'string' ? body.token.trim() : '', baseEnv.ADMIN_TOKEN.trim())) throw new HttpError(401, 'That is not the admin token.');
+        const typed = typeof body.token === 'string' ? body.token.trim() : '';
+        const ok = (Boolean(envToken()) && equal(typed, envToken())) || settings?.checkAdminToken?.(typed) === true;
+        if (!ok) throw new HttpError(401, 'That is not the admin token.');
         attempts.delete(ip);
-        res.setHeader('Set-Cookie', cookieHeader(req, makeSession(baseEnv, at), SESSION_MS / 1000));
+        res.setHeader('Set-Cookie', cookieHeader(req, makeSession(sessionEnv(), at), SESSION_MS / 1000));
         json(res, 200, { ok: true }); return true;
       }
       if (path === '/api/admin/logout' && req.method === 'POST') { res.setHeader('Set-Cookie', cookieHeader(req, '', 0)); json(res, 200, { ok: true }); return true; }
       if (!authenticated(req)) throw new HttpError(401, 'Sign in with the admin token.');
 
       if (path === '/api/admin/config' && req.method === 'GET') { json(res, 200, config()); return true; }
+      /**
+       * Change the dashboard password. Only for a password that lives here: when ADMIN_TOKEN is
+       * set in the environment the credential belongs to the operator's hosting dashboard, and
+       * silently shadowing it from the app would make the two disagree about who holds the keys.
+       */
+      if (path === '/api/admin/password' && req.method === 'PUT') {
+        if (envToken()) throw new HttpError(403, 'This deployment signs in with ADMIN_TOKEN from the environment. Change it there.');
+        const body = await readBody(req, 8_192);
+        const next = typeof body.token === 'string' ? body.token.trim() : '';
+        if (next.length < 12) throw new HttpError(400, 'Choose a password of at least 12 characters.');
+        await settings.setAdminToken(next);
+        log('[admin] dashboard password changed');
+        // Re-issue the cookie, because it was signed with the previous password's hash.
+        res.setHeader('Set-Cookie', cookieHeader(req, makeSession(sessionEnv(), now()), SESSION_MS / 1000));
+        json(res, 200, { ok: true }); return true;
+      }
       if (path === '/api/admin/keys' && req.method === 'PUT') {
         const body = await readBody(req, 16_384);
         const provider = typeof body.provider === 'string' ? body.provider : '';

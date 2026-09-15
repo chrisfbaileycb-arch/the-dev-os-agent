@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, CircleAlert, Code2, Copy, Eye, Github, LoaderCircle, PanelRightClose, PanelRightOpen, RotateCw, Server, Settings2 } from 'lucide-react';
+import { Check, CircleAlert, Code2, Copy, Eye, LoaderCircle, PanelRightClose, PanelRightOpen, RotateCw, Server, Settings2 } from 'lucide-react';
+import { GithubMark } from './GithubMark';
 import { parseProject, type Project, type ProjectFile } from '../lib/project';
 import { buildProject, type BuildResult } from '../lib/bundle/client';
 import { highlightCode } from '../lib/highlight';
@@ -51,6 +52,25 @@ function SandboxFrame({ html, refresh }: { html: string; refresh: number }) {
   />;
 }
 
+/** What the badge above the toolbar can honestly say about the preview. */
+type PreviewStatus = 'idle' | 'building' | 'live' | 'failed';
+
+/**
+ * The state of the preview, named for what it actually is.
+ *
+ * This used to read "Dev Server: Running / Ready" while nothing of the kind existed: there is no
+ * server hosting the generated app. `buildProject` compiles the project in a worker and the result
+ * is handed to a sandboxed iframe, so the honest words are about the build and the frame. Calling
+ * it a server made two failures hard to read — a build that never finished looked like a server
+ * that was "Ready", and a preview that did not paint looked like a server that would not start.
+ */
+function statusLabel(status: PreviewStatus): { text: string; running: boolean } {
+  if (status === 'building') return { text: 'Building…', running: false };
+  if (status === 'live') return { text: 'Preview live', running: true };
+  if (status === 'failed') return { text: 'Build failed', running: false };
+  return { text: 'No preview yet', running: false };
+}
+
 export default function OutputPanel(p: OutputPanelProps) {
   const [view, setView] = useState<View>('preview');
   const [project, setProject] = useState<Project | null>(null);
@@ -60,7 +80,6 @@ export default function OutputPanel(p: OutputPanelProps) {
   const [refresh, setRefresh] = useState(0);
   const [pushOpen, setPushOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [devRunning, setDevRunning] = useState(false);
   const [editDirty, setEditDirty] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const seqRef = useRef(0);
@@ -71,11 +90,10 @@ export default function OutputPanel(p: OutputPanelProps) {
   const compile = (next: Project, immediate = false) => {
     abortRef.current?.abort();
     const controller = new AbortController(); abortRef.current = controller;
-    setBuild({ kind: 'building' }); setDevRunning(false);
+    setBuild({ kind: 'building' });
     const run = () => void buildProject(next, controller.signal).then(result => {
       if (controller.signal.aborted) return;
       setBuild(buildState(result, ++seqRef.current));
-      if (result.ok) setDevRunning(true);
     }).catch(error => {
       if (!controller.signal.aborted) setBuild({ kind: 'error', errors: [error instanceof Error ? error.message : 'The build failed.'] });
     });
@@ -90,7 +108,7 @@ export default function OutputPanel(p: OutputPanelProps) {
     setView('preview');
     setEditDirty(false);
     abortRef.current?.abort();
-    if (!next) { setBuild({ kind: 'idle' }); setDevRunning(false); return; }
+    if (!next) { setBuild({ kind: 'idle' }); return; }
     compile(next, true);
     return () => { abortRef.current?.abort(); if (editTimer.current) clearTimeout(editTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,7 +134,7 @@ export default function OutputPanel(p: OutputPanelProps) {
 
   function rebuild() {
     if (!project) return;
-    setDevRunning(false); setRefresh(n => n + 1); compile(project, true);
+    setRefresh(n => n + 1); compile(project, true);
   }
 
   async function copyCode() {
@@ -125,6 +143,10 @@ export default function OutputPanel(p: OutputPanelProps) {
   }
 
   const isBuilding = build.kind === 'building';
+  // The badge tracks the build state, which is the only state there is: a compiled result or a
+  // failure, never a server that might or might not be listening.
+  const previewStatus: PreviewStatus = isBuilding || p.streaming ? 'building' : build.kind === 'ready' ? 'live' : build.kind === 'error' ? 'failed' : 'idle';
+  const devStatus = statusLabel(previewStatus);
   const codeMarkup = highlightCode(activeCode);
   /** Every route back to the running app: re-mount the frame and restore the canonical split. */
   const showPreview = () => { setView('preview'); p.onPreviewFocus(); setRefresh(n => n + 1); };
@@ -138,9 +160,9 @@ export default function OutputPanel(p: OutputPanelProps) {
         <button role="tab" aria-selected={view === 'edit'} className={view === 'edit' ? 'developer-tab active' : 'developer-tab'} onClick={() => setView('edit')}><Settings2 size={12} />Edit{editDirty && <span className="edit-dot" />}</button>
       </nav>
       <div className="toolbar-actions">
-        <span className={devRunning ? 'dev-status running' : 'dev-status'}><Server size={12} />Dev Server: {devRunning ? 'Running' : 'Ready'}</span>
+        <span className={devStatus.running ? 'dev-status running' : 'dev-status'} title="The generated app is compiled in this browser and rendered in a sandboxed frame; nothing is served from a dev server."><Server size={12} />{devStatus.text}</span>
         <button className="toolbar-button" onClick={rebuild} disabled={!project || isBuilding} title="Restart the generated app"><RotateCw size={12} />Restart</button>
-        {project && <button className="toolbar-button" onClick={() => setPushOpen(true)} title="Save the current files to GitHub"><Github size={12} />GitHub</button>}
+        {project && <button className="toolbar-button" onClick={() => setPushOpen(true)} title="Save the current files to GitHub"><GithubMark size={12} />GitHub</button>}
         <button className="icon-button" aria-label="Close output panel" onClick={p.close}><PanelRightClose size={14} /></button>
       </div>
     </header>
@@ -150,7 +172,7 @@ export default function OutputPanel(p: OutputPanelProps) {
         {isBuilding && <div className="preview-empty"><LoaderCircle size={20} className="spin" /><span>{p.streaming ? 'Receiving executable code…' : 'Compiling the latest app…'}</span></div>}
         {p.streaming && <span className="streaming-note">Live code stream · preview refreshes when complete</span>}
         {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
-        {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} /><button className="rerun-button" onClick={() => { setDevRunning(true); setRefresh(n => n + 1); }}><RotateCw size={13} />Refresh / Rerun</button></>}
+        {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} /><button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Refresh / Rerun</button></>}
       </div>}
       {project && view === 'code' && <div className="output-code">
         <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>

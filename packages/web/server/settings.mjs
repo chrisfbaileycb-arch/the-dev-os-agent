@@ -1,3 +1,4 @@
+import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { decryptAny, encrypt, isSealed } from './secrets.mjs';
 import { PROVIDER_KEY_VARS, setAdminTiers } from './freetier.mjs';
 
@@ -31,6 +32,10 @@ export const PROVIDER_META = {
   aihubmix: { name: 'AIHubMix', console: 'https://aihubmix.com' },
   huggingface: { name: 'Hugging Face', console: 'https://huggingface.co/settings/tokens' },
   'cheaper-inference': { name: 'Managed inference', console: 'https://cheaperinference.com' },
+  // OmniRoute is self-hosted, so there is no vendor console page to link to; the operator's own
+  // dashboard is wherever they installed it, which only they know.
+  omniroute: { name: 'OmniRoute', console: null },
+  custom: { name: 'Custom endpoint', console: null },
 };
 
 /**
@@ -51,7 +56,39 @@ export const TUNABLES = {
 const KEY_PREFIX = 'key:';
 const TUNABLE_PREFIX = 'tunable:';
 const TIERS_KEY = 'tiers';
+const ADMIN_KEY = 'admin-token';
+const SEAL_KEY = 'settings-seal';
 const HEADER_SAFE = /^[\x20-\x7e]*$/;
+
+/**
+ * The admin password, stored as a scrypt hash so the database never holds something usable.
+ *
+ * The reason this exists: the dashboard used to be reachable only by setting ADMIN_TOKEN in the
+ * hosting environment, which means that on a managed platform the person who owns the app has to
+ * find the Render/Fly/Heroku dashboard and edit an environment variable before they can enter a
+ * single provider key. On a goal of "let me put my OpenRouter key in", that is a wall, and it is
+ * the wall the user hit: "there is no user admin page for me to enter the backend API keys".
+ *
+ * So the token is now set *from the page*, once, on a deployment that has no token yet, and the
+ * environment variable becomes an override for operators who prefer it (and for automation). The
+ * stored form is scrypt(token, salt) with the salt alongside, because a plaintext admin password
+ * in a settings row is a worse secret than the provider keys this dashboard is protecting.
+ */
+const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32 };
+export function hashAdminToken(token, salt = randomBytes(16).toString('hex')) {
+  const hash = scryptSync(token, salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p }).toString('hex');
+  return `scrypt$${salt}$${hash}`;
+}
+export function verifyAdminToken(token, stored) {
+  if (typeof token !== 'string' || typeof stored !== 'string') return false;
+  const [scheme, salt, hash] = stored.split('$');
+  if (scheme !== 'scrypt' || !salt || !hash || !/^[0-9a-f]+$/.test(hash)) return false;
+  let candidate;
+  try { candidate = scryptSync(token, salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p }); }
+  catch { return false; }
+  const expected = Buffer.from(hash, 'hex');
+  return expected.length === candidate.length && timingSafeEqual(expected, candidate);
+}
 
 /** The secrets that may seal or open stored keys, most preferred first. */
 export function sealingSecrets(env = process.env) {
@@ -102,6 +139,26 @@ export function cleanTunable(name, value) {
 /** The last four characters, which is enough to tell two keys apart and not enough to use one. */
 export const hint = value => typeof value === 'string' && value.length >= 8 ? `…${value.slice(-4)}` : '';
 
+/**
+ * A dashboard key field may hold several keys, one per line.
+ *
+ * The free tier is funded from the operator's own accounts, so the thing that actually bounds how
+ * much a deployment can give away is how many accounts it has. One field per provider that
+ * accepts a stack of keys is the difference between "one Groq account's daily cap" and "as many as
+ * the operator is willing to add", and it needs no extra UI beyond a textarea: the free router
+ * cycles the pool, so a key that is rate-limited rolls over to the next instead of failing.
+ *
+ * Splitting on newlines (and commas, because people paste comma-separated lists) is deliberately
+ * conservative: anything with a stray space inside is kept as typed, since header validation will
+ * reject it later with a message naming the variable.
+ */
+export function keyPool(value) {
+  if (typeof value !== 'string') return [];
+  return [...new Set(value.split(/[\r\n,]+/).map(k => k.trim()).filter(Boolean))];
+}
+/** The single key everything downstream reads, so nothing outside the router needs to know. */
+export const firstKey = value => keyPool(value)[0] ?? (typeof value === 'string' ? value.trim() : '');
+
 export async function openSettings({ db, env = process.env, log = console.error } = {}) {
   const has = method => Boolean(db && typeof db[method] === 'function');
   // A database without a settings table (an older adapter, or none at all) degrades to an empty
@@ -111,6 +168,8 @@ export async function openSettings({ db, env = process.env, log = console.error 
   let overlayCache = {};
   let unreadable = new Set();
   let tiers = cleanTiers(null);
+  let adminHash = '';
+  let generatedSecret = '';
 
   async function reload() {
     rows = new Map();
@@ -121,8 +180,23 @@ export async function openSettings({ db, env = process.env, log = console.error 
     rebuild();
   }
 
+  /**
+   * Every secret that may open a stored key: the operator's own first, then one generated here.
+   *
+   * The generated last resort is what makes first-run setup finish. Without it, a deployment with
+   * no SETTINGS_SECRET, no SESSION_SECRET and no ADMIN_TOKEN can open the dashboard and set a
+   * password, and then every key it saves fails with "set ADMIN_TOKEN so stored keys can be
+   * encrypted" — the same dead end the setup path was introduced to remove. So a random secret is
+   * minted once, stored beside the values it protects, and added to the end of the candidate list.
+   * It is weaker than an operator-supplied secret (it lives where the ciphertext lives, so a
+   * database leak exposes both) and that tradeoff is stated in the dashboard rather than hidden.
+   */
+  function secrets() {
+    return [...sealingSecrets(env), generatedSecret].filter(v => typeof v === 'string' && v.length >= 8);
+  }
+
   function rebuild() {
-    const secrets = sealingSecrets(env);
+    const candidates = secrets();
     const next = {};
     unreadable = new Set();
     for (const [key, stored] of rows) {
@@ -131,14 +205,21 @@ export async function openSettings({ db, env = process.env, log = console.error 
       else if (key.startsWith(TUNABLE_PREFIX)) name = key.slice(TUNABLE_PREFIX.length);
       if (!name) continue;
       if (isSealed(stored)) {
-        const plain = decryptAny(stored, secrets);
+        const plain = decryptAny(stored, candidates);
         if (plain === null) { unreadable.add(name); continue; }
-        next[name] = plain;
+        // A key cell may hold a pool of keys, one per line, so a deployment can spread free-tier
+        // traffic across several accounts. Downstream code reads one key from `name`, so the first
+        // is published there and the whole pool under `name + '_POOL'` for the router that cycles.
+        next[name] = firstKey(plain);
+        const pool = keyPool(plain);
+        if (pool.length > 1) next[`${name}_POOL`] = pool;
       } else next[name] = stored;
     }
     overlayCache = next;
     tiers = cleanTiers(safeJson(rows.get(TIERS_KEY)));
     setAdminTiers(tiers);
+    adminHash = rows.get(ADMIN_KEY) ?? '';
+    generatedSecret = rows.get(SEAL_KEY) ?? '';
   }
 
   async function write(key, value, sealed) {
@@ -147,8 +228,14 @@ export async function openSettings({ db, env = process.env, log = console.error 
     else {
       let stored = value;
       if (sealed) {
-        const [secret] = sealingSecrets(env);
-        if (!secret) throw new Error('Set ADMIN_TOKEN (or SETTINGS_SECRET) so stored keys can be encrypted.');
+        // The operator's secret when there is one, otherwise a generated one minted on first use
+        // and kept in the same table. See `secrets()` for why the weaker option exists at all.
+        if (!sealingSecrets(env).length && !generatedSecret) {
+          generatedSecret = randomBytes(32).toString('hex');
+          await db.setSetting(SEAL_KEY, generatedSecret); rows.set(SEAL_KEY, generatedSecret);
+        }
+        const [secret] = secrets();
+        if (!secret) throw new Error('No secret is available to encrypt stored keys with.');
         stored = encrypt(value, secret);
       }
       await db.setSetting(key, stored);
@@ -170,8 +257,13 @@ export async function openSettings({ db, env = process.env, log = console.error 
     unreadable: () => [...unreadable],
     async setKey(provider, value) {
       if (!Object.hasOwn(PROVIDER_KEY_VARS, provider)) throw new Error('Unknown provider.');
-      const text = cleanTunable('SERVER_CREDIT_ACCESS_TOKEN', value); // same shape rule: header-safe text
-      await write(KEY_PREFIX + provider, text, true);
+      // A field may hold a pool (see keyPool), so the header-safe rule is applied per key rather
+      // than to the whole block: one pasted key with a stray newline should name itself, not
+      // reject the other four alongside it.
+      const keys = keyPool(value);
+      const bad = keys.filter(k => !HEADER_SAFE.test(k));
+      if (bad.length) throw new Error(`Key ${keys.indexOf(bad[0]) + 1} contains a character that cannot go in a request header.`);
+      await write(KEY_PREFIX + provider, keys.join('\n'), true);
     },
     async deleteKey(provider) {
       if (!Object.hasOwn(PROVIDER_KEY_VARS, provider)) throw new Error('Unknown provider.');
@@ -187,6 +279,27 @@ export async function openSettings({ db, env = process.env, log = console.error 
       return this.tiers();
     },
     /**
+     * Whether a dashboard password has been set from the page (not from the environment). The
+     * environment variable is checked by admin.mjs, which owns that precedence rule.
+     */
+    adminConfigured: () => Boolean(adminHash),
+    /**
+     * What the session cookie is signed with when the password lives here rather than in the
+     * environment: the stored scrypt hash. It is unique per password, never leaves the server, and
+     * cannot be guessed from the source, which is what makes the cookie unforgeable. See
+     * `sessionEnv()` in admin.mjs. Empty when no password is stored, never the raw password.
+     */
+    adminSessionSecret: () => adminHash,
+    /** Set (or replace) the dashboard password. Stored as a scrypt hash, never in the clear. */
+    async setAdminToken(token) {
+      const text = String(token ?? '').trim();
+      if (text.length < 12) throw new Error('Choose a dashboard password of at least 12 characters.');
+      if (!HEADER_SAFE.test(text)) throw new Error('The password contains a character that cannot go in a request header.');
+      await write(ADMIN_KEY, hashAdminToken(text), false);
+    },
+    /** Check a password typed at the sign-in form against the stored hash. */
+    checkAdminToken: token => verifyAdminToken(token, adminHash),
+    /**
      * What the dashboard shows for each provider: where the effective key comes from and a hint
      * of which key it is. The key itself never leaves the server.
      */
@@ -194,9 +307,14 @@ export async function openSettings({ db, env = process.env, log = console.error 
       const effective = { ...base, ...overlayCache };
       return Object.entries(PROVIDER_KEY_VARS).map(([provider, name]) => {
         const stored = rows.has(KEY_PREFIX + provider);
+        const pool = Array.isArray(effective[`${name}_POOL`]) ? effective[`${name}_POOL`] : [];
         const value = typeof effective[name] === 'string' ? effective[name].trim() : '';
         const source = stored && overlayCache[name] ? 'dashboard' : value ? 'environment' : 'none';
-        return { provider, name: PROVIDER_META[provider]?.name ?? provider, env: name, console: PROVIDER_META[provider]?.console ?? null, source, hint: value ? hint(value) : '', unreadable: unreadable.has(name) };
+        // A pool of one reads as a plain key; more than one says how many, so an operator can see
+        // the rotation depth they configured without the values ever leaving the server.
+        const count = pool.length || (value ? 1 : 0);
+        const shape = count > 1 ? `${count} keys` : value ? hint(value) : '';
+        return { provider, name: PROVIDER_META[provider]?.name ?? provider, env: name, console: PROVIDER_META[provider]?.console ?? null, source, hint: shape, count, unreadable: unreadable.has(name) };
       });
     },
     tunableStatus(base = env) {

@@ -8,9 +8,9 @@ const items: { id: Page; label: string; icon: typeof MessageSquare }[] = [
   { id: 'pricing', label: 'Plans', icon: CreditCard },
   { id: 'settings', label: 'Settings and model hub', icon: Settings2 },
 ];
-/** The admin entry appears only once the operator has signed in to the dashboard, or is looking at it. */
+/** The admin entry is always shown: it is how the owner reaches the setup form on a fresh deployment. */
 export default function Rail({ page, setPage, collapsed, toggle, badge, authUser, googleEnabled, admin }: { page: Page; setPage: (p: Page) => void; collapsed: boolean; toggle: () => void; badge: Partial<Record<Page, number>>; authUser?: AuthUser | null; googleEnabled?: boolean; admin?: boolean }) {
-  const visible = admin || page === 'admin' ? [...items, { id: 'admin' as Page, label: 'Admin dashboard', icon: ShieldCheck }] : items;
+  const visible = [...items, { id: 'admin' as Page, label: 'Admin dashboard', icon: ShieldCheck }];
   return <aside className={collapsed ? 'rail collapsed' : 'rail'} aria-label="Primary">
     <button className="rail-brand" onClick={() => setPage('workspace')} aria-label="Hey Buddy home"><img src="icons/icon-192.png" alt="" width={26} height={26} /><span>Hey Buddy</span></button>
     <nav>{visible.map(n => <button key={n.id} className={page === n.id ? 'rail-item active' : 'rail-item'} title={collapsed ? n.label : undefined} aria-current={page === n.id ? 'page' : undefined} onClick={() => setPage(n.id)}><n.icon size={17} strokeWidth={1.75} /><span>{n.label}</span>{badge[n.id] ? <em className="rail-badge">{badge[n.id]}</em> : null}</button>)}</nav>
