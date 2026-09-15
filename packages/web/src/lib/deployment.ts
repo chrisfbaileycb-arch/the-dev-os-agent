@@ -30,7 +30,15 @@ export interface GatewayModel { id: string; label: string; tier: string; free: b
 /** Whether discovery is working, so a deployment with an empty free tier can say why. */
 export interface GatewayCatalog { url: string | null; models: GatewayModel[]; discovered: boolean; count: number; free: number; at: string | null; error: string | null; }
 
-export interface Deployment { free: FreeTier; billing: Billing; gateway: string | null; gatewayCatalog: GatewayCatalog; ollamaBridge: string | null; reachable: boolean; }
+/**
+ * The plan tier: models the operator listed in the admin dashboard for subscribers, run on the
+ * deployment's own keys and unlocked by the plan access token. `configured` says the operator
+ * drew the list up; `enabled` says a token exists for someone to hold, so the tier is open.
+ */
+export interface PaidTier { enabled: boolean; configured: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; }
+export const emptyPaidTier: PaidTier = { enabled: false, configured: false, models: [], providers: {}, labels: {} };
+
+export interface Deployment { free: FreeTier; paid: PaidTier; billing: Billing; gateway: string | null; gatewayCatalog: GatewayCatalog; ollamaBridge: string | null; reachable: boolean; }
 
 /**
  * What a visitor sees whenever the zero-config tier cannot serve them: keys unset, provider
@@ -49,7 +57,8 @@ export const isFreeTierWarming = (code?: string): boolean => Boolean(code && WAR
 export const emptyGatewayCatalog: GatewayCatalog = { url: null, models: [], discovered: false, count: 0, free: 0, at: null, error: null };
 
 export const offlineDeployment: Deployment = {
-  free: { enabled: false, models: [], providers: {}, monthlyCredits: DEFAULT_FREE_POOL, perHour: 0 },
+  free: { enabled: false, models: [], providers: {}, labels: {}, monthlyCredits: DEFAULT_FREE_POOL, perHour: 0 },
+  paid: emptyPaidTier,
   billing: { enabled: false, plans: [] },
   gateway: null,
   gatewayCatalog: emptyGatewayCatalog,
@@ -87,9 +96,23 @@ function gatewayCatalogFrom(raw: unknown): GatewayCatalog {
   };
 }
 
-/** Gateway labels by id, so the dock and the status bar can name a discovered model. */
-export function labelsFrom(catalog: GatewayCatalog): Record<string, string> {
-  return Object.fromEntries(catalog.models.map(m => [m.id, m.label]));
+/** Labels by id from every source the deployment reports, so the dock and the status bar can name a model. */
+export function labelsFrom(catalog: GatewayCatalog, ...more: Record<string, string>[]): Record<string, string> {
+  return Object.assign(Object.fromEntries(catalog.models.map(m => [m.id, m.label])), ...more);
+}
+
+const stringMap = (raw: unknown): Record<string, string> => providerMap(raw);
+
+function paidFrom(raw: unknown): PaidTier {
+  const source = (raw ?? {}) as Partial<PaidTier>;
+  const models = Array.isArray(source.models) ? source.models.filter((m): m is string => typeof m === 'string' && m.length > 0 && m.length <= 200).slice(0, 500) : [];
+  return {
+    enabled: source.enabled === true && models.length > 0,
+    configured: source.configured === true,
+    models,
+    providers: stringMap(source.providers),
+    labels: stringMap(source.labels),
+  };
 }
 
 /**
@@ -171,18 +194,20 @@ async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): 
   try {
     const response = await fetch('/api/providers', { credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(timeoutMs)]) });
     if (!response.ok) return offlineDeployment;
-    const body = await response.json() as { free?: Partial<FreeTier>; billing?: unknown; gateway?: unknown; gatewayCatalog?: unknown; ollamaBridge?: string | null };
+    const body = await response.json() as { free?: Partial<FreeTier>; paid?: unknown; billing?: unknown; gateway?: unknown; gatewayCatalog?: unknown; ollamaBridge?: string | null };
     const free = body.free ?? {};
     return {
       reachable: true,
       billing: billingFrom(body.billing),
       gateway: typeof body.gateway === 'string' && /^https:\/\//.test(body.gateway) ? body.gateway : null,
       gatewayCatalog: gatewayCatalogFrom(body.gatewayCatalog),
+      paid: paidFrom(body.paid),
       ollamaBridge: typeof body.ollamaBridge === 'string' ? body.ollamaBridge : null,
       free: {
         enabled: free.enabled === true && Array.isArray(free.models) && free.models.length > 0,
         models: Array.isArray(free.models) ? free.models.filter((m): m is string => typeof m === 'string') : [],
         providers: providerMap(free.providers),
+        labels: providerMap(free.labels),
         monthlyCredits: Number.isFinite(free.monthlyCredits) ? Number(free.monthlyCredits) : DEFAULT_FREE_POOL,
         perHour: Number.isFinite(free.perHour) ? Number(free.perHour) : 0,
       },

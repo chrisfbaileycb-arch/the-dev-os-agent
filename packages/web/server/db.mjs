@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS runs (workspace_id TEXT NOT NULL, id TEXT NOT NULL, s
 CREATE TABLE IF NOT EXISTS ledger (workspace_id TEXT NOT NULL, id TEXT NOT NULL, at TEXT NOT NULL, session_id TEXT, model TEXT NOT NULL, tier TEXT NOT NULL, mode TEXT NOT NULL, tokens INTEGER NOT NULL, credits REAL NOT NULL, PRIMARY KEY (workspace_id, id));
 CREATE INDEX IF NOT EXISTS ledger_workspace_at ON ledger (workspace_id, at);
 CREATE INDEX IF NOT EXISTS sessions_workspace_updated ON sessions (workspace_id, updated_at);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
 `;
 
 export function openDatabase(file = ':memory:') {
@@ -30,6 +31,10 @@ export function openDatabase(file = ':memory:') {
     counts: db.prepare('SELECT (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?) AS sessions, (SELECT COUNT(*) FROM runs WHERE workspace_id = ?) AS runs'),
     latest: db.prepare('SELECT id, at, session_id, model, tier, mode, tokens, credits FROM ledger WHERE workspace_id = ? AND mode = ? ORDER BY at DESC LIMIT 1'),
     clear: ['sessions', 'runs', 'ledger'].map(t => db.prepare(`DELETE FROM ${t} WHERE workspace_id = ?`)),
+    getSetting: db.prepare('SELECT value FROM settings WHERE key = ?'),
+    setSetting: db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'),
+    deleteSetting: db.prepare('DELETE FROM settings WHERE key = ?'),
+    allSettings: db.prepare('SELECT key, value FROM settings ORDER BY key'),
   };
   const parse = rows => rows.map(r => { try { return JSON.parse(r.body); } catch { return null; } }).filter(Boolean);
   return {
@@ -50,6 +55,11 @@ export function openDatabase(file = ':memory:') {
     /** The newest server-written row for one payment mode, so the client can show it without a full pull. */
     latestEntry(workspace, mode = 'free') { const e = statements.latest.get(workspace, mode); return e ? { id: e.id, at: e.at, sessionId: e.session_id ?? undefined, model: e.model, tier: e.tier, mode: e.mode, tokens: e.tokens, credits: e.credits } : null; },
     clear(workspace) { for (const s of statements.clear) s.run(workspace); },
+    // Deployment settings entered in the admin dashboard: provider keys (sealed), tier lists, knobs.
+    getSetting(key) { return statements.getSetting.get(key)?.value ?? null; },
+    setSetting(key, value) { statements.setSetting.run(key, value, new Date().toISOString()); },
+    deleteSetting(key) { statements.deleteSetting.run(key); },
+    allSettings() { return statements.allSettings.all(); },
     /** The underlying handle, so server/jobs.mjs can own its own table in the same file. */
     raw() { return db; },
     close() { db.close(); },

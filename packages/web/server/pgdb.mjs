@@ -16,6 +16,8 @@ const SCHEMA = [
   // User accounts: Google OAuth identity tied to a canonical workspace_id.
   `CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, google_id TEXT UNIQUE NOT NULL, email TEXT NOT NULL, name TEXT NOT NULL, picture TEXT NOT NULL, workspace_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS users_google_id ON users (google_id)`,
+  // Deployment settings entered in the admin dashboard: provider keys (sealed), tier lists, knobs.
+  `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`,
 ];
 
 export async function openPostgresDb(connectionString) {
@@ -107,6 +109,18 @@ export async function openPostgresDb(connectionString) {
     async getUserById(id) {
       const { rows } = await pool.query('SELECT id, google_id, email, name, picture, workspace_id, created_at, updated_at FROM users WHERE id=$1', [id]);
       return rows[0] ?? null;
+    },
+    async getSetting(key) {
+      const { rows } = await pool.query('SELECT value FROM settings WHERE key=$1', [key]);
+      return rows[0]?.value ?? null;
+    },
+    async setSetting(key, value) {
+      await pool.query('INSERT INTO settings (key,value,updated_at) VALUES ($1,$2,$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at', [key, value, new Date().toISOString()]);
+    },
+    async deleteSetting(key) { await pool.query('DELETE FROM settings WHERE key=$1', [key]); },
+    async allSettings() {
+      const { rows } = await pool.query('SELECT key, value FROM settings ORDER BY key');
+      return rows;
     },
     close() { return pool.end(); },
   };

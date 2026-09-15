@@ -10,6 +10,7 @@ import Connectors, { type ConnectorTab } from './ui/Connectors';
 import { usePaneResize } from './ui/SplitPane';
 import OutputPanel from './ui/OutputPanel';
 import Pricing from './ui/Pricing';
+import Admin from './ui/Admin';
 import StatusBar, { type Stats } from './ui/StatusBar';
 import { modelLabel, payLabel } from './ui/ModelPicker';
 import { iconFor } from './ui/icons';
@@ -18,9 +19,10 @@ import { estimateTokens, findModel, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_
 import { DEFAULT_SPLIT_PERCENT, clampSplit, normalizeStoredSplit } from './lib/split';
 import { retrieve } from './lib/memory';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
+import { clearProviderStorage, defaultConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
-import { defaultModel } from './lib/modelChoices';
+import { defaultModel, modelChoices, type ModelChoice } from './lib/modelChoices';
+import { clearDiscovered, isFresh, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
 import { defaultPersonaId, personaById, workflows, type Persona } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
 import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
@@ -56,10 +58,12 @@ async function readTextFile(file: File): Promise<Attached> {
 }
 
 export default function App() {
-  const [page, setPage] = useState<Page>('workspace');
+  // /admin is the operator dashboard, a view inside this same app; the URL is kept in step below.
+  const [page, setPage] = useState<Page>(() => location.pathname === '/admin' ? 'admin' : 'workspace');
+  const [adminActive, setAdminActive] = useState(false);
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('hb-rail') !== 'expanded'; } catch { return true; } });
   const canInstall = useInstallAvailable(); const online = useOnline();
-  const [connection, setConnection] = useState<Connection>(initialProvider);
+  const [connection, setConnection] = useState<Connection>(() => { const c = initialProvider(); try { const t = localStorage.getItem('hb-plan-token'); if (t) c.serverAccessToken = t; } catch { /* storage unavailable */ } return c; });
   /**
    * One saved key per provider, owned here rather than inside Settings.
    *
@@ -70,7 +74,11 @@ export default function App() {
   const [keys, setKeys] = useState<Keyring>(loadKeyring);
   const [deployment, setDeployment] = useState<Deployment>(offlineDeployment);
   const [backgroundWorker, setBackgroundWorker] = useState(false);
-  const [models, setModels] = useState<string[]>([]); const [checking, setChecking] = useState(false);
+  /** What each connected key reaches, read live from its provider and shared by the dock and Settings. */
+  const [discovered, setDiscovered] = useState<Discovered>(loadDiscovered);
+  const [discovering, setDiscovering] = useState<Set<Provider>>(() => new Set());
+  /** A paid-plan model the visitor picked without a plan token. */
+  const [planPrompt, setPlanPrompt] = useState<ModelChoice | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]); const sessionsRef = useRef<Session[]>([]);
   const [runs, setRuns] = useState<Run[]>([]); const runsRef = useRef<Run[]>([]);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]); const ledgerRef = useRef<LedgerEntry[]>([]);
@@ -124,11 +132,13 @@ export default function App() {
   const persona = personaById(active?.persona ?? personaId);
   const inference = connection.inference ?? 'byok';
   // Gateway labels, so a discovered id reads as a model name everywhere it is shown.
-  const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog), [deployment.gatewayCatalog]);
+  const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, ...Object.values(discovered).map(d => Object.fromEntries((d?.models ?? []).map(m => [m.id, m.label])))), [deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, discovered]);
   const label = modelLabel(connection.model, labels);
   const tierLabel = tierFor(connection.model || '');
   // What can be paid for right now, from the keyring rather than from the active connection alone.
-  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: inference === 'credits' && Boolean(connection.serverAccessToken?.trim()) }), [deployment.free, keys, connection.token, connection.provider, connection.serverAccessToken, inference]);
+  // A plan token in hand opens the plan tier whatever mode is current: picking a plan model is
+  // what switches the mode, so the token cannot wait on a mode it is the only route into.
+  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: Boolean(connection.serverAccessToken?.trim()) }), [deployment.free, keys, connection.token, connection.provider, connection.serverAccessToken]);
   const keyed = useMemo(() => keyedProviders(reach), [reach]);
   const connectorCount = activeCount(settings, mcp);
   // The credit meter tracks whichever budget the current run actually draws from.
@@ -222,10 +232,12 @@ export default function App() {
    * keyed request goes to whatever endpoint is set here, and a gateway model sent to OpenRouter
    * fails with a puzzling 404 rather than a useful error.
    */
-  function pickModel(id: string, mode?: InferenceMode) {
-    const served = deployment.free.providers[id];
+  function pickModel(id: string, mode?: InferenceMode, from?: Provider) {
+    const served = mode === 'credits' ? deployment.paid.providers[id] : deployment.free.providers[id];
     setConnection(c => {
-      const known = (served ?? findModel(id)?.provider) as Provider | undefined;
+      // The group the model was picked from names its provider outright; the server's answer and
+      // the catalog only fill in when it did not.
+      const known = (from ?? served ?? findModel(id)?.provider) as Provider | undefined;
       const provider = known && Object.hasOwn(providers, known) ? known : c.provider ?? 'openrouter';
       // `mode` is the group the visitor picked from, which is a statement of intent and is taken
       // as one. Without it, inferenceFor decides — and now leaves a deliberate choice alone.
@@ -394,7 +406,45 @@ export default function App() {
   }
 
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
-  async function discover() { setChecking(true); try { const ids = await listModels(requestConnection(connection), new AbortController().signal); setModels(ids); if (ids.length && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: defaultModel(connection.model, ids, deployment.free.models) ?? ids[0] })); setNotice(ids.length ? `Connected. Found ${ids.length} model${ids.length === 1 ? '' : 's'}.` : 'The endpoint returned no models.'); } catch (e) { setNotice(errorText(e)); } finally { setChecking(false); } }
+  /**
+   * Read what one provider's key reaches and remember it for the dock and Settings alike.
+   *
+   * Runs on its own for every keyed provider (below), and on demand from either surface. The
+   * key used is the ring's or the one being typed for the active connection; the request goes
+   * through /api/models like every other provider call and nothing is stored but the public list.
+   */
+  async function discover(provider: Provider, quiet = false) {
+    const key = provider === connection.provider && connection.token?.trim() ? connection.token : keys[provider];
+    if (!key?.trim() && provider !== 'openrouter') return;
+    setDiscovering(d => new Set(d).add(provider));
+    try {
+      const found = await listModels({ ...defaultConnection(provider), token: key ?? '', inference: 'byok' }, new AbortController().signal);
+      const models = modelChoices(found);
+      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now() } }; saveDiscovered(next); return next; });
+      if (!quiet) {
+        const ids = models.map(m => m.id);
+        if (ids.length && provider === connection.provider && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: defaultModel(c.model, ids, deployment.free.models) ?? ids[0] }));
+        setNotice(ids.length ? `${providers[provider].name}: ${ids.length.toLocaleString()} model${ids.length === 1 ? '' : 's'} on your key. They are in the dropdown now.` : 'The endpoint returned no models.');
+      }
+    } catch (e) {
+      setDiscovered(d => ({ ...d, [provider]: { models: d[provider]?.models ?? [], at: Date.now(), error: errorText(e) } }));
+      if (!quiet) setNotice(errorText(e));
+    } finally { setDiscovering(d => { const n = new Set(d); n.delete(provider); return n; }); }
+  }
+  // A key, saved or being typed, lists its models by itself: the dropdown should show what the
+  // key reaches without a trip to Settings. Debounced so a key being pasted asks once.
+  useEffect(() => {
+    const due = [...keyed].filter(id => !isFresh(discovered[id]) && !discovering.has(id));
+    if (!due.length) return;
+    const timer = setTimeout(() => { for (const id of due) void discover(id, true); }, 700);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyed, connection.token]);
+  // Keep the address bar honest about which view is open.
+  useEffect(() => {
+    const want = page === 'admin' ? '/admin' : '/';
+    if (location.pathname !== want) history.replaceState(null, '', want + location.search);
+  }, [page]);
   /**
    * Save the connection and the whole keyring together. The remember checkbox governs every key,
    * not just the active one: unticked means nothing is written and anything previously stored is
@@ -405,14 +455,15 @@ export default function App() {
       if (connection.mode === 'remote') validateConnection(connection);
       saveKeyring(connection.saveKey ? keys : emptyKeyring());
       persistConnection(connection);
+      try { if (connection.saveKey && connection.serverAccessToken?.trim()) localStorage.setItem('hb-plan-token', connection.serverAccessToken.trim()); else localStorage.removeItem('hb-plan-token'); } catch { /* storage unavailable */ }
       setNotice(connection.saveKey && inference === 'byok' ? 'Connection saved, including your provider keys in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.');
     } catch (e) { setNotice(errorText(e)); }
   }
-  function forget() { try { forgetKeys(); setKeys(emptyKeyring()); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
+  function forget() { try { forgetKeys(); clearDiscovered(); setDiscovered({}); try { localStorage.removeItem('hb-plan-token'); } catch { /* storage unavailable */ } setKeys(emptyKeyring()); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
   async function clearAll() {
     setConfirm(null);
     try {
-      await clearWorkspaceData(); localStorage.removeItem('hb-rail'); clearProviderStorage(); clearConnections(); clearSettings(); clearCustomAgents();
+      await clearWorkspaceData(); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents();
       setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]); setCustom([]); setPersonaId(defaultPersonaId);
       runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null);
       setBalance(b => computeBalance([], b.pool, b.source)); setFreeBalance(b => computeBalance([], b.pool, 'local', undefined, 'free'));
@@ -427,7 +478,7 @@ export default function App() {
 
   const PersonaIcon = iconFor(persona.icon);
   return <div className={collapsed ? 'app rail-collapsed' : 'app'}>
-    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} />
+    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} admin={adminActive} />
     <div className="main">
       {(!online || notice) && <div className="notices">
         {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. Hosted models need a connection.</span></div>}
@@ -475,8 +526,9 @@ export default function App() {
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
               openConnectors={() => openConnectors()} connectorCount={connectorCount}
-              model={connection.model} inference={inference} free={deployment.free} labels={labels} reach={reach} keyed={keyed}
-              pickModel={pickModel} modelNeedsKey={modelNeedsKey}
+              model={connection.model} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
+              discovered={discovered} discovering={discovering}
+              pickModel={pickModel} modelNeedsKey={modelNeedsKey} modelNeedsPlan={setPlanPrompt} discover={id => void discover(id)}
               busy={busy} ready={ready} send={send} stop={stop}
               listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice}
               tokens={tokens}
@@ -497,7 +549,8 @@ export default function App() {
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} models={models} checking={checking} discover={() => void discover()} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
+        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} />}
+        {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>
@@ -509,6 +562,15 @@ export default function App() {
       removeDocument={id => { void storage.removeKnowledge(id).then(() => setKnowledge(k => k.filter(x => x.id !== id))).catch(e => setNotice(errorText(e))); }}
       notify={setNotice}
     />
+    {planPrompt && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="plan-title">
+      <h2 id="plan-title">{planPrompt.label} is on the paid plan.</h2>
+      <p>{deployment.paid.enabled ? 'Plan models run on this deployment\u2019s own keys and draw from a plan allowance. If you have subscribed, paste the access token from your welcome message in Settings and the plan models unlock straight away.' : 'The operator has listed this model for the paid plan, but checkout is not open on this deployment yet. The free tier and your own keys work as usual.'}</p>
+      <div className="row gap end">
+        <button className="button small" autoFocus onClick={() => setPlanPrompt(null)}>Not now</button>
+        <button className="button small" onClick={() => { setPlanPrompt(null); setPage('pricing'); }}>See plans</button>
+        {deployment.paid.enabled && <button className="button primary small" onClick={() => { setPlanPrompt(null); setConnection(c => ({ ...c, inference: 'credits' })); setPage('settings'); }}><KeyRound size={13} />Enter plan token</button>}
+      </div>
+    </section></div>}
     {keyPrompt && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="key-title">
       <h2 id="key-title">Provide your own API Key to run this model directly.</h2>
       <p><strong>{keyPrompt.label}</strong> runs on your {providers[keyPrompt.provider].name} account, so it needs a key this deployment does not hold. Add it in Settings and the model unlocks the moment you type it — the key stays in this browser and is never bundled into the app.</p>

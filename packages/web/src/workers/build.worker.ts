@@ -1,7 +1,7 @@
 import * as esbuild from 'esbuild-wasm';
 import wasmURL from 'esbuild-wasm/esbuild.wasm?url';
 import { projectPlugin } from '../lib/bundle/plugin';
-import type { ProjectFile } from '../lib/project';
+import { inlineLocalAssets, type ProjectFile } from '../lib/project';
 
 // Builds a project entirely inside this worker: esbuild-wasm compiles once here (kept warm across
 // builds, since the wasm module itself is a few megabytes and initializing it is the slow part),
@@ -47,15 +47,10 @@ async function build(req: BuildRequest): Promise<BuildResponse> {
   const files: Record<string, string> = {};
   for (const f of req.files) files[f.path] = f.content;
   if (req.kind === 'html') {
-    // No bundling needed: the html file is the whole app, referenced siblings are inlined by hand
-    // if present (a css/js file next to it) since the sandbox shell has no server-side reach into
-    // this project to fetch them from.
-    let html = files[req.entry] ?? '';
-    for (const [path, content] of Object.entries(files)) {
-      if (path === req.entry) continue;
-      if (path.endsWith('.css')) html = html.replace(new RegExp(`<link[^>]+href=["']\\.?/?${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*>`, 'g'), `<style>${content}</style>`);
-      if (path.endsWith('.js')) html = html.replace(new RegExp(`<script[^>]+src=["']\\.?/?${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*></script>`, 'g'), `<script>${content}</script>`);
-    }
+    // No bundling needed: the html file is the whole app. Its own stylesheets, scripts and SVGs
+    // are folded in by path, since the sandbox shell has no server-side reach into this project
+    // to fetch them from; CDN references stay as written, and the sandbox loads those itself.
+    const html = inlineLocalAssets(files[req.entry] ?? '', files, req.entry);
     return { id: req.id, ok: true, html };
   }
   try {

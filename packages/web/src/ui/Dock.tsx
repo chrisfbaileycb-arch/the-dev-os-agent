@@ -8,6 +8,9 @@ import type { CatalogModel, InferenceMode } from '../lib/catalog';
 import type { Provider } from '../lib/providers';
 import type { Reach } from '../lib/availability';
 import type { FreeTier } from '../lib/store';
+import type { PaidTier } from '../lib/deployment';
+import type { Discovered } from '../lib/discovered';
+import type { ModelChoice } from '../lib/modelChoices';
 import ModelPicker from './ModelPicker';
 import { iconFor } from './icons';
 
@@ -27,8 +30,9 @@ export interface DockProps {
   attachments: Attached[]; photos: Photo[];
   addFiles: (files: File[]) => void; removeAttachment: (name: string) => void; removePhoto: (name: string) => void;
   openConnectors: () => void; connectorCount: number;
-  model: string; inference: InferenceMode; free: FreeTier; labels: Record<string, string>; reach: Reach; keyed: Set<Provider>;
-  pickModel: (id: string, mode?: InferenceMode) => void; modelNeedsKey: (model: CatalogModel) => void;
+  model: string; inference: InferenceMode; free: FreeTier; paid: PaidTier; labels: Record<string, string>; reach: Reach; keyed: Set<Provider>;
+  discovered: Discovered; discovering: Set<Provider>;
+  pickModel: (id: string, mode?: InferenceMode, provider?: Provider) => void; modelNeedsKey: (model: CatalogModel) => void; modelNeedsPlan: (model: ModelChoice) => void; discover: (provider: Provider) => void;
   busy: boolean; ready: boolean; send: () => void; stop: () => void;
   listening: boolean; voiceSupported: boolean; toggleVoice: () => void;
   tokens: { draft: number; context: number };
@@ -79,7 +83,7 @@ export default function Dock(p: DockProps) {
           <option value="chat">{DIRECT_MODE_LABEL}</option>
           <optgroup label={WORKFLOW_GROUP_LABEL}>{(Object.keys(workflows) as Workflow[]).map(w => <option key={w} value={w}>{workflows[w].label}</option>)}</optgroup>
         </select><ChevronDown size={12} /></label>
-        <ModelPicker model={p.model} inference={p.inference} free={p.free} labels={p.labels} reach={p.reach} keyed={p.keyed} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} />
+        <ModelPicker model={p.model} inference={p.inference} free={p.free} paid={p.paid} labels={p.labels} reach={p.reach} keyed={p.keyed} discovered={p.discovered} discovering={p.discovering} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} onNeedsPlan={p.modelNeedsPlan} onDiscover={p.discover} />
         <button className={p.connectorCount ? 'chip-button live' : 'chip-button'} title="Connectors: GitHub, web, documents, MCP" onClick={p.openConnectors} disabled={p.busy}><Plug size={13} strokeWidth={1.75} /><span className="chip-label">Connectors</span>{p.connectorCount ? <em>{p.connectorCount}</em> : null}</button>
         <span className="dock-counters" title="Estimated tokens in your message and in the attached context"><em>{p.tokens.draft.toLocaleString()}</em> draft · <em>{p.tokens.context.toLocaleString()}</em> context</span>
         <span className="dock-send">

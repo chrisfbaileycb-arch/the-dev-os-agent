@@ -27,6 +27,17 @@ function buildState(result: BuildResult, seq: number): BuildState {
   return result.ok ? { kind: 'ready', html: result.html, seq } : { kind: 'error', errors: result.errors };
 }
 
+/**
+ * The frame the generated app runs in.
+ *
+ * No `allow-same-origin`, deliberately. With it, the generated page shares this app's origin and
+ * can read everything this origin stores — the visitor's saved provider keys in localStorage,
+ * their sessions in IndexedDB, their workspace id — and call /api with their cookies. Without it
+ * the page has an opaque origin and can see none of that, which is what makes it safe to let the
+ * sandbox load stylesheets, fonts, images and scripts from the public internet (see the sandbox
+ * policy in server/csp.mjs). The one thing an opaque origin costs, working `localStorage`, the
+ * sandbox shell gives back with an in-memory shim.
+ */
 function SandboxFrame({ html, refresh }: { html: string; refresh: number }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   return <iframe
@@ -34,7 +45,7 @@ function SandboxFrame({ html, refresh }: { html: string; refresh: number }) {
     ref={frameRef}
     title="Live generated app preview"
     className="output-frame"
-    sandbox="allow-scripts allow-modals allow-same-origin"
+    sandbox="allow-scripts allow-modals allow-forms allow-popups allow-popups-to-escape-sandbox"
     src="/sandbox.html"
     onLoad={() => frameRef.current?.contentWindow?.postMessage({ html }, '*')}
   />;

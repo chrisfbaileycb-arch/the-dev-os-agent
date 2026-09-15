@@ -87,9 +87,14 @@ export async function complete(c: Connection, system: string, prompt: string, si
     throw new ProviderError('Cannot reach /api/chat. Deploy the included server, then check the provider connection.');
   }
 }
-export async function listModels(c: Connection, signal: AbortSignal): Promise<string[]> {
+/** One model as the provider lists it: the id to send, a label where the provider gave one, and whether it calls the model free. */
+export interface DiscoveredModel { id: string; label?: string; free?: boolean; }
+export async function listModels(c: Connection, signal: AbortSignal): Promise<DiscoveredModel[]> {
   const response = await fetch('/api/models', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: apiHeaders(), body: JSON.stringify(requestBody(c)) });
   await checkResponse(response); const body = await response.json();
   if (!Array.isArray(body.data)) throw new ProviderError('Unsupported model catalog. You can still type a model ID.');
-  return body.data.map((m: { id?: unknown }) => m?.id).filter((id: unknown): id is string => typeof id === 'string' && id.length <= 200).slice(0, 2000);
+  return (body.data as unknown[])
+    .filter((m): m is { id: string; label?: unknown; free?: unknown } => Boolean(m) && typeof (m as { id?: unknown }).id === 'string' && (m as { id: string }).id.length <= 200)
+    .map(m => ({ id: m.id, ...(typeof m.label === 'string' && m.label.trim() ? { label: m.label.slice(0, 80) } : {}), ...(m.free === true ? { free: true } : {}) }))
+    .slice(0, 2000);
 }

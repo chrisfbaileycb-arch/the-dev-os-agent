@@ -77,6 +77,9 @@ See `.env.example`.
 | `MCP_MAX_PER_HOUR` | Per-workspace budget for MCP calls (default 120). |
 | `CUSTOM_API_ORIGINS`, `OLLAMA_BRIDGE_URL` | Approved custom endpoints and an administrator bridge to a home model server. |
 | `SERVER_CREDIT_ACCESS_TOKEN`, `COHERE_API_KEY`, `CUSTOM_API_KEY` | Server keys used only for requests carrying the access token (platform credits). |
+| `ADMIN_TOKEN` | Opens the admin dashboard at `/admin` (at least 12 characters; `openssl rand -hex 24`). Unset, every `/api/admin` route answers 503 and the page says so. |
+| `SETTINGS_SECRET` | Optional. Seals the provider keys entered in the dashboard before they are stored. Falls back to `SESSION_SECRET`, then `ADMIN_TOKEN`; older seals are still opened by whichever secret made them. |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `AIHUBMIX_API_KEY`, `HF_TOKEN` | Server keys for the direct vendors and the other gateways. Any of them can fund a model the dashboard puts on the free or paid tier. Every key here can also be entered in the dashboard instead. |
 | `WORKER_TOKEN` | Shared secret between the web service and the background worker. Unused without a worker. |
 | `WEB_SERVICE_URL`, `WORKER_POLL_MS` | Worker service only: the web service's internal address and poll interval. |
 
@@ -89,7 +92,20 @@ See `.env.example`.
 - `POST /api/jobs` enqueues a background workflow and `GET /api/jobs?id=…` polls it (both need `X-Workspace-Id`); `GET /api/jobs` alone reports whether a worker is online. `POST /api/jobs/claim`, `/update`, and `/finish` are the worker's side and need `Authorization: Bearer $WORKER_TOKEN`.
 - `POST /api/browse` with `{ "url": "https://..." }` returns a page report or a 4xx/5xx with a plain message.
 - `POST /api/mcp` with `{ "url", "method": "tools/list" | "tools/call", "params", "authorization"? }` forwards one JSON-RPC call to a remote MCP server and returns its `result`.
+- `POST /api/models` with `{ "provider", "apiKey" }` returns `{ "data": [{ "id", "label"?, "free"? }] }` — everything the key reaches at that provider, with the provider's own label and free flag where it publishes them. The browser calls this by itself the moment a key is entered, and the dropdown lists the result.
+- `GET /api/providers` also reports `paid`: the plan tier the operator drew up in the dashboard (`enabled`, `configured`, `models`, `providers`, `labels`).
+- `/api/admin/*` is the operator dashboard, gated by `ADMIN_TOKEN`: `GET status`, `POST login` (sets a twelve-hour cookie scoped to `/api/admin`; a `Bearer` header works too), `POST logout`, `GET config`, `PUT keys` `{ provider, key }` (empty key removes), `PUT tunables` `{ name, value }`, `PUT tiers` `{ mode, free, paid }`, `POST discover` `{ provider }`. Writes check the Origin header. Keys are sealed with AES-256-GCM before they reach the database and are never returned; `config` shows the source (dashboard, environment, none) and the last four characters.
 - `/api/chat` messages may carry OpenAI-style content parts: text plus up to five bounded `image_url` parts (data URLs or https). Native Cohere refuses image parts.
+
+## Admin dashboard
+
+Open `/admin` (or Settings → *Open the admin dashboard*) and sign in with `ADMIN_TOKEN`. Three things live there, and each applies to the next request with no redeploy:
+
+- **Provider keys.** Paste a key for any provider — OpenRouter, Groq, OpenAI, Anthropic, Google, Cohere, xKiro, AIHubMix, Hugging Face, managed inference. It is sealed before it is stored (`server/secrets.mjs`), laid over the same environment variable for every request (`server/settings.mjs`), and never sent back to a browser. Remove it and the environment value, if any, applies again.
+- **Model tiers.** Load a connected provider's live model list and mark each model *Free* (any visitor, no key, on the deployment's key, metered against the free allowance), *Paid* (subscribers holding the plan access token, on the deployment's key, against the plan allowance) or *BYOK* (the default: the visitor brings a key). *Automatic + your picks* adds your free picks to the pool the server discovers on its own; *Only your picks* makes the free tier exactly your list. A model marked paid leaves the automatic free pool. Frontier-class picks are flagged, not refused: the burst and monthly caps are what bound the spend.
+- **Limits.** The free credit pool, the per-network hourly cap, the output cap, the on/off switch, the plan credit pool, the plan access token, and the owner key.
+
+The page ends with what `/api/providers` is publishing right now, so a change can be checked against its effect. Settings are stored in the workspace database (`settings` table, Postgres or SQLite), so on a diskless deployment without `DATABASE_URL` they last until the next restart; the page says so.
 
 ## Security and privacy
 

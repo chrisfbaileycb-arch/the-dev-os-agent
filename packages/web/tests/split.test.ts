@@ -10,7 +10,7 @@ import type { FreeTier } from '../src/lib/store';
 // a previous build saved, and the Preview tab resets. A regression here shows up as a full-width
 // pane — the layout this replaced — so it is worth pinning without a browser.
 
-const freeTier = (models: string[]): FreeTier => ({ enabled: models.length > 0, models, providers: {}, monthlyCredits: 400, perHour: 0 });
+const freeTier = (models: string[]): FreeTier => ({ enabled: models.length > 0, models, providers: {}, labels: {}, monthlyCredits: 400, perHour: 0 });
 const reach = (models: string[]): Reach => ({ free: freeTier(models), keys: emptyKeyring(), credits: false });
 
 describe('workspace split bounds', () => {
