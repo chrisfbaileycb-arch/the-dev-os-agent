@@ -1,0 +1,167 @@
+/* Theme CSS Variables - Four Palette System */
+
+/* Dev Dark Coder: High-contrast deep slate/charcoal background with glowing monospace cyan and emerald syntax accents */
+:root[data-theme="dev-dark-coder"] {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --text-primary: #f0f6fc;
+  --text-secondary: #c9d1d9;
+  --text-muted: #8b949e;
+  --accent-cyan: #2ea44f;
+  --accent-emerald: #3fb950;
+  --accent-glow: rgba(46, 164, 79, 0.4);
+  --border-color: #30363d;
+  --input-bg: #0d1117;
+  --input-border: #30363d;
+  --button-bg: #238636;
+  --button-hover: #2ea44f;
+  --code-bg: #161b22;
+  --syntax-keyword: #ff7b72;
+  --syntax-string: #a5d6ff;
+  --syntax-comment: #8b949e;
+  --syntax-function: #d2a8ff;
+}
+
+/* Standard White: Crisp, modern high-legibility light theme with clean neutral whites, cool grays, and deep charcoal text */
+:root[data-theme="standard-white"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #f0f2f5;
+  --text-primary: #24292f;
+  --text-secondary: #57606a;
+  --text-muted: #8c959f;
+  --accent-cyan: #0969da;
+  --accent-emerald: #1a7f37;
+  --accent-glow: rgba(9, 105, 218, 0.2);
+  --border-color: #d0d7de;
+  --input-bg: #ffffff;
+  --input-border: #8c959f;
+  --button-bg: #2da44e;
+  --button-hover: #2c974b;
+  --code-bg: #f6f8fa;
+  --syntax-keyword: #cf222e;
+  --syntax-string: #0a3069;
+  --syntax-comment: #6e7781;
+  --syntax-function: #8250df;
+}
+
+/* Earth Tones: Warm terracotta, muted olive, warm stone, and natural parchment backgrounds */
+:root[data-theme="earth-tones"] {
+  --bg-primary: #fef7ee;
+  --bg-secondary: #f0e6db;
+  --bg-tertiary: #e8dcc8;
+  --text-primary: #5d4037;
+  --text-secondary: #8d6e63;
+  --text-muted: #a1887f;
+  --accent-cyan: #8d6e63;
+  --accent-emerald: #558b2f;
+  --accent-glow: rgba(85, 139, 47, 0.3);
+  --border-color: #d7ccc8;
+  --input-bg: #fff8f0;
+  --input-border: #bcaaa4;
+  --button-bg: #8d6e63;
+  --button-hover: #6d4c41;
+  --code-bg: #f5f0eb;
+  --syntax-keyword: #bf360e;
+  --syntax-string: #2e7d32;
+  --syntax-comment: #8d6e63;
+  --syntax-function: #5e35b1;
+}
+
+/* Pastels: Soft lavender, blush rose, subtle mint, and warm cream surfaces */
+:root[data-theme="pastels"] {
+  --bg-primary: #fdf6ff;
+  --bg-secondary: #faf0f5;
+  --bg-tertiary: #f5e8f0;
+  --text-primary: #5a4d5c;
+  --text-secondary: #8b7d8b;
+  --text-muted: #a89fad;
+  --accent-cyan: #b19cd9;
+  --accent-emerald: #a7c9ae;
+  --accent-glow: rgba(177, 156, 217, 0.3);
+  --border-color: #e6d6e9;
+  --input-bg: #fdf6ff;
+  --input-border: #d4b5d0;
+  --button-bg: #e7b4d3;
+  --button-hover: #d9a5c5;
+  --code-bg: #faf4fb;
+  --syntax-keyword: #d483a8;
+  --syntax-string: #7fb3a0;
+  --syntax-comment: #b8a5b8;
+  --syntax-function: #9a82c4;
+}
+
+/* Base styles using theme variables */
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.app-container, .main-layout {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.panel, .card, .sidebar {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.input-field, textarea, select {
+  background-color: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text-primary);
+}
+
+.button-primary {
+  background-color: var(--button-bg);
+  color: white;
+}
+
+.button-primary:hover {
+  background-color: var(--button-hover);
+}
+
+.code-block, pre, code {
+  background-color: var(--code-bg);
+  color: var(--text-primary);
+}
+
+.accent-cyan {
+  color: var(--accent-cyan);
+}
+
+.accent-emerald {
+  color: var(--accent-emerald);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.border-default {
+  border-color: var(--border-color);
+}
+
+/* Syntax highlighting */
+.syntax-keyword { color: var(--syntax-keyword); }
+.syntax-string { color: var(--syntax-string); }
+.syntax-comment { color: var(--syntax-comment); }
+.syntax-function { color: var(--syntax-function); }
+
+/* Theme selector styling */
+.theme-selector {
+  padding: 8px 12px;
+}
+
+.theme-select-input {
+  font-family: inherit;
+  outline: none;
+}
+
+.theme-select-input:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
