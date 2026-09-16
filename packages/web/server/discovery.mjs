@@ -272,3 +272,45 @@ export const openRouterFreeIds = () => [...orCache.models];
 export function openRouterCatalogStatus() {
   return { discovered: orCache.ok, count: orCache.models.length, at: orCache.at ? new Date(orCache.at).toISOString() : null, error: orCache.error };
 }
+
+/**
+ * Dynamic model categorization based on model id and name patterns.
+ * Replaces hard-coded limits with functional clusters detected from model metadata.
+ */
+export function categorizeModels(rawModelList) {
+  return rawModelList.map(model => {
+    const id = (model.id || '').toLowerCase();
+    const name = (model.name || model.label || '').toLowerCase();
+    const isFree = id.includes(':free') || model.pricing?.prompt === '0' || model.free === true;
+
+    // Detect capabilities dynamically
+    const isCoding = id.includes('code') || id.includes('coder') || id.includes('dev') || 
+                     name.includes('code') || id.includes('qwen-2.5-coder') || id.includes('codestral');
+                     
+    const isMultimedia = id.includes('vl') || id.includes('vision') || id.includes('image') || 
+                         id.includes('omni') || id.includes('audio') || id.includes('speech');
+
+    const isReasoning = id.includes('r1') || id.includes('reasoner') || id.includes('thinking') || 
+                        id.includes('qwq') || id.includes('deepseek-r1');
+
+    return {
+      ...model,
+      isFree,
+      category: isCoding ? 'coding' 
+              : isMultimedia ? 'multimedia' 
+              : isReasoning ? 'agent_reasoning' 
+              : 'general_chat'
+    };
+  });
+}
+
+/**
+ * Client filtering helper: Returns all models matching the task without arbitrary limits.
+ * If no category or 'all' is selected, returns the full list.
+ */
+export function getAvailableModelsByCategory(allModels, selectedCategory) {
+  if (!selectedCategory || selectedCategory === 'all') {
+    return allModels;
+  }
+  return allModels.filter(m => m.category === selectedCategory);
+}
