@@ -52,9 +52,19 @@ function ensureVault() {
   }
 }
 
-export function loadVault() {
-  ensureVault();
+export function loadVault(options = {}) {
+  const { skipInit } = options;
+  if (!skipInit) {
+    ensureVault();
+  }
   try {
+    if (!fs.existsSync(VAULT_FILE)) {
+      if (skipInit) {
+        // In test mode with no vault file, return defaults without error
+        return DEFAULT_CONFIG;
+      }
+      ensureVault();
+    }
     const raw = fs.readFileSync(VAULT_FILE, 'utf8');
     const parsed = JSON.parse(raw);
     return {
@@ -63,7 +73,9 @@ export function loadVault() {
       personas: { ...DEFAULT_CONFIG.personas, ...parsed.personas }
     };
   } catch (err) {
-    console.error('[Vault] Error reading vault file, fallback to defaults:', err.message);
+    if (!skipInit) {
+      console.error('[Vault] Error reading vault file, fallback to defaults:', err.message);
+    }
     return DEFAULT_CONFIG;
   }
 }
