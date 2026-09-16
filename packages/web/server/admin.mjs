@@ -6,6 +6,7 @@ import { catalogStatus } from './discovery.mjs';
 import { USER_AGENT } from './discovery.mjs';
 import { modelsUrl, normalizeModelList } from './models.mjs';
 import { PROVIDER_META, TUNABLES } from './settings.mjs';
+import { loadVault, saveVault, getClientConfig } from './vault.mjs';
 
 // The operator's dashboard: /api/admin/*.
 //
@@ -210,6 +211,16 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, l
         const body = await readBody(req, 8_192);
         const models = await discoverForProvider(typeof body.provider === 'string' ? body.provider : '', currentEnv(), fetchImpl);
         json(res, 200, { provider: body.provider, models }); return true;
+      }
+      // Vault-backed settings endpoints for keys, limits, and personas
+      if (path === '/api/admin/settings' && req.method === 'GET') {
+        json(res, 200, getClientConfig()); return true;
+      }
+      if (path === '/api/admin/settings' && req.method === 'POST') {
+        const body = await readBody(req);
+        const { keys, limits, personas } = body;
+        const updated = saveVault({ keys, limits, personas });
+        json(res, 200, { success: true, settings: getClientConfig() }); return true;
       }
       throw new HttpError(404, 'Not found.');
     } catch (error) {

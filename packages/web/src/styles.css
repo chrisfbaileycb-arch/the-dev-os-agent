@@ -382,3 +382,13 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 /* Three bars — surface, line, accent — so a palette is recognised before it is read. */
 .theme-swatch { display: inline-flex; gap: 2px; } .theme-swatch i { width: 14px; height: 12px; border-radius: 2px; display: block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
 .theme-check { margin-left: auto; color: var(--accent-ink); }
+
+/* Four additional palette options as requested */
+/* Dev Dark Coder: High-contrast deep slate/charcoal background with glowing monospace cyan and emerald syntax accents */
+:root[data-theme="dev-dark-coder"] { color-scheme: dark; --bg: #0d1117; --panel: #161b22; --panel-2: #21262d; --ink: #f0f6fc; --muted: #8b949e; --line: #30363d; --line-strong: #484f58; --accent: #2ea44f; --accent-ink: #3fb950; --accent-soft: rgba(46, 164, 79, 0.15); --ok: #3fb950; --warn: #d29922; --danger: #f85149; --rail: #0d1117; --rail-ink: #c9d1d9; --rail-active: #161b22; --shadow: 0 8px 28px rgba(0, 0, 0, 0.6); }
+
+/* Earth Tones: Warm terracotta, muted olive, warm stone, and natural parchment backgrounds */
+:root[data-theme="earth-tones"] { color-scheme: light; --bg: #fef7ee; --panel: #f0e6db; --panel-2: #e8dcc8; --ink: #5d4037; --muted: #a1887f; --line: #d7ccc8; --line-strong: #bcaaa4; --accent: #8d6e63; --accent-ink: #6d4c41; --accent-soft: rgba(141, 110, 99, 0.15); --ok: #558b2f; --warn: #9c7a3a; --danger: #a34d3a; --rail: #3e2723; --rail-ink: #d7ccc8; --rail-active: #4e342e; --shadow: 0 8px 28px rgba(62, 39, 35, 0.18); }
+
+/* Pastels (alternate): Soft lavender, blush rose, subtle mint, and warm cream surfaces */
+:root[data-theme="pastels"] { color-scheme: light; --bg: #fdf6ff; --panel: #faf0f5; --panel-2: #f5e8f0; --ink: #5a4d5c; --muted: #a89fad; --line: #e6d6e9; --line-strong: #d4b5d0; --accent: #b19cd9; --accent-ink: #9a82c4; --accent-soft: rgba(177, 156, 217, 0.15); --ok: #a7c9ae; --warn: #d4a5a5; --danger: #d483a8; --rail: #4a3f4d; --rail-ink: #e6d6e9; --rail-active: #5a4d5c; --shadow: 0 8px 28px rgba(90, 77, 92, 0.12); }

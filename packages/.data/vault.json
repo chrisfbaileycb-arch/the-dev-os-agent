@@ -1,0 +1,35 @@
+{
+  "keys": {
+    "OPENROUTER_API_KEY": "",
+    "OMNIROUTE_API_KEY": "",
+    "HUGGINGFACE_API_KEY": "",
+    "VLLM_API_KEY": "",
+    "OPENAI_API_KEY": "",
+    "ANTHROPIC_API_KEY": "",
+    "GEMINI_API_KEY": "",
+    "MISTRAL_API_KEY": ""
+  },
+  "limits": {
+    "FREE_MAX_OUTPUT_TOKENS": 2048,
+    "FREE_MAX_PER_HOUR": 100,
+    "FREE_CREDIT_MONTHLY_POOL": 1000000,
+    "FREE_TIER_DISABLED": false
+  },
+  "personas": {
+    "activePersona": "react_sandbox",
+    "templates": {
+      "react_sandbox": {
+        "name": "React Sandbox Architect",
+        "systemPrompt": "You are collaborating as lead frontend engineer inside an automated React 18 / TypeScript Vite sandbox.\nAll responses are piped directly into an active compiler. Return ONLY complete, working component code in a single file using native React hooks and pure SVG/CSS. Omit all conversational greetings, markdown commentary, and conversational closings. Start directly with imports and end with the default export."
+      },
+      "agent_orchestrator": {
+        "name": "Multi-Agent Router",
+        "systemPrompt": "You are an autonomous agent coordinator. Break down tasks into discrete JSON action plans, evaluate downstream tool requirements, and output strictly structured data."
+      },
+      "general_chat": {
+        "name": "Technical Collaborator",
+        "systemPrompt": "You are an authentic, direct, and technically rigorous collaborator. Provide detailed, pragmatic engineering advice with zero corporate fluff."
+      }
+    }
+  }
+}
