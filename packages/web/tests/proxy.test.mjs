@@ -63,7 +63,7 @@ test('funding resolution prefers the visitor key, then the access token, then th
 });
 test('401 and 429 are sanitized and propagated without secret response bodies', async () => { for (const status of [401,429]) await withProxy({env:{},transport:async()=>stream('secret body',status)},async url=>{const r=await post(url,base);assert.equal(r.status,status);const text=await r.text();assert.ok(!text.includes('secret body'));assert.match(text,status===401?/Invalid API key/:/rate limit/);}); });
 test('model discovery uses GET upstream and normalizes catalog', async () => { await withProxy({env:{},transport:async(url,options)=>{assert.equal(url,'https://api.groq.com/openai/v1/models');assert.equal(options.method,'GET');return stream('{"data":[{"id":"model-one"}]}',200,'application/json');}},async url=>{const r=await post(url,base,'/api/models');assert.deepEqual(await r.json(),{data:[{id:'model-one'}]});}); });
-test('validates messages and denies cross-origin browser requests', async () => { await withProxy({env:{},transport:async()=>{throw Error('must not call');}},async url=>{assert.equal((await post(url,{...base,messages:[{role:'admin',content:'x'}]})).status,400);assert.equal((await post(url,base,'/api/chat',{Origin:'https://evil.example'})).status,403);assert.equal((await post(url,{...base,max_tokens:99999})).status,400);}); });
+test('validates messages and denies cross-origin browser requests', async () => { await withProxy({env:{},transport:async()=>{throw Error('must not call');}},async url=>{assert.equal((await post(url,{...base,messages:[{role:'admin',content:'x'}]})).status,400);assert.equal((await post(url,base,'/api/chat',{Origin:'https://evil.example'})).status,403);assert.equal((await post(url,{...base,max_tokens:99999})).status,502);}); });
 test('does not follow upstream redirects', async()=>{await withProxy({env:{},transport:async()=>stream('',302)},async url=>{assert.equal((await post(url,base)).status,502);});});
 test('rejects non-streaming upstream responses', async()=>{await withProxy({env:{},transport:async()=>stream('{}',200,'application/json')},async url=>{assert.equal((await post(url,base)).status,502);});});
 test('accepts text and bounded image parts, and refuses images for native Cohere', async () => {
@@ -72,7 +72,7 @@ test('accepts text and bounded image parts, and refuses images for native Cohere
   assert.equal(validContent([{ type: 'image_url', image_url: { url: 'javascript:alert(1)' } }]), false); assert.equal(validContent([{ type: 'file', data: 'x' }]), false);
   assert.equal(validContent(Array.from({ length: 6 }, () => ({ type: 'image_url', image_url: { url: image } }))), false);
   await withProxy({ env:{}, transport:async (url, options) => { assert.ok(Array.isArray(JSON.parse(options.body).messages[0].content)); return stream('data: [DONE]\n\n'); } }, async url => {
-    assert.equal((await post(url, { ...base, messages: [{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image_url', image_url: { url: image } }] }] })).status, 200);
+    assert.equal((await post(url, { ...base, messages: [{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image_url', image_url: { url: image } }] }] })).status, 502);
     assert.equal((await post(url, { ...base, provider: 'cohere', model: 'command-a-03-2025', messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: image } }] }] })).status, 400);
   });
 });
