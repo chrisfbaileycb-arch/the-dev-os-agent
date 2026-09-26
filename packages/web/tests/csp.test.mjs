@@ -58,3 +58,8 @@ test('the sandbox shell gives the page in-memory storage, since an opaque origin
   assert.match(shell, /sessionStorage/);
   assert.match(shell, /Object\.defineProperty\(window,n/);
 });
+
+test('the app policy lets the sync drawer reach api.github.com, and nothing broader', () => {
+  assert.match(CSP, /connect-src 'self' https:\/\/esm\.sh https:\/\/api\.github\.com;/);
+  assert.doesNotMatch(CSP, /connect-src [^;]*https:(?!\/\/)/);
+});
