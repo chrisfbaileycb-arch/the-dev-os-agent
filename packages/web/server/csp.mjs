@@ -12,7 +12,12 @@
 // the live-preview bundler. It runs esbuild-wasm in a same-origin worker to compile a generated
 // project and fetches its npm imports from esm.sh at build time. Nothing else on this app needed
 // either grant; both are as narrow as the feature requires.
-export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://esm.sh; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+//
+// connect-src also reaches https://api.github.com for the GitHub Repository Sync drawer
+// (src/lib/githubSync.ts), which pulls and pushes one file through the Contents API directly from
+// the browser with the visitor's own token. The token never touches this server, so the request
+// has to leave from the page, and this is the one host it needs.
+export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://esm.sh https://api.github.com; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 /**
  * The policy for the generated-app sandbox, and the reasoning behind how open it is.
