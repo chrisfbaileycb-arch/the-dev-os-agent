@@ -492,6 +492,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       if (meter && db) { try { const tokens = meter.total(); await db.recordUsage(workspace, { model: body.model, tier: 'free', mode: 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
       return true;
     } catch (error) {
+      if (!(error instanceof HttpError)) console.error('[DEBUG-NONHTTP]', error && error.constructor.name, error && error.message);
       if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) } });
       else if (!res.destroyed) { res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'Provider stream interrupted. Please retry.' } })}\n\n`); res.end(); }
       return true;
