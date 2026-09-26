@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, CircleAlert, Download, Eye, ExternalLink, FileCode2, GitCompareArrows, LoaderCircle, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import {
-  DEFAULT_COMMIT_MESSAGE, GithubApiError, parseRepoTarget, pullFile, pushFile, saveSyncSettings,
+  DEFAULT_COMMIT_MESSAGE, parseRepoTarget, pullFile, pushFile, saveSyncSettings,
   syncReady, type GithubSyncState,
-} from '../lib/connectorsSyncBridge';
-import { saveBlob } from '../lib/download';
+} from '../lib/githubSync';
 import type { ProjectFile } from '../lib/project';
 import { useDismiss } from './useDismiss';
 
@@ -44,6 +43,9 @@ const short = (sha: string) => sha ? sha.slice(0, 7) : '—';
 
 export default function GithubSyncDrawer(p: GithubSyncDrawerProps) {
   const [revealToken, setRevealToken] = useState(false);
+  // Every hook runs before the closed-drawer early return, so React sees the same hook order on
+  // every render whether the drawer is open or not.
+  const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const closeRef = useRef<HTMLButtonElement>(null);
   useDismiss(p.open, p.close);
   useEffect(() => { if (p.open) closeRef.current?.focus(); }, [p.open]);
@@ -52,10 +54,6 @@ export default function GithubSyncDrawer(p: GithubSyncDrawerProps) {
   const { state, patch } = p;
   const target = parseRepoTarget(state.repo);
   const ready = syncReady(state);
-  const busy = state !== undefined && false; // placeholder replaced below by status check
-  void busy;
-  const working = false;
-  void working;
 
   function save() { saveSyncSettings({ token: state.token, repo: state.repo, branch: state.branch, path: state.path, message: state.message }); }
 
@@ -82,7 +80,6 @@ export default function GithubSyncDrawer(p: GithubSyncDrawerProps) {
     } catch (e) { setStatus({ kind: 'error', message: e instanceof Error ? e.message : 'The push failed.' }); }
   }
 
-  const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const busyAction = status.kind === 'busy' ? status.action : null;
   const errorText = status.kind === 'error' ? status.message : '';
   const conflict = errorText.includes('409');
