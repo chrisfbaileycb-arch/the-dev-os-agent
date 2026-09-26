@@ -30,7 +30,11 @@ export function openDatabase(file = ':memory:') {
     used: db.prepare('SELECT COALESCE(SUM(credits), 0) AS used FROM ledger WHERE workspace_id = ? AND mode = ? AND at >= ? AND at < ?'),
     counts: db.prepare('SELECT (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?) AS sessions, (SELECT COUNT(*) FROM runs WHERE workspace_id = ?) AS runs'),
     latest: db.prepare('SELECT id, at, session_id, model, tier, mode, tokens, credits FROM ledger WHERE workspace_id = ? AND mode = ? ORDER BY at DESC LIMIT 1'),
-    clear: ['sessions', 'runs', 'ledger'].map(t => db.prepare(`DELETE FROM ${t} WHERE workspace_id = ?`)),
+    clear: [
+      db.prepare('DELETE FROM sessions WHERE workspace_id = ?'),
+      db.prepare('DELETE FROM runs WHERE workspace_id = ?'),
+      db.prepare('DELETE FROM ledger WHERE workspace_id = ?'),
+    ],
     getSetting: db.prepare('SELECT value FROM settings WHERE key = ?'),
     setSetting: db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'),
     deleteSetting: db.prepare('DELETE FROM settings WHERE key = ?'),

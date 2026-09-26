@@ -229,6 +229,13 @@ describe('custom agents', () => {
     expect(personaById('assistant').group).toBe('general');
     expect(personaById('assistant').prompt).not.toContain('Impersonator');
   });
+  it('throws an error when saving an agent with a missing or whitespace-only name or prompt', () => {
+    const msg = 'An agent needs a name and a system prompt.';
+    expect(() => createCustomAgent({ name: '', prompt: 'Valid', role: '' })).toThrow(msg);
+    expect(() => createCustomAgent({ name: '  ', prompt: 'Valid', role: '' })).toThrow(msg);
+    expect(() => createCustomAgent({ name: 'Valid', prompt: '', role: '' })).toThrow(msg);
+    expect(() => createCustomAgent({ name: 'Valid', prompt: '  ', role: '' })).toThrow(msg);
+  });
   it('refuses a draft that is missing the two fields that matter', () => {
     expect(validateDraft({ name: '', prompt: 'x', role: '' })).toMatch(/name/);
     expect(validateDraft({ name: ' ', prompt: 'x', role: '' })).toMatch(/name/);
