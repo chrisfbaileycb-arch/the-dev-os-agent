@@ -392,3 +392,9 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 
 /* Pastels (alternate): Soft lavender, blush rose, subtle mint, and warm cream surfaces */
 :root[data-theme="pastels"] { color-scheme: light; --bg: #fdf6ff; --panel: #faf0f5; --panel-2: #f5e8f0; --ink: #5a4d5c; --muted: #a89fad; --line: #e6d6e9; --line-strong: #d4b5d0; --accent: #b19cd9; --accent-ink: #9a82c4; --accent-soft: rgba(177, 156, 217, 0.15); --ok: #a7c9ae; --warn: #d4a5a5; --danger: #d483a8; --rail: #4a3f4d; --rail-ink: #e6d6e9; --rail-active: #5a4d5c; --shadow: 0 8px 28px rgba(90, 77, 92, 0.12); }
+/* GitHub Repository Sync drawer */
+.sync-drawer .token-field { display: flex; align-items: center; gap: 6px; } .sync-drawer .token-field input { flex: 1; }
+.sync-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.sync-alert { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--danger); color: var(--ink); border-radius: var(--radius); padding: 6px 10px; font-size: 12px; } .sync-alert svg { color: var(--danger); flex: none; margin-top: 2px; }
+.sync-alert.conflict { border-color: var(--warn); } .sync-alert.conflict svg { color: var(--warn); }
+.sync-actions { flex-wrap: wrap; }
