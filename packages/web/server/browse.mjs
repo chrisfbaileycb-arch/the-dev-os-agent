@@ -58,7 +58,7 @@ export function createBrowse({ env = process.env, resolve = lookup, allowPrivate
     if (window.count > budget) throw new HttpError(429, `Browse budget reached (${budget} pages per hour). Try again later.`);
     const url = await checkTarget(rawUrl, { env, resolve, allowPrivate });
     const b = await browser();
-    const context = await b.newContext({ javaScriptEnabled: true, acceptDownloads: false, viewport: { width: 1280, height: 900 }, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) HeyBuddyBrowserAgent/0.1 Chrome/120 Safari/537.36' });
+    const context = await b.newContext({ javaScriptEnabled: true, acceptDownloads: false, viewport: { width: 1280, height: 900 }, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) SignalForgeOSBrowserAgent/0.1 Chrome/120 Safari/537.36' });
     try {
       await context.route('**/*', async route => {
         const request = route.request(); const target = new URL(request.url());

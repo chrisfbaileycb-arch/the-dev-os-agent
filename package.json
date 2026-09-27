@@ -1,5 +1,6 @@
 {
-  "name": "hey-buddy",
+  "name": "signal-forge-os",
+  "description": "Signal Forge OS — a privacy-first AI build workspace: chat, build and preview apps, and run approval-gated plans in the browser.",
   "version": "0.1.0",
   "private": true,
   "workspaces": [

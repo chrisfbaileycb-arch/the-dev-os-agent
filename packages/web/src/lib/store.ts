@@ -1,14 +1,16 @@
-import type { Knowledge, Run } from './types';
+import type { Knowledge, MemoryEntry, Run, Workflow } from './types';
+import type { WorkMode } from './roster';
 import { creditsFor, DEFAULT_FREE_POOL, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tier } from './catalog';
 
 // Local-first workspace store. IndexedDB is the source of truth for the open tab; the server
 // keeps a copy in SQLite keyed by an anonymous workspace id so sessions and credit balances
-// survive a refresh, a reinstall, or a cleared cache. Knowledge notes stay local only.
+// survive a refresh, a reinstall, or a cleared cache. Knowledge notes and memories stay local only.
 
 export interface Attachment { name: string; chars: number; }
 export interface ToolTrace { tool: string; args: Record<string, unknown>; summary: string; ok: boolean; }
 export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; at: string; persona?: string; model?: string; tokens?: number; latencyMs?: number; tokensPerSecond?: number; tools?: ToolTrace[]; runId?: string; attachments?: Attachment[]; photos?: { name: string; thumb: string }[]; error?: string; }
-export interface Session { id: string; title: string; persona: string; createdAt: string; updatedAt: string; messages: ChatMessage[]; }
+/** `mode` and `plan` remember how the person was working in this session (see WORK_MODES in lib/roster.ts). */
+export interface Session { id: string; title: string; persona: string; createdAt: string; updatedAt: string; messages: ChatMessage[]; mode?: WorkMode; plan?: Workflow; }
 export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode; tokens: number; credits: number; }
 export interface Balance { pool: number; used: number; remaining: number; month: string; source: 'server' | 'local'; }
 /** What the deployment will fund for a visitor with no key. Read from /api/providers and /api/state. */
@@ -18,8 +20,10 @@ export interface Workspace { sessions: Session[]; runs: Run[]; ledger: LedgerEnt
 // Kept at the original name on purpose: renaming the database would orphan the sessions,
 // runs, and notes of anyone who already has data in this browser.
 const DB = 'freetoken-web-v1';
-type Store = 'runs' | 'knowledge' | 'sessions' | 'ledger';
-const STORES: Store[] = ['runs', 'knowledge', 'sessions', 'ledger'];
+type Store = 'runs' | 'knowledge' | 'sessions' | 'ledger' | 'memory';
+const STORES: Store[] = ['runs', 'knowledge', 'sessions', 'ledger', 'memory'];
+/** Version 3 added the `memory` store; the upgrade only ever creates missing stores, so older data is untouched. */
+const DB_VERSION = 3;
 
 export function workspaceId(): string {
   try { const existing = localStorage.getItem('hb-workspace-id'); if (existing && /^[0-9a-f-]{36}$/.test(existing)) return existing; const id = crypto.randomUUID(); localStorage.setItem('hb-workspace-id', id); return id; }
@@ -32,10 +36,10 @@ export function setWorkspaceId(id: string): void {
 
 async function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB, 2);
+    const request = indexedDB.open(DB, DB_VERSION);
     request.onupgradeneeded = () => { for (const name of STORES) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: 'id' }); };
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(new Error('Browser storage is unavailable. Your workspace may not persist.'));
-    request.onblocked = () => reject(new Error('Close other Hey Buddy tabs to unlock workspace storage.'));
+    request.onblocked = () => reject(new Error('Close other Signal Forge OS tabs to unlock workspace storage.'));
   });
 }
 async function transaction<T>(store: Store, mode: IDBTransactionMode, action: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
@@ -52,16 +56,20 @@ export const storage = {
   knowledge: () => transaction<Knowledge[]>('knowledge', 'readonly', s => s.getAll()),
   sessions: () => transaction<Session[]>('sessions', 'readonly', s => s.getAll()),
   ledger: () => transaction<LedgerEntry[]>('ledger', 'readonly', s => s.getAll()),
+  memory: () => transaction<MemoryEntry[]>('memory', 'readonly', s => s.getAll()),
   saveRun: (run: Run) => transaction('runs', 'readwrite', s => s.put(run)),
   saveKnowledge: (doc: Knowledge) => transaction('knowledge', 'readwrite', s => s.put(doc)),
   saveSession: (session: Session) => transaction('sessions', 'readwrite', s => s.put(session)),
   saveLedger: (entry: LedgerEntry) => transaction('ledger', 'readwrite', s => s.put(entry)),
+  saveMemory: (entry: MemoryEntry) => transaction('memory', 'readwrite', s => s.put(entry)),
+  removeMemory: (id: string) => transaction('memory', 'readwrite', s => s.delete(id)),
   removeKnowledge: (id: string) => transaction('knowledge', 'readwrite', s => s.delete(id)),
   removeSession: (id: string) => transaction('sessions', 'readwrite', s => s.delete(id)),
   clearRuns: () => transaction('runs', 'readwrite', s => s.clear()),
   clearKnowledge: () => transaction('knowledge', 'readwrite', s => s.clear()),
   clearSessions: () => transaction('sessions', 'readwrite', s => s.clear()),
   clearLedger: () => transaction('ledger', 'readwrite', s => s.clear()),
+  clearMemory: () => transaction('memory', 'readwrite', s => s.clear()),
 };
 
 export const monthKey = (date = new Date()) => date.toISOString().slice(0, 7);
@@ -116,7 +124,7 @@ export function merge(local: { sessions: Session[]; runs: Run[]; ledger: LedgerE
 /** Load everything for the tab: local first, then reconcile with the server if it answers. */
 export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
   const [runs, knowledge, sessions, ledger] = await Promise.all([storage.runs(), storage.knowledge(), storage.sessions(), storage.ledger()]);
-  const fixedRuns = runs.map(r => r.status === 'running' ? { ...r, status: 'interrupted' as const, steps: r.steps.map(s => ['pending', 'queued', 'assigned', 'running'].includes(s.status) ? { ...s, status: 'cancelled' } : s) } : r);
+  const fixedRuns = runs.map(r => r.status === 'running' || r.status === 'awaiting_approval' ? { ...r, status: 'interrupted' as const, steps: r.steps.map(s => ['pending', 'queued', 'assigned', 'running'].includes(s.status) ? { ...s, status: 'cancelled' } : s) } : r);
   const server = await sync.pull(signal);
   const merged = merge({ sessions, runs: fixedRuns, ledger }, server);
   await Promise.all([...merged.sessions.filter(s => !sessions.find(l => l.id === s.id && l.updatedAt >= s.updatedAt)).map(storage.saveSession), ...merged.runs.filter(r => !runs.find(l => l.id === r.id) || fixedRuns.find(l => l.id === r.id)?.status === 'interrupted').map(storage.saveRun), ...merged.ledger.filter(e => !ledger.find(l => l.id === e.id)).map(storage.saveLedger)]);
@@ -127,17 +135,18 @@ export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
 }
 
 export async function persistSession(session: Session): Promise<void> { await storage.saveSession(session); void sync.push({ sessions: [session] }); }
-export async function persistRun(run: Run): Promise<void> { await storage.saveRun(run); if (run.status !== 'running') void sync.push({ runs: [run] }); }
+/** Only a finished run is pushed to the server copy; one that is live or waiting at a gate stays local. */
+export async function persistRun(run: Run): Promise<void> { await storage.saveRun(run); if (run.status !== 'running' && run.status !== 'awaiting_approval') void sync.push({ runs: [run] }); }
 export async function recordUsage(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number }): Promise<LedgerEntry> {
   const entry = makeEntry(input); await storage.saveLedger(entry); void sync.push({ ledger: [entry] }); return entry;
 }
 export async function clearWorkspaceData(): Promise<void> {
-  await Promise.all([storage.clearRuns(), storage.clearKnowledge(), storage.clearSessions(), storage.clearLedger()]);
+  await Promise.all([storage.clearRuns(), storage.clearKnowledge(), storage.clearSessions(), storage.clearLedger(), storage.clearMemory()]);
   await sync.clear();
 }
 
 export function exportRun(run: Run): string {
-  return `# Hey Buddy — ${run.workflow}\n\nMode: Hosted inference\nModel: ${run.model}\nStatus: ${run.status}\nStarted: ${run.startedAt}\n\n## Goal\n${run.goal}\n\n${run.steps.map(s => `## ${s.agent}: ${s.title}\nStatus: ${s.status}\n\n${s.output ?? s.error ?? 'No output.'}`).join('\n\n')}\n\n---\nReported tokens: ${run.tokens} (0 may mean usage was not reported)\nProvider requests: ${run.calls}\nRetrieved notes: ${run.contextTitles.join(', ') || 'none'}\n`;
+  return `# Signal Forge OS — ${run.workflow}\n\nMode: Hosted inference\nModel: ${run.model}\nStatus: ${run.status}\nStarted: ${run.startedAt}\n\n## Goal\n${run.goal}\n\n${run.steps.map(s => `## ${s.agent}: ${s.title}\nStatus: ${s.status}\n\n${s.output ?? s.error ?? 'No output.'}`).join('\n\n')}\n\n---\nReported tokens: ${run.tokens} (0 may mean usage was not reported)\nProvider requests: ${run.calls}\nRetrieved notes: ${run.contextTitles.join(', ') || 'none'}\n`;
 }
 export function exportSession(session: Session): string {
   return `# ${session.title}\n\nAgent: ${session.persona}\nStarted: ${session.createdAt}\n\n${session.messages.map(m => `## ${m.role === 'user' ? 'You' : (m.persona ?? 'Agent')} · ${new Date(m.at).toLocaleString()}\n\n${m.content}${m.tools?.length ? `\n\nTools: ${m.tools.map(t => `${t.tool} ${JSON.stringify(t.args)} (${t.ok ? 'ok' : 'failed'})`).join('; ')}` : ''}`).join('\n\n')}\n`;

@@ -139,7 +139,7 @@ export async function loop({ fetchImpl = fetch, once = false } = {}) {
   let stopping = false;
   const stop = () => { stopping = true; };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
-  console.log(`Hey Buddy worker polling ${BASE} every ${IDLE_MS}ms.`);
+  console.log(`Signal Forge OS worker polling ${BASE} every ${IDLE_MS}ms.`);
   while (!stopping) {
     let job = null;
     try { ({ job } = await post('/api/jobs/claim', {}, fetchImpl)); }
@@ -155,7 +155,7 @@ export async function loop({ fetchImpl = fetch, once = false } = {}) {
     }
     if (once) return;
   }
-  console.log('Hey Buddy worker stopped.');
+  console.log('Signal Forge OS worker stopped.');
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

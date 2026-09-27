@@ -31,6 +31,8 @@ export interface Reach {
   provider?: Provider;
   /** Whether an administrator token is present, which opens the deployment's whole pool. */
   credits: boolean;
+  /** Keyless providers that are switched on, such as a local Ollama: reachable with no key at all. */
+  keyless?: Provider[];
 }
 
 /**
@@ -44,6 +46,7 @@ export function keyedProviders(r: Reach): Set<Provider> {
   const held = new Set<Provider>();
   for (const id of Object.keys(providers) as Provider[]) if (r.keys[id]?.trim()) held.add(id);
   if (r.token?.trim() && r.provider) held.add(r.provider);
+  for (const id of r.keyless ?? []) if (providers[id]?.keyless) held.add(id);
   return held;
 }
 

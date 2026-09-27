@@ -6,7 +6,7 @@ import type { Balance, FreeTier } from '../lib/store';
 // Plans, in a three-card layout.
 //
 // Two income streams, and they are deliberately not presented as one. Starter and Premium are
-// Hey Buddy's own subscriptions, paid to Hey Buddy, and they are the product. The xKiro referral
+// Signal Forge OS's own subscriptions, paid to Signal Forge OS, and they are the product. The xKiro referral
 // is a secondary note for the people who were never going to subscribe anyway — developers who
 // already hold keys and want to keep using them. Putting the referral beside the paid cards
 // would compete with the thing actually being sold.
@@ -54,7 +54,7 @@ export default function Pricing(p: PricingProps) {
     },
     {
       id: 'starter', name: 'Starter', price: priced('starter').price, cadence: priced('starter').cadence,
-      billedBy: 'Billed by Hey Buddy', icon: KeyRound, featured: true,
+      billedBy: 'Billed by Signal Forge OS', icon: KeyRound, featured: true,
       blurb: 'The managed pool. You never touch an API key — we hold the provider accounts and meter your usage against your plan.',
       features: [
         'A far larger monthly credit allowance than the free tier',
@@ -67,7 +67,7 @@ export default function Pricing(p: PricingProps) {
     },
     {
       id: 'premium', name: 'Premium', price: priced('premium').price, cadence: priced('premium').cadence,
-      billedBy: 'Billed by Hey Buddy', icon: Zap,
+      billedBy: 'Billed by Signal Forge OS', icon: Zap,
       blurb: 'Starter with room to work at length: longer runs, bigger documents, more of the expensive models.',
       features: [
         'Roughly triple the Starter allowance',
@@ -113,7 +113,7 @@ export default function Pricing(p: PricingProps) {
       <h2>What a subscription changes</h2>
       <p className="help">
         Only one thing, really: <strong>who holds the API keys and who pays the model bill.</strong> On the free
-        tier and on a paid plan alike, Hey Buddy runs the models for you and meters what you use — a plan
+        tier and on a paid plan alike, Signal Forge OS runs the models for you and meters what you use — a plan
         simply raises the ceiling and unlocks the expensive models. Bring your own key instead and the app
         works identically, except your provider bills you directly and no allowance is touched at all.
         The interface, the agents, the workflows and the connectors are the same in every case.

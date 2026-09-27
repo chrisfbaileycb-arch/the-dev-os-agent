@@ -17,21 +17,25 @@ import { iconFor } from './ui/icons';
 import { chatTurn } from './lib/chat';
 import { estimateTokens, findModel, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel, type InferenceMode } from './lib/catalog';
 import { DEFAULT_SPLIT_PERCENT, clampSplit, normalizeStoredSplit } from './lib/split';
-import { retrieve } from './lib/memory';
+import { failureText, MemoryRejected, projectText, rememberRequest, retrieve } from './lib/memory';
+import { loadMemories, removeMemory, saveMemory, touchMemories } from './lib/memoryStore';
+import { clearPipes, loadPipes, savePipes, type PipeSettings } from './lib/pipes';
+import { parseProject } from './lib/project';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, defaultConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
+import { clearProviderStorage, defaultConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
-import { defaultModel, modelChoices, type ModelChoice } from './lib/modelChoices';
+import { modelChoices, preferredModel, type ModelChoice } from './lib/modelChoices';
 import { clearDiscovered, isFresh, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
-import { defaultPersonaId, personaById, workflows, type Persona } from './lib/roster';
+import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
 import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
-import { activeCount, activeTools, clearSettings, loadSettings, saveSettings, type ConnectorSettings } from './lib/connectors';
-import type { Connection, Knowledge, Run, WorkerEvent } from './lib/types';
+import { activeCount, activeTools, clearSettings, loadSettings, saveSettings, type ConnectorSettings, type GithubSettings } from './lib/connectors';
+import { loadSyncSettings } from './lib/githubSync';
+import type { Connection, Knowledge, MemoryEntry, MemoryKind, Run, Workflow, WorkerEvent } from './lib/types';
 import { loadTheme, saveTheme, type ThemeChoice } from './lib/theme';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
@@ -39,9 +43,9 @@ const now = () => new Date().toISOString();
 type Recognition = { lang: string; interimResults: boolean; continuous: boolean; start(): void; stop(): void; onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
 const recognitionCtor = () => (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => Recognition }).webkitSpeechRecognition;
 // Openers that show the range of what agents can do — code, analysis, and general questions.
-const starters: { text: string; persona: string; mode: RunMode }[] = [
-  { text: 'Write a TypeScript function that retries a fetch with exponential backoff and a hard timeout. Include the types and one usage example.', persona: 'coder', mode: 'chat' },
-  { text: 'Explain the difference between a database index and a materialised view, with one example where the wrong choice hurts.', persona: 'assistant', mode: 'chat' },
+const starters: { text: string; persona: string; workMode: WorkMode }[] = [
+  { text: 'Write a TypeScript function that retries a fetch with exponential backoff and a hard timeout. Include the types and one usage example.', persona: 'coder', workMode: 'build' },
+  { text: 'Explain the difference between a database index and a materialised view, with one example where the wrong choice hurts.', persona: 'assistant', workMode: 'chat' },
 ];
 /**
  * The connection as it goes over the wire. A zero-config run carries no secret at all — the
@@ -58,7 +62,7 @@ async function readTextFile(file: File): Promise<Attached> {
   return { name: file.name.slice(0, 80), content: (await file.text()).slice(0, 60_000) };
 }
 
-export default function App() {
+export default function App({ onLock }: { onLock?: () => void } = {}) {
   // /admin is the operator dashboard, a view inside this same app; the URL is kept in step below.
   const [page, setPage] = useState<Page>(() => location.pathname === '/admin' ? 'admin' : 'workspace');
   const [adminActive, setAdminActive] = useState(false);
@@ -93,7 +97,13 @@ export default function App() {
   const [serverReachable, setServerReachable] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [personaId, setPersonaId] = useState(defaultPersonaId);
-  const [draft, setDraft] = useState(''); const [mode, setMode] = useState<RunMode>('chat'); const [attachments, setAttachments] = useState<Attached[]>([]);
+  const [draft, setDraft] = useState(''); const [attachments, setAttachments] = useState<Attached[]>([]);
+  /** How the person is working — Chat, Build, or Plan — and which kind of plan. Saved per session. */
+  const [workMode, setWorkModeState] = useState<WorkMode>('chat'); const [plan, setPlanState] = useState<Workflow>('build');
+  /** Persistent memory, held in IndexedDB; only the matching few go with any prompt. */
+  const [memories, setMemories] = useState<MemoryEntry[]>([]); const memoriesRef = useRef<MemoryEntry[]>([]);
+  /** Which provider groups the model picker shows, and where a local Ollama lives. */
+  const [pipes, setPipesState] = useState<PipeSettings>(loadPipes);
   const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false); const [notice, setNotice] = useState('');
   const [rosterOpen, setRosterOpen] = useState(false); const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
   /** A premium model the visitor picked that nothing here can pay for, awaiting their own key. */
@@ -134,7 +144,11 @@ export default function App() {
   const setSettings = (next: ConnectorSettings) => { saveSettings(next); setSettingsState(next); };
 
   const active = sessions.find(s => s.id === activeId) ?? null;
-  const persona = personaById(active?.persona ?? personaId);
+  // Build binds the Coder / Builder agent; Chat and Plan use the agent the person chose.
+  const persona = workMode === 'build' ? personaById(BUILDER_PERSONA_ID) : personaById(active?.persona ?? personaId);
+  const mode: RunMode = workMode === 'plan' ? plan : 'chat';
+  const setPipes = (next: PipeSettings) => { savePipes(next); setPipesState(next); };
+  const commitMemories = (next: MemoryEntry[]) => { memoriesRef.current = next; setMemories(next); };
   const inference = connection.inference ?? 'byok';
   // Gateway labels, so a discovered id reads as a model name everywhere it is shown.
   const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, ...Object.values(discovered).map(d => Object.fromEntries((d?.models ?? []).map(m => [m.id, m.label])))), [deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, discovered]);
@@ -143,7 +157,12 @@ export default function App() {
   // What can be paid for right now, from the keyring rather than from the active connection alone.
   // A plan token in hand opens the plan tier whatever mode is current: picking a plan model is
   // what switches the mode, so the token cannot wait on a mode it is the only route into.
-  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: Boolean(connection.serverAccessToken?.trim()) }), [deployment.free, keys, connection.token, connection.provider, connection.serverAccessToken]);
+  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: Boolean(connection.serverAccessToken?.trim()), keyless: pipes.ollamaEnabled ? ['ollama' as Provider] : [] }), [deployment.free, keys, connection.token, connection.provider, connection.serverAccessToken, pipes.ollamaEnabled]);
+  /**
+   * Every credential this visitor holds, matched exactly by the secret scanner: nothing on this
+   * list is ever written to memory, and it is redacted from any ZIP or commit.
+   */
+  const knownSecrets = useMemo(() => [...Object.values(keys), connection.token, connection.serverAccessToken ?? '', settings.github.token, loadSyncSettings().token, ...mcp.map(c => c.token)].filter(k => k && k.trim().length >= 8), [keys, connection.token, connection.serverAccessToken, settings.github.token, mcp]);
   const keyed = useMemo(() => keyedProviders(reach), [reach]);
   const connectorCount = activeCount(settings, mcp);
   // The credit meter tracks whichever budget the current run actually draws from.
@@ -192,11 +211,12 @@ export default function App() {
     // Whether a Render background worker is deployed alongside this web service. Workflows run
     // in the browser either way; this only reports that the heavier path exists.
     void loadWorkerStatus(controller.signal).then(w => { if (!controller.signal.aborted) setBackgroundWorker(w.worker); });
+    void loadMemories().then(list => { if (!controller.signal.aborted) commitMemories(list); });
     loadWorkspace(controller.signal).then(ws => {
       if (controller.signal.aborted) return;
       commitSessions(ws.sessions); runsRef.current = ws.runs; setRuns(ws.runs); ledgerRef.current = ws.ledger; setLedger(ws.ledger);
       setKnowledge(ws.knowledge); setBalance(ws.balance); setFreeBalance(ws.freeBalance); setServerReachable(ws.serverReachable);
-      setActiveId(ws.sessions[0]?.id ?? null); if (ws.sessions[0]) setPersonaId(ws.sessions[0].persona);
+      setActiveId(ws.sessions[0]?.id ?? null); if (ws.sessions[0]) { setPersonaId(ws.sessions[0].persona); setWorkModeState(ws.sessions[0].mode ?? 'chat'); setPlanState(ws.sessions[0].plan ?? 'build'); }
     })
       .catch(e => { if (!controller.signal.aborted) setNotice(errorText(e)); })
       .finally(() => { if (!controller.signal.aborted) setReady(true); });
@@ -213,10 +233,38 @@ export default function App() {
   function patchMessage(sessionId: string, messageId: string, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>), persist = false) {
     patchSession(sessionId, s => ({ ...s, messages: s.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === 'function' ? patch(m) : patch) } : m) }), persist);
   }
-  function newSession(): Session { const s: Session = { id: crypto.randomUUID(), title: 'New session', persona: persona.id, createdAt: now(), updatedAt: now(), messages: [] }; commitSessions([s, ...sessionsRef.current]); setActiveId(s.id); setPage('workspace'); return s; }
+  function newSession(): Session { const s: Session = { id: crypto.randomUUID(), title: 'New session', persona: workMode === 'build' ? personaId : persona.id, createdAt: now(), updatedAt: now(), messages: [], mode: workMode, plan }; commitSessions([s, ...sessionsRef.current]); setActiveId(s.id); setPage('workspace'); return s; }
+  /** Open a session and return to how the person was working in it. */
+  function openSession(s: Session) { setActiveId(s.id); setPersonaId(s.persona); setWorkModeState(s.mode ?? 'chat'); setPlanState(s.plan ?? 'build'); }
+  /** The mode toggle, bound to the active session so switching sessions restores it. */
+  function chooseWorkMode(next: WorkMode) {
+    setWorkModeState(next);
+    if (next === 'chat' && personaId === BUILDER_PERSONA_ID) setPersonaId(defaultPersonaId);
+    if (active) patchSession(active.id, s => ({ ...s, mode: next, ...(next === 'chat' && s.persona === BUILDER_PERSONA_ID ? { persona: defaultPersonaId } : {}) }), true);
+    if (next === 'build' && !previewOpen) { setPreviewOpen(true); resetSplit(); }
+  }
+  function choosePlan(next: Workflow) { setPlanState(next); if (active) patchSession(active.id, s => ({ ...s, plan: next }), true); }
+  /** Save a memory through the secret check; a refusal is said plainly and nothing is written. */
+  async function remember(kind: MemoryKind, text: string, announce = false): Promise<boolean> {
+    try {
+      commitMemories(await saveMemory(kind, text, memoriesRef.current, knownSecrets));
+      if (announce) setNotice(`Remembered: ${text.slice(0, 120)}`);
+      return true;
+    } catch (e) {
+      if (e instanceof MemoryRejected) { if (announce || kind === 'preference') setNotice(e.message); return false; }
+      if (announce) setNotice(errorText(e));
+      return false;
+    }
+  }
   function ensureSession(): Session { return active ?? newSession(); }
   async function deleteSession(id: string) { try { await storage.removeSession(id); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
-  function choosePersona(id: string) { setPersonaId(id); if (active) patchSession(active.id, s => ({ ...s, persona: id }), true); }
+  /** Picking any agent other than the builder while in Build returns to Chat, since Build binds its own agent. */
+  function choosePersona(id: string) {
+    setPersonaId(id);
+    const leaveBuild = workMode === 'build' && id !== BUILDER_PERSONA_ID;
+    if (leaveBuild) setWorkModeState('chat');
+    if (active) patchSession(active.id, s => ({ ...s, persona: id, ...(leaveBuild ? { mode: 'chat' as const } : {}) }), true);
+  }
   /** A newly written agent is selected straight away: whoever just wrote it means to use it. */
   function addCustomAgent(created: Persona) { setCustom(customAgents()); choosePersona(created.id); setNotice(`${created.name} is ready. It is saved in this browser and appears in the agent drawer.`); }
   /** Deleting the agent in use falls back to the default rather than leaving a dangling id. */
@@ -246,7 +294,7 @@ export default function App() {
       const provider = known && Object.hasOwn(providers, known) ? known : c.provider ?? 'openrouter';
       // `mode` is the group the visitor picked from, which is a statement of intent and is taken
       // as one. Without it, inferenceFor decides — and now leaves a deliberate choice alone.
-      return { ...c, mode: 'remote', model: id, provider, endpoint: providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models) };
+      return { ...c, mode: 'remote', model: id, provider, endpoint: provider === 'ollama' ? pipes.ollamaUrl : providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models) };
     });
     setNotice('');
   }
@@ -304,7 +352,7 @@ export default function App() {
     }
     // The key that matters is the one for the model's own provider, which may have been typed into
     // the keyring without the connection's own token field ever being touched.
-    if (!connection.token && !keys[connection.provider ?? 'custom']?.trim() && connection.provider !== 'custom') return `Add a ${providers[connection.provider ?? 'custom'].name} key in Settings, or pick a free model from the dropdown.`;
+    if (!connection.token && !keys[connection.provider ?? 'custom']?.trim() && connection.provider !== 'custom' && !providers[connection.provider ?? 'custom'].keyless) return `Add a ${providers[connection.provider ?? 'custom'].name} key in Settings, or pick a free model from the dropdown.`;
     return null;
   }
 
@@ -342,13 +390,17 @@ export default function App() {
   function send() {
     const text = draft.trim(); if (!text || busy || !ready) return;
     const problem = preflight(); if (problem) { setNotice(problem); return; }
+    // "remember that …" saves a preference as well as going to the agent as usual.
+    const preference = rememberRequest(text);
+    if (preference) void remember('preference', preference, true);
     if (mode !== 'chat' && photos.length) { setNotice('Photos go with chat messages. Workflows work from text; remove the photo or switch to Chat.'); return; }
     // A workflow is five requests, so a BYOK visitor is asked once per session before it spends.
     if (mode !== 'chat' && inference === 'byok' && !approvedRuns.current) { setConfirm('run'); return; }
     const session = ensureSession(); const files = attachments; const shots = photos;
     const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, at: now(), attachments: files.map(a => ({ name: a.name, chars: a.content.length })), photos: shots.map(ph => ({ name: ph.name, thumb: ph.thumb })) };
     const title = session.messages.length ? session.title : text.replace(/\s+/g, ' ').slice(0, 60);
-    setDraft(''); setAttachments([]); setPhotos([]); setNotice(''); setBusy(true); setPage('workspace');
+    setDraft(''); setAttachments([]); setPhotos([]); if (!preference) setNotice(''); setBusy(true); setPage('workspace');
+    if (workMode === 'build' && !previewOpen) { setPreviewOpen(true); resetSplit(); }
     if (mode === 'chat') void runChat(session, user, text, files, shots, title); else startWorkflow(session, user, text, files, title, mode);
   }
 
@@ -361,18 +413,22 @@ export default function App() {
         connection: requestConnection(connection), personaId: persona.id, history: session.messages, input: text,
         attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })),
         tools: activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools }),
-        knowledge, signal: controller.signal,
+        knowledge, memories: memoriesRef.current, signal: controller.signal,
         onDelta: t => patchMessage(session.id, reply.id, { content: t }),
         onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); },
       });
       patchMessage(session.id, reply.id, { content: result.text, tokens: result.tokens, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools }, true);
       setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens: result.tokens });
+      if (result.memoriesUsed.length) void touchMemories(result.memoriesUsed, memoriesRef.current).then(commitMemories).catch(() => { /* bookkeeping only */ });
+      // A build that produced runnable files leaves one line of project context behind.
+      const built = parseProject(result.text);
+      if (built) void remember('project', projectText({ request: text, files: built.files.map(f => f.path) }));
       await charge(session.id, result.tokens);
     } catch (e) {
       const stopped = controller.signal.aborted;
       const message = freeTierMessage(e);
       patchMessage(session.id, reply.id, m => stopped ? { content: `${m.content}${m.content ? '\n\n' : ''}(stopped)` } : { error: message }, true);
-      if (!stopped) setNotice(message);
+      if (!stopped) { setNotice(message); void remember('failure', failureText({ model: label, error: message, request: text })); }
     } finally { abortRef.current = null; setBusy(false); }
   }
 
@@ -383,6 +439,7 @@ export default function App() {
     updateRun({ id: runId, goal: text, workflow, mode: connection.mode, model: connection.model, status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id, origin: 'browser' });
     const fail = (message: string) => {
       worker.current?.terminate(); worker.current = null; setBusy(false); setNotice(message);
+      void remember('failure', failureText({ model: label, error: message, request: text }));
       const current = runsRef.current.find(r => r.id === runId);
       if (current) { const failed: Run = { ...current, status: 'failed', completedAt: now(), steps: current.steps.map(s => ['running', 'assigned', 'queued', 'pending'].includes(s.status) ? { ...s, status: 'cancelled' } : s) }; updateRun(failed); void persistRun(failed).catch(e => setNotice(errorText(e))); }
     };
@@ -395,7 +452,7 @@ export default function App() {
         if (event.data.type === 'done') {
           const done = event.data.run;
           void persistRun(done).catch(e => setNotice(errorText(e)));
-          if (done.status === 'failed') setNotice(done.steps.find(s => s.error)?.error || 'The run failed. Check your model and key in Settings.');
+          if (done.status === 'failed') { const why = done.steps.find(s => s.error)?.error || 'The run failed. Check your model and key in Settings.'; setNotice(why); void remember('failure', failureText({ model: label, error: why, request: text })); }
           setBusy(false); worker.current?.terminate(); worker.current = null;
           setStats(s => ({ latencyMs: s?.latencyMs ?? 0, tokensPerSecond: s?.tokensPerSecond ?? 0, tokens: done.tokens }));
           void charge(session.id, done.tokens); patchMessage(session.id, reply.id, { tokens: done.tokens }, true);
@@ -406,11 +463,13 @@ export default function App() {
       // stage-candidate list is the deployment's funded ids only when the visitor is actually on
       // the free tier — a BYOK run stays on the visitor's own model for every stage.
       const stageCandidates = inference === 'free' ? deployment.free.models : [];
-      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates });
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, approvalGates: true });
     } catch (e) { fail(errorText(e)); }
   }
 
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
+  /** Release the plan's current approval gate so the next phase runs. */
+  function approveRun() { worker.current?.postMessage({ type: 'approve' }); }
   /**
    * Read what one provider's key reaches and remember it for the dock and Settings alike.
    *
@@ -420,15 +479,18 @@ export default function App() {
    */
   async function discover(provider: Provider, quiet = false) {
     const key = provider === connection.provider && connection.token?.trim() ? connection.token : keys[provider];
-    if (!key?.trim() && provider !== 'openrouter') return;
+    const keyless = Boolean(providers[provider].keyless);
+    if (!key?.trim() && provider !== 'openrouter' && !keyless) return;
     setDiscovering(d => new Set(d).add(provider));
     try {
-      const found = await listModels({ ...defaultConnection(provider), token: key ?? '', inference: 'byok' }, new AbortController().signal);
+      const found = await listModels({ ...defaultConnection(provider), ...(provider === 'ollama' ? { endpoint: pipes.ollamaUrl } : {}), token: key ?? '', inference: 'byok' }, new AbortController().signal);
       const models = modelChoices(found);
       setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now() } }; saveDiscovered(next); return next; });
+      // A key registered without choosing a model lands on the provider's flagship, or the
+      // strongest model it reaches — quiet discoveries included, so nobody has to pick one first.
+      const ids = models.map(m => m.id);
+      if (ids.length && provider === connection.provider && !ids.includes(connection.model)) setConnection(c => c.provider === provider && !ids.includes(c.model) ? { ...c, model: preferredModel(models, providers[provider].flagship) ?? ids[0] } : c);
       if (!quiet) {
-        const ids = models.map(m => m.id);
-        if (ids.length && provider === connection.provider && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: defaultModel(c.model, ids, deployment.free.models) ?? ids[0] }));
         setNotice(ids.length ? `${providers[provider].name}: ${ids.length.toLocaleString()} model${ids.length === 1 ? '' : 's'} on your key. They are in the dropdown now.` : 'The endpoint returned no models.');
       }
     } catch (e) {
@@ -468,7 +530,7 @@ export default function App() {
   async function clearAll() {
     setConfirm(null);
     try {
-      await clearWorkspaceData(); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents();
+      await clearWorkspaceData(); clearPipes(); setPipesState(loadPipes()); commitMemories([]); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents();
       setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]); setCustom([]); setPersonaId(defaultPersonaId);
       runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null);
       setBalance(b => computeBalance([], b.pool, b.source)); setFreeBalance(b => computeBalance([], b.pool, 'local', undefined, 'free'));
@@ -483,7 +545,7 @@ export default function App() {
 
   const PersonaIcon = iconFor(persona.icon);
   return <div className={collapsed ? 'app rail-collapsed' : 'app'}>
-    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} admin={adminActive} />
+    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} admin={adminActive} onLock={onLock} />
     <div className="main">
       {(!online || notice) && <div className="notices">
         {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. Hosted models need a connection.</span></div>}
@@ -493,15 +555,15 @@ export default function App() {
         {page === 'workspace' && <div className={`${previewOpen ? 'workspace with-preview' : 'workspace'}${resizing ? ' resizing' : ''}`} style={previewOpen ? { gridTemplateColumns: `224px minmax(0, ${chatPercent}fr) 8px minmax(0, ${100 - chatPercent}fr)` } : undefined}>
           <aside className="sessions">
             <div className="sessions-head"><strong>Sessions</strong><button className="icon-button" aria-label="New session" title="New session" disabled={busy} onClick={newSession}><Plus size={14} /></button></div>
-            {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => { setActiveId(s.id); setPersonaId(s.persona); }}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
+            {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => openSession(s)}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
             {!sessions.length && <p className="help">No sessions yet. Your first message starts one.</p>}
           </aside>
           <section className="canvas">
             <header className="canvas-head">
-              <select className="session-select" aria-label="Session" value={activeId ?? ''} disabled={busy} onChange={e => { if (e.target.value === '__new') newSession(); else { setActiveId(e.target.value); const s = sessionsRef.current.find(x => x.id === e.target.value); if (s) setPersonaId(s.persona); } }}><option value="__new">New session</option>{sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select>
+              <select className="session-select" aria-label="Session" value={activeId ?? ''} disabled={busy} onChange={e => { if (e.target.value === '__new') newSession(); else { const s = sessionsRef.current.find(x => x.id === e.target.value); if (s) openSession(s); } }}><option value="__new">New session</option>{sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select>
               <span className="canvas-title"><PersonaIcon size={14} strokeWidth={1.75} />{active ? active.title : 'New session'}<small>{persona.name}</small></span>
               <span className="row gap">
-                {active && <><button className="icon-button" title="Export session" aria-label="Export session" onClick={() => download('heybuddy-session.md', exportSession(active))}><Download size={14} /></button><button className="icon-button" title="Delete session" aria-label="Delete session" disabled={busy} onClick={() => void deleteSession(active.id)}><Trash2 size={14} /></button></>}
+                {active && <><button className="icon-button" title="Export session" aria-label="Export session" onClick={() => download('signal-forge-session.md', exportSession(active))}><Download size={14} /></button><button className="icon-button" title="Delete session" aria-label="Delete session" disabled={busy} onClick={() => void deleteSession(active.id)}><Trash2 size={14} /></button></>}
                 <button className={previewOpen ? 'icon-button live' : 'icon-button'} title={previewOpen ? 'Hide output panel' : 'Show output panel'} aria-label={previewOpen ? 'Hide output panel' : 'Show output panel'} onClick={() => { if (previewOpen) setPreviewOpen(false); else { setPreviewOpen(true); resetSplit(); } }}>{previewOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}</button>
               </span>
             </header>
@@ -510,14 +572,14 @@ export default function App() {
                 <h1>Your AI crew. Always in your corner.</h1>
                 <p>Ask a question, paste an error, or ask for code — the Assistant answers directly, with no setup and no connectors to switch on. Drop in a file if it helps, and pick a different agent or write your own whenever you want one. {deployment.free.enabled ? 'No sign-up and no API key: your first message streams on a model this deployment funds.' : 'Add a provider key in Settings for real replies.'}</p>
                 {deployment.free.enabled && inference === 'free' && <p className="starter-badge"><Sparkles size={13} strokeWidth={2} />Running on {label} · {freeBalance.remaining.toLocaleString()} free credits left this month</p>}
-                <div className="starter-grid">{starters.map((s, i) => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={i} className="starter-card" onClick={() => { choosePersona(s.persona); setMode(s.mode); setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
+                <div className="starter-grid">{starters.map((s, i) => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={i} className="starter-card" onClick={() => { if (s.workMode === 'build') chooseWorkMode('build'); else { chooseWorkMode(s.workMode); choosePersona(s.persona); } setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
               </div>}
               {active?.messages.map(m => {
                 if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}</div>{m.photos && m.photos.length > 0 && <div className="msg-photos">{m.photos.map(ph => <img key={ph.name} src={ph.thumb} alt={ph.name} title={ph.name} />)}</div>}<pre className="msg-body">{m.content}</pre></article>;
                 const run = m.runId ? runs.find(r => r.id === m.runId) : undefined;
                 return <article key={m.id} className="msg agent">
                   <div className="msg-meta"><strong>{m.persona ?? 'Agent'}</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.model && <em>{m.model}</em>}{m.tokens ? <em>{m.tokens.toLocaleString()} tok</em> : null}{m.latencyMs ? <em>{m.latencyMs} ms</em> : null}</div>
-                  {run ? <RunCard run={run} /> : <pre className="msg-body">{m.content || (busy && !m.error ? 'Working…' : '')}</pre>}
+                  {run ? <RunCard run={run} onApprove={run.status === 'awaiting_approval' ? approveRun : undefined} onStop={run.status === 'awaiting_approval' ? stop : undefined} /> : <pre className="msg-body">{m.content || (busy && !m.error ? 'Working…' : '')}</pre>}
                   {m.tools?.map((t, i) => { const args = JSON.stringify(t.args); return <div key={i} className={t.ok ? 'tool-trace' : 'tool-trace failed'}><Wrench size={11} /><code>{t.tool} {args.length > 60 ? `${args.slice(0, 57)}...` : args}</code><span>{t.summary}</span></div>; })}
                   {m.error && <p className="msg-error"><CircleAlert size={12} />{m.error}</p>}
                 </article>;
@@ -525,14 +587,14 @@ export default function App() {
               <div ref={endRef} />
             </div>
             <Dock
-              draft={draft} setDraft={setDraft} mode={mode} setMode={setMode}
+              draft={draft} setDraft={setDraft} workMode={workMode} setWorkMode={chooseWorkMode} plan={plan} setPlan={choosePlan}
               persona={persona} openRoster={() => setRosterOpen(true)}
               attachments={attachments} photos={photos} addFiles={f => void addFiles(f)}
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
               openConnectors={() => openConnectors()} connectorCount={connectorCount}
               model={connection.model} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
-              discovered={discovered} discovering={discovering}
+              discovered={discovered} discovering={discovering} pipes={pipes}
               pickModel={pickModel} modelNeedsKey={modelNeedsKey} modelNeedsPlan={setPlanPrompt} discover={id => void discover(id)}
               busy={busy} ready={ready} send={send} stop={stop}
               listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice}
@@ -545,6 +607,9 @@ export default function App() {
               content={active?.messages.slice().reverse().find(m => m.role === 'assistant')?.content ?? ''}
               close={() => setPreviewOpen(false)}
               github={settings.github}
+              updateGithub={(patch: Partial<GithubSettings>) => setSettings({ ...settings, github: { ...settings.github, ...patch } })}
+              secrets={knownSecrets}
+              request={active?.messages.slice().reverse().find(m => m.role === 'user')?.content}
               openConnectors={() => openConnectors('github')}
               onPreviewFocus={resetSplit}
               streaming={busy}
@@ -552,7 +617,7 @@ export default function App() {
           </>}
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
-        {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
+        {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
         {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} />}
         {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
@@ -566,6 +631,10 @@ export default function App() {
       knowledge={knowledge} addDocuments={f => void addDocuments(f)}
       removeDocument={id => { void storage.removeKnowledge(id).then(() => setKnowledge(k => k.filter(x => x.id !== id))).catch(e => setNotice(errorText(e))); }}
       notify={setNotice}
+      pipes={pipes} setPipes={setPipes}
+      keys={keys} setKeys={setKeys}
+      saveKeys={next => { saveKeyring(next); }}
+      discovered={discovered} discovering={discovering} discover={id => void discover(id)}
     />
     {planPrompt && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="plan-title">
       <h2 id="plan-title">{planPrompt.label} is on the paid plan.</h2>
@@ -581,7 +650,7 @@ export default function App() {
       <p><strong>{keyPrompt.label}</strong> runs on your {providers[keyPrompt.provider].name} account, so it needs a key this deployment does not hold. Add it in Settings and the model unlocks the moment you type it — the key stays in this browser and is never bundled into the app.</p>
       <div className="row gap end">
         <button className="button small" autoFocus onClick={() => setKeyPrompt(null)}>Not now</button>
-        <button className="button primary small" onClick={() => { const m = keyPrompt; setKeyPrompt(null); setPage('settings'); setNotice(`${m.label} needs a ${providers[m.provider].name} key. Add it below and it unlocks straight away — you do not have to save first, and no other provider is affected.`); }}><KeyRound size={13} />Add key in Settings</button>
+        <button className="button primary small" onClick={() => { const m = keyPrompt; setKeyPrompt(null); setConnection(c => ({ ...switchProvider(c, m.provider), mode: 'remote', inference: 'byok', model: m.id, saveKey: c.saveKey || Object.values(keys).some(k => k.trim()) })); setPage('settings'); setNotice(`${m.label} needs a ${providers[m.provider].name} key. Paste it below — the model is already selected, and the rest of the ${providers[m.provider].name} catalog loads by itself.`); }}><KeyRound size={13} />Add key in Settings</button>
       </div>
     </section></div>}
     {confirm && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">

@@ -1,4 +1,4 @@
-# Hey Buddy, web edition
+# Signal Forge OS, web edition
 
 Your AI crew. Always in your corner. A privacy-first workspace for one person or a small business: business agents you chat with, three multi-agent workflows on a browser-adapted subset of Ruflo's Agent and Task entities, a connectors hub, a knowledge hub that stays on the device, a model hub, a credit ledger, and a sandboxed browser agent. Hosted inference goes through one streaming proxy to OpenRouter, Groq, Cohere, or an approved custom endpoint.
 
@@ -26,7 +26,7 @@ web/server/     index.mjs (static + API), proxy.mjs (SSE provider proxy and fund
                 allowlist and quotas), meter.mjs (server-side token metering), db.mjs (SQLite), state.mjs (/api/state),
                 fetch.mjs (/api/fetch), github.mjs (/api/github), mcp.mjs (/api/mcp), browse.mjs (/api/browse),
                 jobs.mjs (/api/jobs queue), worker.mjs (Render background worker)
-web/public/     manifest.webmanifest, icons/ (Hey Buddy icon set), licences
+web/public/     manifest.webmanifest, icons/ (Signal Forge OS icon set), licences
 web/pwa/        service-worker.js template and build-worker.mjs, which emits dist/sw.js with the real precache list
 web/src/vendor/ruflo/   Browser-adapted Ruflo Agent and Task domain entities
 web/tests/      vitest unit tests and node:test server tests (mocked upstreams, a local fixture page for Chromium)
@@ -45,7 +45,7 @@ npx playwright install chromium   # for the Browser Agent
 npm run dev        # Vite dev server with the API, workspace store, and every connector route wired in
 npm test           # unit tests
 npm run test:server
-npm run build && npm start   # production server on PORT (default 4173)
+npm run build && npm start   # production server on PORT (default 10000)
 npm run worker     # optional background worker (needs WEB_SERVICE_URL and WORKER_TOKEN)
 ```
 

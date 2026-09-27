@@ -59,7 +59,8 @@ const server = createServer(async (req, res) => {
   } catch { res.writeHead(404); res.end('Not found'); }
 });
 server.requestTimeout = 135_000;
-server.listen(Number(process.env.PORT || 4173), '0.0.0.0', () => console.log('Hey Buddy server is ready.'));
+// Render injects PORT (10000 unless the service overrides it); 10000 is also the local default.
+server.listen(Number(process.env.PORT || 10000), '0.0.0.0', () => console.log('Signal Forge OS server is ready.'));
 
 // Warm the gateway catalogue at boot so the first visitor does not pay for the discovery request,
 // and so the log says on startup how large the free tier actually is. Never awaited and never

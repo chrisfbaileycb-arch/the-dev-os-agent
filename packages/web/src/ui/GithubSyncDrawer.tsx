@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, CircleAlert, Download, Eye, ExternalLink, FileCode2, GitCompareArrows, LoaderCircle, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import {
-  DEFAULT_COMMIT_MESSAGE, parseRepoTarget, pullFile, pushFile, saveSyncSettings,
+  DEFAULT_COMMIT_MESSAGE, GithubApiError, parseRepoTarget, pullFile, pushFile, saveSyncSettings,
   syncReady, type GithubSyncState,
 } from '../lib/githubSync';
 import type { ProjectFile } from '../lib/project';
+import { redactSecrets } from '../lib/secrets';
 import { useDismiss } from './useDismiss';
 
 // "GitHub Repository Sync": one file, in and out of a branch, without leaving the workspace.
@@ -34,10 +35,31 @@ export interface GithubSyncDrawerProps {
   /** Write a pulled file into the editor buffer. */
   applyPulled: (path: string, content: string) => void;
   files: ProjectFile[];
-  notify: (message: string) => void;
+  notify: (toast: SyncToast) => void;
+  /** Credentials this visitor holds; redacted from the buffer before it is committed. */
+  secrets: string[];
 }
 
-type Status = { kind: 'idle' } | { kind: 'busy'; action: 'pull' | 'push' } | { kind: 'error'; message: string } | { kind: 'pulled'; path: string; branch: string; sha: string; bytes: number } | { kind: 'pushed'; path: string; branch: string; commitSha: string; url: string };
+/** One line of feedback for the toast the workspace shows above everything, drawer included. */
+export interface SyncToast { tone: 'success' | 'error'; title: string; message: string; }
+
+type Status = { kind: 'idle' } | { kind: 'busy'; action: 'pull' | 'push' } | { kind: 'error'; message: string; status?: number } | { kind: 'pulled'; path: string; branch: string; sha: string; bytes: number } | { kind: 'pushed'; path: string; branch: string; commitSha: string; url: string };
+
+/**
+ * The toast for a failed request, titled by HTTP status so the fix is obvious at a glance.
+ *
+ * 401 and 409 are the two a person can act on straight away — a new token, or a pull before the
+ * next push. 422 is GitHub's answer to a push with no SHA onto a file that already exists, which
+ * is the same fix as a 409, so it says so.
+ */
+export function errorToast(action: 'pull' | 'push', error: unknown): SyncToast {
+  const message = error instanceof Error ? error.message : `The ${action} failed.`;
+  const status = error instanceof GithubApiError ? error.status : undefined;
+  if (status === 401) return { tone: 'error', title: '401 Unauthorized · ', message: 'GitHub rejected this token. Paste a fresh one with the repo scope.' };
+  if (status === 409) return { tone: 'error', title: '409 SHA conflict · ', message: 'The file changed on GitHub since your last pull. Pull the latest, then push again.' };
+  if (status === 422 && action === 'push') return { tone: 'error', title: '422 File exists · ', message: 'Pull it first so the push carries its SHA, then push again.' };
+  return { tone: 'error', title: status ? `${status} · ` : `${action === 'pull' ? 'Pull' : 'Push'} failed · `, message };
+}
 
 const short = (sha: string) => sha ? sha.slice(0, 7) : '—';
 
@@ -65,25 +87,29 @@ export default function GithubSyncDrawer(p: GithubSyncDrawerProps) {
       patch({ sha: result.sha, path: result.path });
       p.applyPulled(result.path, result.content);
       setStatus({ kind: 'pulled', path: result.path, branch: (state.branch || 'main').trim(), sha: result.sha, bytes: new TextEncoder().encode(result.content).length });
-      p.notify(`Successfully pulled ${result.path} (${(state.branch || 'main').trim()})`);
-    } catch (e) { setStatus({ kind: 'error', message: e instanceof Error ? e.message : 'The pull failed.' }); }
+      p.notify({ tone: 'success', title: '200 OK · ', message: `Pulled ${result.path} from ${(state.branch || 'main').trim()} into the editor.` });
+    } catch (e) { setStatus({ kind: 'error', message: e instanceof Error ? e.message : 'The pull failed.', status: e instanceof GithubApiError ? e.status : undefined }); p.notify(errorToast('pull', e)); }
   }
 
   async function push() {
     setStatus({ kind: 'busy', action: 'push' });
     try {
-      const result = await pushFile({ ...state, path: state.path || p.activePath || '' }, p.activeContent, undefined, AbortSignal.timeout(30_000));
+      // The same scanner as the ZIP and the project push: the sync token itself, any saved key, or
+      // anything shaped like one is replaced before the buffer becomes a commit.
+      const clean = redactSecrets(p.activeContent, [...p.secrets, state.token]);
+      const result = await pushFile({ ...state, path: state.path || p.activePath || '' }, clean.text, undefined, AbortSignal.timeout(30_000));
       patch({ sha: result.sha, path: result.path });
       save();
       setStatus({ kind: 'pushed', path: result.path, branch: result.branch, commitSha: result.commitSha, url: result.commitUrl });
-      p.notify(`Pushed ${result.path} to ${result.branch} · commit ${short(result.commitSha)}`);
-    } catch (e) { setStatus({ kind: 'error', message: e instanceof Error ? e.message : 'The push failed.' }); }
+      p.notify({ tone: 'success', title: 'Pushed · ', message: `${result.path} committed to ${result.branch} as ${short(result.commitSha)}.${clean.count ? ` ${clean.count} credential${clean.count === 1 ? '' : 's'} replaced with [REDACTED].` : ''}` });
+    } catch (e) { setStatus({ kind: 'error', message: e instanceof Error ? e.message : 'The push failed.', status: e instanceof GithubApiError ? e.status : undefined }); p.notify(errorToast('push', e)); }
   }
 
   const busyAction = status.kind === 'busy' ? status.action : null;
   const errorText = status.kind === 'error' ? status.message : '';
-  const conflict = errorText.includes('409');
-  const unauthorized = errorText.includes('401') || errorText.includes('Bad credentials');
+  const errorStatus = status.kind === 'error' ? status.status : undefined;
+  const conflict = errorStatus === 409 || errorStatus === 422;
+  const unauthorized = errorStatus === 401;
 
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) p.close(); }}>
     <section className="drawer sync-drawer" role="dialog" aria-modal="true" aria-labelledby="sync-title">
@@ -151,7 +177,7 @@ export default function GithubSyncDrawer(p: GithubSyncDrawerProps) {
       {!ready && <p className="help">A token, an <code>owner/repo</code>, and a file path are all needed before either request can run.</p>}
 
       <div className="row gap end">
-        <button className="text-button" onClick={() => { patch({ token: '', sha: null }); saveSyncSettings({ token: '', repo: state.repo, branch: state.branch, path: state.path, message: state.message }); p.notify('GitHub token forgotten from this browser.'); }}>Forget token</button>
+        <button className="text-button" onClick={() => { patch({ token: '', sha: null }); saveSyncSettings({ token: '', repo: state.repo, branch: state.branch, path: state.path, message: state.message }); p.notify({ tone: 'success', title: 'Token forgotten · ', message: 'Removed from this browser.' }); }}>Forget token</button>
         <button className="button small" onClick={p.close}>Close</button>
       </div>
     </section>

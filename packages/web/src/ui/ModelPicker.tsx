@@ -3,7 +3,8 @@ import { Check, ChevronDown, CreditCard, KeyRound, LoaderCircle, RefreshCw, Sear
 import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
 import { providers, type Provider } from '../lib/providers';
 import { badgeFor, canPayFor, emptyReason, hasAnyKey, type Reach } from '../lib/availability';
-import { filterChoices, type ModelChoice } from '../lib/modelChoices';
+import { capabilityTier, filterChoices, rankChoices, TIER_LABELS, type ModelChoice } from '../lib/modelChoices';
+import { pipeEnabled, type PipeSettings } from '../lib/pipes';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
 import type { FreeTier } from '../lib/store';
@@ -17,6 +18,10 @@ import type { FreeTier } from '../lib/store';
 // actually reaches — read live from the provider's own /models the moment the key is entered —
 // and not a compiled seed list; a vendor with no key keeps its seeds as a preview of what a key
 // would unlock. A live list can run to hundreds of ids, so the menu opens with a filter box.
+//
+// Every group is sorted by capability tier (lib/modelChoices.ts): flagships first, then fast
+// lightweight models, then previews and legacy releases, and each row says which tier it is in.
+// A provider whose pipe is switched off in Connectors → Model providers does not appear at all.
 
 export interface ModelPickerProps {
   model: string;
@@ -38,6 +43,8 @@ export interface ModelPickerProps {
   onNeedsKey: (model: CatalogModel) => void;
   onNeedsPlan: (model: ModelChoice) => void;
   onDiscover: (provider: Provider) => void;
+  /** Which provider groups are switched on (Connectors → Model providers). */
+  pipes: PipeSettings;
 }
 
 export function modelLabel(model: string, labels: Record<string, string> = {}): string {
@@ -52,7 +59,8 @@ export function payLabel(inference: InferenceMode): string {
 /** How many rows a filtered group shows before asking for a narrower filter. */
 const VISIBLE_CAP = 60;
 /** Vendors in the order their groups appear; gateways after the direct vendors. */
-const ORDER: Provider[] = ['openrouter', 'anthropic', 'openai', 'google', 'groq', 'cohere', 'xkiro', 'aihubmix', 'huggingface'];
+const ORDER: Provider[] = ['ollama', 'openrouter', 'anthropic', 'openai', 'google', 'xai', 'groq', 'cohere', 'venice', 'xkiro', 'aihubmix', 'huggingface'];
+const tierOf = (m: ModelChoice) => TIER_LABELS[capabilityTier(m.id, m.label)];
 
 export default function ModelPicker(p: ModelPickerProps) {
   const [open, setOpen] = useState(false);
@@ -71,8 +79,8 @@ export default function ModelPicker(p: ModelPickerProps) {
   useEffect(() => { if (!open) setQuery(''); }, [open]);
 
   const nameFor = (id: string) => p.labels[id] ?? findModel(id)?.label ?? id;
-  const freeModels = useMemo<ModelChoice[]>(() => p.free.models.map(id => ({ id, label: nameFor(id) })), [p.free.models, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
-  const paidModels = useMemo<ModelChoice[]>(() => p.paid.models.map(id => ({ id, label: p.paid.labels[id] ?? nameFor(id) })), [p.paid.models, p.paid.labels, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
+  const freeModels = useMemo<ModelChoice[]>(() => rankChoices(p.free.models.map(id => ({ id, label: nameFor(id) }))), [p.free.models, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
+  const paidModels = useMemo<ModelChoice[]>(() => rankChoices(p.paid.models.map(id => ({ id, label: p.paid.labels[id] ?? nameFor(id) }))), [p.paid.models, p.paid.labels, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
   const selected = (id: string) => p.model.toLowerCase() === id.toLowerCase();
   const badge = payLabel(p.inference);
   const payable = (m: CatalogModel) => canPayFor(m.provider, p.reach);
@@ -80,16 +88,18 @@ export default function ModelPicker(p: ModelPickerProps) {
 
   // Keyed vendors first, in a fixed order, then the rest as previews of what a key would unlock.
   const vendors = useMemo(() => {
-    const keyed = ORDER.filter(id => p.keyed.has(id));
-    const unkeyed = ORDER.filter(id => !p.keyed.has(id) && catalog.some(m => m.provider === id));
+    const shownPipe = (id: Provider) => pipeEnabled(id, p.pipes);
+    const keyed = ORDER.filter(id => p.keyed.has(id) && shownPipe(id));
+    const unkeyed = ORDER.filter(id => !p.keyed.has(id) && shownPipe(id) && !providers[id].keyless && (catalog.some(m => m.provider === id) || providers[id].models.length > 0));
     return [...keyed, ...unkeyed].map(provider => {
       const live = p.discovered[provider];
-      const models: ModelChoice[] = p.keyed.has(provider) && live && live.models.length
-        ? live.models
-        : catalog.filter(m => m.provider === provider).map(m => ({ id: m.id, label: m.label, ...(m.tier === 'byok' ? { free: true } : {}) }));
+      const seeds: ModelChoice[] = catalog.some(m => m.provider === provider)
+        ? catalog.filter(m => m.provider === provider).map(m => ({ id: m.id, label: m.label, ...(m.tier === 'byok' ? { free: true } : {}) }))
+        : providers[provider].models.map(id => ({ id, label: findModel(id)?.label ?? id }));
+      const models: ModelChoice[] = rankChoices(p.keyed.has(provider) && live && live.models.length ? live.models : seeds);
       return { provider, models, live: Boolean(p.keyed.has(provider) && live && live.models.length), error: p.keyed.has(provider) ? live?.error : undefined };
     });
-  }, [p.keyed, p.discovered]);
+  }, [p.keyed, p.discovered, p.pipes]);
 
   const total = freeModels.length + paidModels.length + vendors.reduce((n, v) => n + v.models.length, 0);
   const shown = <T extends ModelChoice>(list: T[]) => filterChoices(list, query);
@@ -111,7 +121,7 @@ export default function ModelPicker(p: ModelPickerProps) {
   const row = (m: ModelChoice, onClick: () => void, badgeText: string, included: boolean, sub: string) =>
     <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={selected(m.id) ? 'model-option active' : 'model-option'} onClick={onClick} title={m.id}>
       <strong><span className="model-option-name">{m.label}</span><em className={included ? 'model-badge included' : 'model-badge'}>{badgeText}</em>{selected(m.id) && <Check size={12} />}</strong>
-      <small>{sub}</small>
+      <small>{tierOf(m)} · {sub}</small>
     </button>;
 
   return <div className="model-picker" ref={root}>
@@ -145,17 +155,19 @@ export default function ModelPicker(p: ModelPickerProps) {
         const list = shown(models);
         if (query && !list.length) return null;
         return <div key={provider} className="model-group">
-          <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {unlocked ? (live ? `· ${models.length.toLocaleString()} on your key` : '· key active') : '· bring your key'}
+          <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {providers[provider].keyless ? (live ? `· ${models.length.toLocaleString()} installed` : '· local') : unlocked ? (live ? `· ${models.length.toLocaleString()} on your key` : '· key active') : '· bring your key'}
             {unlocked && <button type="button" className="model-refresh" title={busy ? 'Reading the live list…' : 'Re-read the live model list'} aria-label={`Refresh ${providerName} models`} disabled={busy} onClick={e => { e.stopPropagation(); p.onDiscover(provider); }}>{busy ? <LoaderCircle size={11} className="spin" /> : <RefreshCw size={11} />}</button>}
           </span>
           {!unlocked && <small className="model-group-note">Add your {providerName} API key in Settings — the dropdown then lists every model that key reaches.</small>}
-          {unlocked && !live && busy && <small className="model-group-note">Reading what your key reaches…</small>}
+          {unlocked && !live && busy && <small className="model-group-note">{providers[provider].keyless ? 'Reading the models installed on this machine…' : 'Reading what your key reaches…'}</small>}
+          {providers[provider].keyless && !live && !busy && !error && <small className="model-group-note">No local models found yet. Run <code>ollama pull</code>, then refresh.</small>}
           {unlocked && !live && !busy && error && <small className="model-group-note">Could not read the live list ({error}). Showing a starter set; type any model ID in Settings.</small>}
           {list.slice(0, VISIBLE_CAP).map(m => {
             const seed = findModel(m.id);
             const included = seed && seed.provider === provider ? badgeFor(seed, p.reach) === 'included' : false;
-            const badgeText = included ? 'Included / Free' : m.free ? 'Free on your key' : 'BYOK';
-            return row(m, () => chooseVendor(provider, m), badgeText, included || Boolean(m.free), unlocked ? (p.inference === 'credits' ? 'on your plan' : 'on your key') : `${seed?.weight ?? 3} cr/1K on credits`);
+            const local = Boolean(providers[provider].keyless);
+            const badgeText = local ? 'Local' : included ? 'Included / Free' : m.free ? 'Free on your key' : 'BYOK';
+            return row(m, () => chooseVendor(provider, m), badgeText, local || included || Boolean(m.free), local ? 'runs on this machine' : unlocked ? (p.inference === 'credits' ? 'on your plan' : 'on your key') : `${seed?.weight ?? 3} cr/1K on credits`);
           })}
           {list.length > VISIBLE_CAP && <small className="model-group-note">{(list.length - VISIBLE_CAP).toLocaleString()} more — type to narrow the list.</small>}
         </div>;

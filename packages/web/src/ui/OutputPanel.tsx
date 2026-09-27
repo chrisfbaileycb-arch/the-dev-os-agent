@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, CircleAlert, Code2, Copy, Eye, GitCompareArrows, LoaderCircle, PanelRightClose, PanelRightOpen, RotateCw, Server, Settings2 } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, CircleCheck, Code2, Columns2, Copy, Eye, FileArchive, FileDown, LoaderCircle, Maximize2, Minimize2, Monitor, MonitorPlay, PanelRightClose, Pencil, RotateCw, Server, Smartphone, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import { parseProject, withReactHookImports, type Project, type ProjectFile } from '../lib/project';
 import { buildProject, type BuildResult } from '../lib/bundle/client';
 import { highlightCode } from '../lib/highlight';
+import { archiveName, saveBlob, zipBlob } from '../lib/download';
+import { redactSecrets, sanitizeFiles } from '../lib/secrets';
 import type { GithubSettings } from '../lib/connectors';
 import PushToGithub from './PushToGithub';
-import GithubSyncDrawer from './GithubSyncDrawer';
+import GithubSyncDrawer, { type SyncToast } from './GithubSyncDrawer';
 import { emptySyncState, loadSyncSettings, type GithubSyncState } from '../lib/githubSync';
 
 export interface OutputPanelProps {
@@ -21,10 +23,18 @@ export interface OutputPanelProps {
    */
   onPreviewFocus: () => void;
   streaming?: boolean;
+  /** Store a token or a pushed-to repository on the GitHub connector. */
+  updateGithub: (patch: Partial<GithubSettings>) => void;
+  /** Credentials this visitor holds, redacted from anything exported or pushed. */
+  secrets: string[];
+  /** The request that produced the current project, for the commit message. */
+  request?: string;
 }
 
 type BuildState = { kind: 'idle' } | { kind: 'building' } | { kind: 'ready'; html: string; seq: number } | { kind: 'error'; errors: string[] };
-type View = 'preview' | 'code' | 'edit';
+type View = 'preview' | 'code';
+/** How wide the frame renders: the panel's full width, or a phone-sized column inside it. */
+type Device = 'desktop' | 'mobile';
 
 function buildState(result: BuildResult, seq: number): BuildState {
   return result.ok ? { kind: 'ready', html: result.html, seq } : { kind: 'error', errors: result.errors };
@@ -60,21 +70,37 @@ type PreviewStatus = 'idle' | 'building' | 'live' | 'failed';
 /**
  * The state of the preview, named for what it actually is.
  *
- * This used to read "Dev Server: Running / Ready" while nothing of the kind existed: there is no
- * server hosting the generated app. `buildProject` compiles the project in a worker and the result
- * is handed to a sandboxed iframe, so the honest words are about the build and the frame. Calling
- * it a server made two failures hard to read — a build that never finished looked like a server
- * that was "Ready", and a preview that did not paint looked like a server that would not start.
+ * There is no server hosting the generated app: `buildProject` compiles the project in a worker
+ * and the result is handed to a sandboxed iframe, so the honest words are about the build and the
+ * frame, never a "Dev Server: Running" that does not exist.
  */
 function statusLabel(status: PreviewStatus): { text: string; running: boolean } {
   if (status === 'building') return { text: 'Building…', running: false };
   if (status === 'live') return { text: 'Preview live', running: true };
   if (status === 'failed') return { text: 'Build failed', running: false };
-  return { text: 'No preview yet', running: false };
+  return { text: 'Idle', running: false };
+}
+
+/**
+ * A file pulled into an empty canvas becomes a project of its own.
+ *
+ * Wrapping it in a path-named fence and handing it to `parseProject` means a pulled `index.html`
+ * or `App.tsx` gets exactly the same treatment as one an agent wrote. A file that is not runnable
+ * on its own (a README, a helper module) still opens, so it can be read, edited and pushed back.
+ */
+function projectFromFile(path: string, content: string): { project: Project; runnable: boolean } {
+  const parsed = parseProject(`\`\`\`${path}\n${content}\n\`\`\``);
+  if (parsed) return { project: parsed, runnable: true };
+  return { project: { files: [{ path, content }], entry: path, dependencies: {}, kind: /\.(tsx|jsx)$/.test(path) ? 'react' : 'html' }, runnable: false };
 }
 
 export default function OutputPanel(p: OutputPanelProps) {
   const [view, setView] = useState<View>('preview');
+  const [editing, setEditing] = useState(false);
+  const [device, setDevice] = useState<Device>('desktop');
+  const [split, setSplit] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [project, setProject] = useState<Project | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [activeCode, setActiveCode] = useState('');
@@ -83,13 +109,14 @@ export default function OutputPanel(p: OutputPanelProps) {
   const [pushOpen, setPushOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [syncState, setSyncState] = useState<GithubSyncState>(() => ({ ...emptySyncState(), ...loadSyncSettings(), sha: null }));
-  const [announcement, setAnnouncement] = useState('');
-  const announceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [toast, setToast] = useState<SyncToast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState(false);
   const [editDirty, setEditDirty] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const seqRef = useRef(0);
   const editTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   const selected = useMemo(() => project?.files.find(file => file.path === selectedFile) ?? null, [project, selectedFile]);
 
@@ -108,13 +135,18 @@ export default function OutputPanel(p: OutputPanelProps) {
 
   useEffect(() => {
     const next = parseProject(p.content);
+    // A reply with no runnable code leaves whatever is already on the canvas — a pulled file, an
+    // edit in progress — rather than blanking it; the chat already shows the prose. Only an empty
+    // session (new, or cleared) returns the canvas to idle.
+    if (!next) {
+      if (!p.content) { abortRef.current?.abort(); setProject(null); setSelectedFile(null); setActiveCode(''); setBuild({ kind: 'idle' }); setEditDirty(false); }
+      return;
+    }
     setProject(next);
-    setSelectedFile(next?.entry ?? null);
-    setActiveCode(next?.files.find(file => file.path === next.entry)?.content ?? '');
-    setView('preview');
+    setSelectedFile(next.entry);
+    setActiveCode(next.files.find(file => file.path === next.entry)?.content ?? '');
+    setView('preview'); setEditing(false);
     setEditDirty(false);
-    abortRef.current?.abort();
-    if (!next) { setBuild({ kind: 'idle' }); return; }
     compile(next, true);
     return () => { abortRef.current?.abort(); if (editTimer.current) clearTimeout(editTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,6 +156,25 @@ export default function OutputPanel(p: OutputPanelProps) {
     if (!selected || selected.content === activeCode) return;
     setActiveCode(selected.content);
   }, [selected, activeCode]);
+
+  // The export menu closes on any click outside it, and on Escape.
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onDown = (e: MouseEvent) => { if (!exportRef.current?.contains(e.target as Node)) setExportOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExportOpen(false); };
+    document.addEventListener('mousedown', onDown); document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [exportOpen]);
+
+  // Escape leaves fullscreen — unless a dialog is open on top, which Escape belongs to first.
+  useEffect(() => {
+    if (!fullscreen || syncOpen || pushOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [fullscreen, syncOpen, pushOpen]);
+
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
   function chooseFile(path: string) {
     const file = project?.files.find(f => f.path === path);
@@ -138,9 +189,14 @@ export default function OutputPanel(p: OutputPanelProps) {
     setProject(next); compile(next);
   }
 
-  /** A pulled file replaces the one at that path, or joins the project if it is new, then rebuilds. */
+  /** A pulled file replaces the one at that path, joins the project if it is new, or seeds an empty canvas. */
   function applyPulled(path: string, content: string) {
-    if (!project) return;
+    if (!project) {
+      const { project: seeded, runnable } = projectFromFile(path, content);
+      setProject(seeded); setSelectedFile(path); setActiveCode(content); setEditDirty(false);
+      if (runnable) { setView('preview'); compile(seeded, true); } else { setView('code'); setBuild({ kind: 'idle' }); }
+      return;
+    }
     const exists = project.files.some(file => file.path === path);
     const files: ProjectFile[] = exists
       ? project.files.map(file => file.path === path ? { ...file, content } : file)
@@ -150,11 +206,11 @@ export default function OutputPanel(p: OutputPanelProps) {
     compile(next, true);
   }
 
-  /** Screen-reader and sighted confirmation for sync results, cleared after a few seconds. */
-  function notify(message: string) {
-    setAnnouncement(message);
-    if (announceTimer.current) clearTimeout(announceTimer.current);
-    announceTimer.current = setTimeout(() => setAnnouncement(''), 4000);
+  /** A visible toast for sync results, also read out by screen readers, cleared after a few seconds. */
+  function notify(next: SyncToast) {
+    setToast(next);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), next.tone === 'error' ? 7000 : 4000);
   }
 
   function rebuild() {
@@ -167,57 +223,108 @@ export default function OutputPanel(p: OutputPanelProps) {
     catch { setCopied(false); }
   }
 
+  // Exports go through the same scanner as a push: a key the model echoed into a file, or one of
+  // this visitor's own saved credentials, is replaced with [REDACTED] before the file leaves.
+  function downloadZip() {
+    if (!project) return;
+    const clean = sanitizeFiles(project.files, p.secrets);
+    saveBlob(zipBlob(clean.files), archiveName(project.entry)); setExportOpen(false);
+    if (clean.redactions) notify({ tone: 'success', title: 'ZIP saved · ', message: `${clean.redactions} credential${clean.redactions === 1 ? '' : 's'} in ${clean.touched.join(', ')} replaced with [REDACTED].` });
+  }
+  function downloadFile() {
+    if (!selectedFile) return;
+    const clean = redactSecrets(activeCode, p.secrets);
+    saveBlob(new Blob([clean.text], { type: 'text/plain' }), selectedFile.replace(/^.*\//, '')); setExportOpen(false);
+    if (clean.count) notify({ tone: 'success', title: 'File saved · ', message: `${clean.count} credential${clean.count === 1 ? '' : 's'} replaced with [REDACTED].` });
+  }
+
   const isBuilding = build.kind === 'building';
   // The badge tracks the build state, which is the only state there is: a compiled result or a
   // failure, never a server that might or might not be listening.
-  const previewStatus: PreviewStatus = isBuilding || p.streaming ? 'building' : build.kind === 'ready' ? 'live' : build.kind === 'error' ? 'failed' : 'idle';
+  const previewStatus: PreviewStatus = isBuilding || (p.streaming && project) ? 'building' : build.kind === 'ready' ? 'live' : build.kind === 'error' ? 'failed' : 'idle';
   const devStatus = statusLabel(previewStatus);
   const codeMarkup = highlightCode(activeCode);
   /** Every route back to the running app: re-mount the frame and restore the canonical split. */
-  const showPreview = () => { setView('preview'); p.onPreviewFocus(); setRefresh(n => n + 1); };
+  const showPreview = () => { setView('preview'); setEditing(false); p.onPreviewFocus(); setRefresh(n => n + 1); };
+  const codeShown = view === 'code' || split;
 
-  return <aside className="preview-panel">
+  const fileTabs = project && project.files.length > 1 && <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>;
+
+  const codePane = project && <div className={editing ? 'output-editor' : 'output-code'}>
+    {fileTabs}
+    <div className="code-toolbar">
+      <span>{selectedFile ?? 'Generated source'}{editing && editDirty ? ' · edited' : ''}</span>
+      <span className="row gap">
+        <span className="segmented" role="group" aria-label="Code mode">
+          <button aria-pressed={!editing} className={!editing ? 'active' : ''} onClick={() => setEditing(false)}><Eye size={11} />View</button>
+          <button aria-pressed={editing} className={editing ? 'active' : ''} onClick={() => setEditing(true)}><Pencil size={11} />Edit{editDirty && <span className="edit-dot" />}</button>
+        </span>
+        {editing && !split
+          ? <button className="toolbar-button" onClick={showPreview}><Check size={12} />Apply & Preview</button>
+          : <button className="toolbar-button" onClick={() => void copyCode()}><Copy size={12} />{copied ? 'Copied' : 'Copy'}</button>}
+      </span>
+    </div>
+    {editing
+      ? <textarea aria-label="Generated code editor" className="code-editor" spellCheck={false} value={activeCode} onChange={event => edit(event.target.value)} />
+      : <pre className="syntax-code" dangerouslySetInnerHTML={{ __html: codeMarkup }} />}
+  </div>;
+
+  const previewPane = project && <div className="output-preview">
+    <div className={device === 'mobile' ? 'device-stage mobile' : 'device-stage'}>
+      {isBuilding && <div className="preview-empty"><LoaderCircle size={20} className="spin" /><span>{p.streaming ? 'Receiving executable code…' : 'Compiling the latest app…'}</span></div>}
+      {p.streaming && <span className="streaming-note">Live code stream · preview refreshes when complete</span>}
+      {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
+      {build.kind === 'idle' && <div className="preview-empty"><Code2 size={20} strokeWidth={1.25} /><span>{selectedFile} is not a page on its own. Open it in the code view, or pull an HTML or React entry file.</span></div>}
+      {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} /><button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Rerun</button></>}
+    </div>
+  </div>;
+
+  return <aside className={fullscreen ? 'preview-panel fullscreen' : 'preview-panel'}>
     <header className="preview-head developer-toolbar">
-      <div className="toolbar-brand"><Code2 size={14} /><span>Workspace</span></div>
-      <nav className="developer-tabs" role="tablist" aria-label="Developer workspace views">
-        <button role="tab" aria-selected={view === 'preview'} className={view === 'preview' ? 'developer-tab active' : 'developer-tab'} onClick={showPreview}><Eye size={12} />Preview{(isBuilding || p.streaming) && <LoaderCircle size={11} className="spin" />}{p.streaming && <span className="stream-pulse" aria-label="Code is streaming" />}</button>
-        <button role="tab" aria-selected={view === 'code'} className={view === 'code' ? 'developer-tab active' : 'developer-tab'} onClick={() => setView('code')}><Code2 size={12} />Code</button>
-        <button role="tab" aria-selected={view === 'edit'} className={view === 'edit' ? 'developer-tab active' : 'developer-tab'} onClick={() => setView('edit')}><Settings2 size={12} />Edit{editDirty && <span className="edit-dot" />}</button>
-      </nav>
+      <div className="toolbar-group">
+        <button className={codeShown ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={codeShown} disabled={!project || split} onClick={() => { if (view === 'code') showPreview(); else setView('code'); }} title="View or edit the generated source"><Code2 size={12} />View / Edit Code</button>
+        <div className="menu-anchor" ref={exportRef}>
+          <button className="toolbar-button" aria-haspopup="menu" aria-expanded={exportOpen} disabled={!project} onClick={() => setExportOpen(o => !o)}><FileArchive size={12} />Export<ChevronDown size={11} /></button>
+          {exportOpen && <div className="toolbar-menu" role="menu">
+            <button role="menuitem" onClick={downloadZip}><FileArchive size={13} /><span><strong>Download ZIP</strong><small>{project?.files.length ?? 0} file{project?.files.length === 1 ? '' : 's'}</small></span></button>
+            <button role="menuitem" disabled={!selectedFile} onClick={downloadFile}><FileDown size={13} /><span><strong>Download current file</strong><small>{selectedFile}</small></span></button>
+            <button role="menuitem" onClick={() => { setExportOpen(false); setPushOpen(true); }}><GithubMark size={13} /><span><strong>Commit all files to GitHub…</strong><small>Uses Connectors → GitHub</small></span></button>
+          </div>}
+        </div>
+        <button className="toolbar-button" onClick={() => setSyncOpen(true)} title="Pull or push one file against a GitHub branch"><GithubMark size={12} />GitHub: Sync</button>
+      </div>
       <div className="toolbar-actions">
+        <span className="segmented" role="group" aria-label="Viewport">
+          <button aria-pressed={device === 'desktop'} className={device === 'desktop' ? 'active' : ''} title="Desktop width" aria-label="Desktop viewport" onClick={() => setDevice('desktop')}><Monitor size={12} /></button>
+          <button aria-pressed={device === 'mobile'} className={device === 'mobile' ? 'active' : ''} title="Mobile width" aria-label="Mobile viewport" onClick={() => setDevice('mobile')}><Smartphone size={12} /></button>
+          <button aria-pressed={split} className={split ? 'active' : ''} title="Code and preview side by side" aria-label="Split code and preview" disabled={!project} onClick={() => setSplit(s => !s)}><Columns2 size={12} /></button>
+          <button aria-pressed={fullscreen} className={fullscreen ? 'active' : ''} title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => setFullscreen(f => !f)}>{fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
+        </span>
         <span className={devStatus.running ? 'dev-status running' : 'dev-status'} title="The generated app is compiled in this browser and rendered in a sandboxed frame; nothing is served from a dev server."><Server size={12} />{devStatus.text}</span>
-        <button className="toolbar-button" onClick={rebuild} disabled={!project || isBuilding} title="Restart the generated app"><RotateCw size={12} />Restart</button>
-        {project && <button className="toolbar-button" onClick={() => setPushOpen(true)} title="Save the current files to GitHub"><GithubMark size={12} />GitHub</button>}
-        {project && <button className="toolbar-button" onClick={() => setSyncOpen(true)} title="Pull or push one file against a GitHub branch"><GitCompareArrows size={12} />Sync file</button>}
-        <button className="icon-button" aria-label="Close output panel" onClick={p.close}><PanelRightClose size={14} /></button>
+        <button className="icon-button" onClick={rebuild} disabled={!project || isBuilding} title="Rebuild the generated app" aria-label="Rebuild the generated app"><RotateCw size={13} /></button>
+        <button className="icon-button" aria-label="Close output panel" onClick={() => { setFullscreen(false); p.close(); }}><PanelRightClose size={14} /></button>
       </div>
     </header>
     <div className="preview-content">
-      {!project && (!p.content ? <div className="preview-empty"><PanelRightOpen size={22} strokeWidth={1.25} /><span>Agent output will appear here</span></div> : <pre className="preview-body">{p.content}</pre>)}
-      {project && view === 'preview' && <div className="output-preview">
-        {isBuilding && <div className="preview-empty"><LoaderCircle size={20} className="spin" /><span>{p.streaming ? 'Receiving executable code…' : 'Compiling the latest app…'}</span></div>}
-        {p.streaming && <span className="streaming-note">Live code stream · preview refreshes when complete</span>}
-        {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
-        {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} /><button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Refresh / Rerun</button></>}
+      {!project && <div className="preview-empty canvas-idle">
+        <MonitorPlay size={26} strokeWidth={1.1} />
+        <strong>Canvas Idle · Ready to preview</strong>
+        <span>Prompt the agent on the left or load a file to see live rendering.</span>
       </div>}
-      {project && view === 'code' && <div className="output-code">
-        <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>
-        <div className="code-toolbar"><span>{selectedFile ?? 'Generated source'}</span><button className="toolbar-button" onClick={() => void copyCode()}><Copy size={12} />{copied ? 'Copied' : 'Copy Code'}</button></div>
-        <pre className="syntax-code" dangerouslySetInnerHTML={{ __html: codeMarkup }} />
-      </div>}
-      {project && view === 'edit' && <div className="output-editor">
-        <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>
-        <div className="code-toolbar"><span>Edit source{editDirty ? ' · unsaved' : ''}</span><button className="toolbar-button" onClick={showPreview}><Check size={12} />Apply & Preview</button></div>
-        <textarea aria-label="Generated code editor" className="code-editor" spellCheck={false} value={activeCode} onChange={event => edit(event.target.value)} />
-      </div>}
+      {project && split && <div className="output-split">{codePane}{previewPane}</div>}
+      {project && !split && (view === 'code' ? codePane : previewPane)}
     </div>
-    <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
+    {toast && <div className={`toast ${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
+      {toast.tone === 'error' ? <CircleAlert size={14} /> : <CircleCheck size={14} />}
+      <span><strong>{toast.title}</strong>{toast.message}</span>
+      <button className="icon-button" aria-label="Dismiss" onClick={() => setToast(null)}><X size={12} /></button>
+    </div>}
     <GithubSyncDrawer
       open={syncOpen} close={() => setSyncOpen(false)}
       state={syncState} patch={partial => setSyncState(current => ({ ...current, ...partial }))}
       activePath={selectedFile} activeContent={activeCode} applyPulled={applyPulled}
-      files={project?.files ?? []} notify={notify}
+      files={project?.files ?? []} notify={notify} secrets={p.secrets}
     />
-    <PushToGithub open={pushOpen} close={() => setPushOpen(false)} files={project?.files ?? []} github={p.github} openConnectors={p.openConnectors} />
+    <PushToGithub open={pushOpen} close={() => setPushOpen(false)} files={project?.files ?? []} github={p.github} updateGithub={p.updateGithub} openConnectors={p.openConnectors} secrets={p.secrets} request={p.request} />
   </aside>;
 }

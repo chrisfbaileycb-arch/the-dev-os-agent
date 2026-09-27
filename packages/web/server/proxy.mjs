@@ -42,6 +42,9 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     // Hugging Face's Inference Providers router is likewise OpenAI-compatible for chat and
     // lists its live roster at /v1/models, so it too needs only a fixed home.
     huggingface: 'https://router.huggingface.co/v1',
+    // xAI (Grok) and Venice both speak the OpenAI chat surface at a fixed home.
+    xai: 'https://api.x.ai/v1',
+    venice: 'https://api.venice.ai/api/v1',
     'cheaper-inference': cheaperInferenceBase(env),
     xkiro: xkiroBase(env),
   };
@@ -230,7 +233,7 @@ export function outputLimit(provider, model, max) {
  * token count into a failed run. Requested only where it is known to be supported.
  */
 export const usageReportable = (provider, target) =>
-  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xai', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
 
 /**
  * An OpenAI-shaped chat request as Anthropic's /v1/messages wants it.
@@ -379,7 +382,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // token; every other provider here takes Authorization.
       const headers = { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT, Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? (target.nativeAnthropic ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION } : { Authorization: `Bearer ${apiKey}` }) : {}) };
       // APP_ORIGIN is operator-set and also becomes a header, so it gets the same treatment.
-      if (provider === 'openrouter') { headers['HTTP-Referer'] = cleanKey(env.APP_ORIGIN) || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
+      if (provider === 'openrouter') { headers['HTTP-Referer'] = cleanKey(env.APP_ORIGIN) || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Signal Forge OS'; }
       let payload; let suffix;
       if (path === '/api/chat') {
         if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || !validContent(m.content))) throw new HttpError(400, 'messages must contain standard role/content text pairs, optionally with up to five image parts.');

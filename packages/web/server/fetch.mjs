@@ -113,7 +113,7 @@ export function createFetcher({ env = process.env, resolve = lookup, transport =
       try {
         response = await transport(url.toString(), {
           method: 'GET', address, signal: controller.signal,
-          headers: { Accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5', 'Accept-Language': 'en', 'User-Agent': 'Mozilla/5.0 (compatible; HeyBuddyFetch/0.1; +https://github.com/chrisfbaileycb-arch/the-dev-os-agent)' },
+          headers: { Accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5', 'Accept-Language': 'en', 'User-Agent': 'Mozilla/5.0 (compatible; SignalForgeOSFetch/0.1; +https://github.com/chrisfbaileycb-arch/the-dev-os-agent)' },
         });
       } catch { throw new HttpError(502, controller.signal.aborted ? 'That page took too long to answer.' : 'Could not reach that URL.'); }
       finally { clearTimeout(timer); }

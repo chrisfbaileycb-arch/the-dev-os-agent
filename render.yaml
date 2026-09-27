@@ -1,4 +1,4 @@
-# Render Blueprint for the Hey Buddy web edition.
+# Render Blueprint for the Signal Forge OS web edition.
 # Create it from the dashboard: New > Blueprint, pick this repo, branch main.
 #
 # ONE standard Node web service. No Docker, no persistent disk, no background worker — this
@@ -62,6 +62,13 @@ services:
       - key: DATA_FILE
         value: /tmp/heybuddy.sqlite
 
+      # --- Private beta gate -------------------------------------------------------------
+      # The passcode visitors enter before the workspace loads. Vite reads it during the BUILD
+      # and bakes in only a salted hash, so change it here and redeploy. Left unset, a production
+      # build locks everyone out rather than opening. It is a front-end curtain, not server auth.
+      - key: VITE_BETA_ACCESS_KEY
+        sync: false
+
       # --- Admin dashboard ---------------------------------------------------------------
       # One token opens /admin, where provider keys, the free and paid model tiers, and the
       # free-tier limits are managed live without a redeploy. Generate one (openssl rand -hex 24)
@@ -115,7 +122,7 @@ services:
         value: "100000"
 
       # --- Connectors ------------------------------------------------------------------
-      # Hey Buddy's own paid plans. A hosted checkout URL per plan — a Stripe Payment Link is the
+      # Signal Forge OS's own paid plans. A hosted checkout URL per plan — a Stripe Payment Link is the
       # simplest thing that works. Until one is set the Plans page keeps the price and the feature
       # list but says checkout is not open, rather than putting a Subscribe button over a dead
       # link. These are public URLs by design; the processor's secret key never reaches this

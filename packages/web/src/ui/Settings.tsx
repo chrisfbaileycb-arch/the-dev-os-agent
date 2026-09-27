@@ -3,7 +3,8 @@ import { Check, Coins, CreditCard, ExternalLink, KeyRound, LoaderCircle, Monitor
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
-import { providers, switchProvider, type Keyring, type Provider } from '../lib/providers';
+import { flagshipFor, providers, switchProvider, type Keyring, type Provider } from '../lib/providers';
+import { rankChoices } from '../lib/modelChoices';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
@@ -25,7 +26,7 @@ export interface SettingsProps {
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
-const BYOK_PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic', 'google', 'groq', 'cohere', 'aihubmix', 'huggingface', 'xkiro'];
+const BYOK_PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic', 'google', 'xai', 'groq', 'cohere', 'venice', 'aihubmix', 'huggingface', 'xkiro'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
   openrouter: 'Your OpenRouter key',
   openai: 'Your OpenAI key',
@@ -33,6 +34,8 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
   google: 'Your Google AI Studio key',
   groq: 'Your Groq key',
   cohere: 'Your Cohere key',
+  xai: 'Your xAI key (xai-…)',
+  venice: 'Your Venice key',
   aihubmix: 'Your AIHubMix key',
   huggingface: 'Your Hugging Face token',
   xkiro: 'Your xKiro key',
@@ -50,9 +53,14 @@ export default function Settings(p: SettingsProps) {
     p.setKeys({ ...p.keys, [id]: value });
     if (id === provider) set({ token: value });
   }
+  /**
+   * Switching provider keeps the Remember choice. It used to load the new provider's own flag —
+   * false for one never saved — and because Save writes the whole keyring under that one flag,
+   * switching to a new provider (say, xAI) and pressing Save wiped every key saved before it.
+   */
   function pickProvider(id: Provider) {
     const next = switchProvider(c, id);
-    p.setConnection({ ...next, mode: 'remote', inference: 'byok' });
+    p.setConnection({ ...next, mode: 'remote', inference: 'byok', saveKey: Boolean(c.saveKey || next.saveKey), model: next.model || flagshipFor(id) });
   }
   function pickModel(id: string) {
     if (id) set({ model: id, inference: 'byok' });
@@ -66,7 +74,7 @@ export default function Settings(p: SettingsProps) {
   }
 
   const live = p.discovered[provider];
-  const choices = useMemo(() => live?.models ?? [], [live]);
+  const choices = useMemo(() => rankChoices(live?.models ?? []), [live]);
   const checking = p.discovering.has(provider);
   const selectedInChoices = choices.some(choice => choice.id === c.model);
   const recent = p.ledger.slice().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8);
@@ -117,11 +125,11 @@ export default function Settings(p: SettingsProps) {
             </div>
             <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember this token in this browser</label>
           </> : <>
-            <p className="help">Orator sends requests through its protected gateway. Select the provider you already use, enter its key, and choose a model from the provider's live catalog. Your key is used only for that provider and is never bundled into the app.</p>
+            <p className="help">Orator sends requests through its protected gateway. Select the provider you already use and enter its key — that is all. It starts on the provider's flagship model and reads the live catalog by itself; change the model here or from the dropdown on the prompt bar whenever you like. Your key is used only for that provider and is never bundled into the app.</p>
             <div className="form-grid">
               <label>Provider<select value={provider} disabled={p.busy} onChange={e => pickProvider(e.target.value as Provider)}>{BYOK_PROVIDERS.map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
               <label>API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.token || p.keys[provider] || ''} placeholder={KEY_HINTS[provider]} onChange={e => setKey(provider, e.target.value)} /></label>
-              <label className="grow">Preferred model<span className="row">
+              <label className="grow">Model <small className="muted">(optional — starts on {providers[provider].flagship ?? 'the strongest model found'})</small><span className="row">
                 <select aria-label="Preferred model" value={selectedInChoices ? c.model : ''} disabled={p.busy || checking || choices.length === 0} onChange={e => pickModel(e.target.value)}>
                   {choices.length === 0 && <option value="">{checking ? 'Loading available models…' : c.token || p.keys[provider] ? 'Discover models from this provider' : 'Enter a key to list its models'}</option>}
                   {choices.length > 0 && !selectedInChoices && <option value="">{c.model ? `${c.model} (typed)` : `Choose one of ${choices.length.toLocaleString()} models`}</option>}

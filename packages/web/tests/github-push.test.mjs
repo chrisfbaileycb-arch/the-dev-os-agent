@@ -91,3 +91,30 @@ test('the existing read path is unaffected by the push addition', async () => {
   const result = await github.call('repo', { owner: 'acme', repo: 'widgets' }, 'tok', 'ws');
   assert.equal(result.defaultBranch, 'main');
 });
+
+test('push into an empty repository becomes its first commit', async () => {
+  const calls = []; const bodies = {};
+  const json = (status, data) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+  const github = createGithub({ env: {}, fetchImpl: async (url, init) => {
+    const path = url.replace('https://api.github.com', ''); const method = init?.method ?? 'GET';
+    calls.push(`${method} ${path}`); if (init?.body) bodies[`${method} ${path}`] = JSON.parse(init.body);
+    if (path === '/repos/acme/fresh') return json(200, { default_branch: 'main' });
+    if (path === '/repos/acme/fresh/git/ref/heads/main') return json(409, { message: 'Git Repository is empty.' });
+    if (path === '/repos/acme/fresh/git/blobs') return json(201, { sha: 'blob' });
+    if (path === '/repos/acme/fresh/git/trees') return json(201, { sha: 'tree' });
+    if (path === '/repos/acme/fresh/git/commits') return json(201, { sha: 'first' });
+    if (path === '/repos/acme/fresh/git/refs' && method === 'POST') return json(201, {});
+    return json(404, { message: `unhandled: ${method} ${path}` });
+  } });
+  const result = await github.push({ owner: 'acme', repo: 'fresh', branch: 'main', files: [{ path: 'index.html', content: '<p>hi</p>' }] }, 'tok', 'ws');
+  assert.equal(result.createdRepoHistory, true);
+  assert.equal(bodies['POST /repos/acme/fresh/git/trees'].base_tree, undefined);
+  assert.deepEqual(bodies['POST /repos/acme/fresh/git/commits'].parents, []);
+  assert.equal(bodies['POST /repos/acme/fresh/git/refs'].ref, 'refs/heads/main');
+  assert.ok(!calls.some(c => c.startsWith('PATCH')));
+});
+
+test('listing repositories needs the visitor’s own token, never the deployment’s', async () => {
+  const github = createGithub({ env: { GITHUB_TOKEN: 'operator-token' }, fetchImpl: async () => { throw new Error('should not fetch'); } });
+  await assert.rejects(github.repos('', 'ws'), /Add a GitHub token/);
+});

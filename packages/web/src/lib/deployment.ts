@@ -10,7 +10,7 @@ import type { FreeTier } from './store';
 // fabricating a response or silently switching execution modes.
 
 /**
- * Hey Buddy's own paid plans, as this deployment reports them.
+ * Signal Forge OS's own paid plans, as this deployment reports them.
  *
  * `checkout` is null until the operator sets the plan's checkout URL in the environment, and the
  * Plans page renders that honestly rather than putting a Subscribe button over a dead link. It

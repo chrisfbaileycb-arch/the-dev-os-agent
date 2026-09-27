@@ -1,4 +1,6 @@
 import { workspaceId } from './store';
+import { providers } from './providers';
+import { localEndpointError, normalizeLocalEndpoint } from './pipes';
 import type { Completion, Connection } from './types';
 export class ProviderError extends Error { constructor(message: string, public retryable = false, public status?: number, public code?: string) { super(message); } }
 export function validateEndpoint(value: string): string {
@@ -11,6 +13,7 @@ export function validateConnection(c: Connection): void {
   // Managed requests are routed entirely by the server, so the browser never validates or sends
   // a provider endpoint for them.
   if (c.inference !== 'free' && (!c.provider || c.provider === 'custom')) validateEndpoint(c.endpoint);
+  if (isDirect(c)) { const problem = localEndpointError(c.endpoint); if (problem) throw new Error(problem); }
   if (!c.model.trim() || c.model.length > 200) throw new Error('Choose a model from your provider.');
   if (!Number.isInteger(c.maxTokens) || c.maxTokens < 64 || c.maxTokens > 4096) throw new Error('Output limit must be between 64 and 4096 tokens.');
 }
@@ -33,6 +36,10 @@ export async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerat
     if (lines.length) yield { event, data: lines.join('\n') };
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
+/** A provider the browser calls itself — a model server on this machine — rather than through /api/chat. */
+export const isDirect = (c: Connection): boolean => Boolean(c.provider && providers[c.provider]?.direct);
+const directBase = (c: Connection) => normalizeLocalEndpoint(c.endpoint);
+const directUnreachable = (c: Connection) => new ProviderError(`Cannot reach the local model server at ${directBase(c)}. Start Ollama with this site allowed, for example: OLLAMA_ORIGINS=${typeof location === 'undefined' ? '<this site>' : location.origin} ollama serve`);
 const requestBody = (c: Connection) => ({ provider: c.provider || 'custom', apiKey: c.token, baseUrl: c.endpoint, ...(c.serverAccessToken ? { serverAccessToken: c.serverAccessToken } : {}) });
 /** The workspace header is how the server meters a zero-config run against its free credit pool. */
 const apiHeaders = () => ({ 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId() });
@@ -51,7 +58,12 @@ export async function complete(c: Connection, system: string, prompt: string, si
   const userContent = images.length ? [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))] : prompt;
   validateConnection(c); signal.throwIfAborted(); const timeout = AbortSignal.timeout(125_000);
   try {
-    const response = await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), model: c.model, messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], max_tokens: c.maxTokens }) });
+    const messages = [{ role: 'system', content: system }, { role: 'user', content: userContent }];
+    // A local model is called directly with the OpenAI chat shape and no credential; the stream it
+    // returns is the same OpenAI-compatible SSE the proxy passes through, so one parser reads both.
+    const response = isDirect(c)
+      ? await fetch(`${directBase(c)}/chat/completions`, { method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: c.model, messages, stream: true, max_tokens: c.maxTokens }) }).catch(e => { if (signal.aborted || timeout.aborted) throw e; throw directUnreachable(c); })
+      : await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), model: c.model, messages, max_tokens: c.maxTokens }) });
     await checkResponse(response);
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new ProviderError('Expected a streaming SSE response from /api/chat.');
     let text = ''; let tokens = 0; let finished = false;
@@ -90,7 +102,10 @@ export async function complete(c: Connection, system: string, prompt: string, si
 /** One model as the provider lists it: the id to send, a label where the provider gave one, and whether it calls the model free. */
 export interface DiscoveredModel { id: string; label?: string; free?: boolean; }
 export async function listModels(c: Connection, signal: AbortSignal): Promise<DiscoveredModel[]> {
-  const response = await fetch('/api/models', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: apiHeaders(), body: JSON.stringify(requestBody(c)) });
+  if (isDirect(c)) { const problem = localEndpointError(c.endpoint); if (problem) throw new ProviderError(problem); }
+  const response = isDirect(c)
+    ? await fetch(`${directBase(c)}/models`, { method: 'GET', signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) }).catch(e => { if (signal.aborted) throw e; throw directUnreachable(c); })
+    : await fetch('/api/models', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: apiHeaders(), body: JSON.stringify(requestBody(c)) });
   await checkResponse(response); const body = await response.json();
   if (!Array.isArray(body.data)) throw new ProviderError('Unsupported model catalog. You can still type a model ID.');
   return (body.data as unknown[])

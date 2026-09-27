@@ -28,6 +28,8 @@ export const PROVIDER_META = {
   anthropic: { name: 'Anthropic', console: 'https://console.anthropic.com/settings/keys' },
   google: { name: 'Google Gemini', console: 'https://aistudio.google.com/apikey' },
   cohere: { name: 'Cohere', console: 'https://dashboard.cohere.com/api-keys' },
+  xai: { name: 'xAI Grok', console: 'https://console.x.ai' },
+  venice: { name: 'Venice', console: 'https://venice.ai/settings/api' },
   xkiro: { name: 'xKiro', console: 'https://xkiro.com' },
   aihubmix: { name: 'AIHubMix', console: 'https://aihubmix.com' },
   huggingface: { name: 'Hugging Face', console: 'https://huggingface.co/settings/tokens' },

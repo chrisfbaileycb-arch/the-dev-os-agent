@@ -1,4 +1,4 @@
-// Hey Buddy's own paid plans.
+// Signal Forge OS's own paid plans.
 //
 // This deployment takes payment through a hosted checkout — a Stripe Payment Link or any other
 // HTTPS checkout URL — and the URLs live in the environment rather than in the bundle. Two

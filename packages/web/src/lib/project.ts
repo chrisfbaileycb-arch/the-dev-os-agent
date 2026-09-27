@@ -261,59 +261,75 @@ export function placeholderImage(name: string): string {
 }
 
 /**
- * The React hooks a generated app reaches for without importing.
+ * The React scope a generated app reaches for without importing.
  *
  * A model that writes `useState(0)` at the top level of a fenced file — no `import { useState }
- * from 'react'` anywhere in the project — used to build cleanly and then die at load with
+ * from 'react'` in that file — used to build cleanly and then die at load with
  * "ReferenceError: useState is not defined", because an ES module has no such global and nothing
- * put it there. The fix belongs here rather than in the worker's bundling options: esbuild's
- * `inject` takes a transform-time copy of each named export, which would mean writing these files
- * to a disk that does not exist in this sandbox, and `define` substitutes text, so injecting an
- * expression like `(globalThis.React&&globalThis.React.useState)` would splice a bare `React &&`
- * into every call site and break minification. An import statement prepended to the entry file is
- * both simpler and honest: it resolves through the same esm.sh plugin as any other import, so the
- * bundle carries one shared React, and it only ever lands in a project that could not compile
- * without it anyway.
- */
-export const REACT_HOOK_FALLBACK = "import { useState, useEffect, useReducer, useRef, useMemo, useCallback, useContext, useLayoutEffect } from 'react';";
-
-/** Names of the hooks {@link REACT_HOOK_FALLBACK} brings into scope. */
-const REACT_HOOK_NAMES = ['useState', 'useEffect', 'useReducer', 'useRef', 'useMemo', 'useCallback', 'useContext', 'useLayoutEffect'];
-
-/**
- * Does this project use React hooks that nothing imports?
+ * put it there. The same goes for `React.memo(...)` or `<React.Fragment>` in a file that never
+ * bound `React`: the automatic JSX runtime covers plain JSX, not an explicit `React.` reference.
  *
- * Deliberately conservative, because the cost of a false positive is a dead-simple unused import
- * and the cost of a false negative is a preview that shows nothing but an error banner. Only
- * `.tsx`/`.jsx` files are read, a hook counts as used when it appears as a call (`useState(`), and
- * a project where any single source file already imports from `react` is left alone entirely.
+ * The fix belongs here rather than in the worker's bundling options: esbuild's `inject` takes a
+ * transform-time copy of each named export, which would mean writing these files to a disk that
+ * does not exist in this sandbox, and `define` substitutes text, so injecting an expression like
+ * `(globalThis.React&&globalThis.React.useState)` would splice a bare `React &&` into every call
+ * site and break minification. An import statement prepended to the file that needs it is both
+ * simpler and honest: it resolves through the same esm.sh plugin as any other import, so the
+ * bundle carries one shared React.
+ *
+ * It has to be per file. Imports are module-scoped, so an import on the entry does nothing for a
+ * hook called unimported in `src/components/Counter.tsx`; and a project that imports React in one
+ * file can still forget `useEffect` in another.
  */
-export function needsReactHookFallback(files: ProjectFile[], dependencies: Record<string, string>): boolean {
-  const isReactProject = 'react' in dependencies || files.some(f => /\.(tsx|jsx)$/.test(f.path));
-  if (!isReactProject) return false;
-  // Hooks are component-local and components live in .tsx/.jsx. A bare `useState(` in a plain .ts
-  // helper is far more likely to be a local variable or a mock than an accidental global, so those
-  // files are not read at all — that is what keeps this from firing on projects that never need it.
-  const sources = files.filter(f => /\.(tsx|jsx)$/.test(f.path));
-  // One import anywhere in the project is enough: the fallback is a convenience for a model that
-  // forgot it entirely, not a shim to layer on top of a project that already knows what it is doing.
-  if (sources.some(f => /import[^;'"]*['"][^'"]*\breact\b[^'"]*['"]/.test(f.content))) return false;
-  return sources.some(file => REACT_HOOK_NAMES.some(name => new RegExp(`(?<![\\w$.])${name}\\s*\\(`).test(file.content)));
+export const REACT_HOOK_NAMES = ['useState', 'useEffect', 'useReducer', 'useRef', 'useMemo', 'useCallback', 'useContext', 'useLayoutEffect', 'useId', 'useTransition', 'useDeferredValue'] as const;
+
+const IMPORT_CLAUSE = /\bimport\s+(?:type\s+)?([\s\S]*?)\s+from\s*['"][^'"]+['"]/g;
+
+/** Is `name` already a binding in this file — imported from anywhere, or declared locally? */
+function isBound(source: string, name: string): boolean {
+  for (const m of source.matchAll(IMPORT_CLAUSE)) if (new RegExp(`(?<![\\w$])${name}(?![\\w$])`).test(m[1])) return true;
+  if (new RegExp(`\\b(?:const|let|var|function|class)\\s+${name}(?![\\w$])`).test(source)) return true;
+  // `const { useState } = React` and friends.
+  return new RegExp(`\\b(?:const|let|var)\\s*\\{[^}]*(?<![\\w$])${name}(?![\\w$])[^}]*\\}\\s*=`).test(source);
 }
 
 /**
- * The project with {@link REACT_HOOK_FALLBACK} prepended to its entry, when it needs it.
+ * The imports one source file needs prepended so it runs with a clean React scope, or '' if none.
  *
- * Returns the same object when it does not, so callers can compare identity. The import goes on
- * the entry file specifically: that is the module the bundler walks first, an import is hoisted
- * regardless of where in the file it sits, and touching one file keeps the visitor's own sources
- * byte-identical in the Code view and in anything they download or push.
+ * Only `.tsx`/`.jsx` files are read — hooks are component-local and components live there, and a
+ * bare `useState(` in a plain .ts helper is far more likely to be a local mock than a missing
+ * import. A hook counts as used when it appears as a call (`useState(`), not as a property
+ * (`React.useState(`), which is covered by binding `React` instead.
+ */
+export function missingReactImports(file: ProjectFile): string {
+  if (!/\.(tsx|jsx)$/.test(file.path)) return '';
+  const src = file.content;
+  const hooks = REACT_HOOK_NAMES.filter(name => new RegExp(`(?<![\\w$.])${name}\\s*\\(`).test(src) && !isBound(src, name));
+  const needsReact = /(?<![\w$.])React\s*\./.test(src) && !isBound(src, 'React');
+  const lines: string[] = [];
+  if (needsReact) lines.push("import * as React from 'react';");
+  if (hooks.length) lines.push(`import { ${hooks.join(', ')} } from 'react';`);
+  return lines.join('\n');
+}
+
+/** Does any file in this project reach for React scope it never imported? */
+export function needsReactHookFallback(files: ProjectFile[]): boolean {
+  return files.some(file => missingReactImports(file) !== '');
+}
+
+/**
+ * The project with each source file's missing React imports prepended, when any are missing.
+ *
+ * Returns the same object when nothing is, so callers can compare identity. This runs only on the
+ * copy handed to the bundler: the visitor's own sources stay byte-identical in the Code view and in
+ * anything they download or push.
  */
 export function withReactHookImports(project: Project): Project {
-  if (!needsReactHookFallback(project.files, project.dependencies)) return project;
-  const files = project.files.map(file => file.path === project.entry
-    ? { ...file, content: `${REACT_HOOK_FALLBACK}\n${file.content}` }
-    : file);
+  if (!needsReactHookFallback(project.files)) return project;
+  const files = project.files.map(file => {
+    const imports = missingReactImports(file);
+    return imports ? { ...file, content: `${imports}\n${file.content}` } : file;
+  });
   return { ...project, files };
 }
 

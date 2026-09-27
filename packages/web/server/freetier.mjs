@@ -235,7 +235,7 @@ export function resetKeyRotation() { poolCursor.clear(); }
  * the free tier (which key funds an entry), the paid tier (which key funds a plan model), the
  * credits branch of the proxy, and the admin dashboard (which key is being entered). The
  * dashboard lays its stored keys over the process environment under these same names, so nothing
- * downstream needs to know whether a key came from Render's dashboard or Hey Buddy's.
+ * downstream needs to know whether a key came from Render's dashboard or Signal Forge OS's.
  */
 export const PROVIDER_KEY_VARS = {
   openrouter: 'OPENROUTER_API_KEY',
@@ -244,6 +244,8 @@ export const PROVIDER_KEY_VARS = {
   anthropic: 'ANTHROPIC_API_KEY',
   google: 'GOOGLE_API_KEY',
   cohere: 'COHERE_API_KEY',
+  xai: 'XAI_API_KEY',
+  venice: 'VENICE_API_KEY',
   xkiro: 'XKIRO_API_KEY',
   aihubmix: 'AIHUBMIX_API_KEY',
   huggingface: 'HF_TOKEN',

@@ -1,4 +1,4 @@
-/* Hey Buddy, web edition. Dense working tool: 13px system type, 1px hairlines, one accent. */
+/* Signal Forge OS, web edition. Dense working tool: 13px system type, 1px hairlines, one accent. */
 :root { color-scheme: light dark; --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --bg: #f5f5f8; --panel: #ffffff; --panel-2: #fafafc; --ink: #14172a; --muted: #6b7083; --line: #e2e4ec; --line-strong: #c9cdd9; --accent: #ff6a5c; --accent-ink: #b8362b; --accent-soft: #fff0ee; --ok: #1f8a5b; --warn: #b7791f; --danger: #c0392b; --rail: #0f1220; --rail-ink: #c9cce0; --rail-active: #1d2238; --shadow: 0 8px 28px rgba(15, 18, 32, 0.14); --radius: 6px; }
 @media (prefers-color-scheme: dark) { :root { --bg: #0f1220; --panel: #161a2b; --panel-2: #1b2033; --ink: #e8e9f0; --muted: #9aa0b8; --line: #262b3f; --line-strong: #3a4059; --accent-soft: #33221f; --accent-ink: #ff8a7e; --rail: #0a0c17; --rail-active: #1d2238; --shadow: 0 8px 28px rgba(0, 0, 0, 0.5); } }
@@ -134,7 +134,7 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .output-tab:hover { background: var(--panel-2); color: var(--ink); } .output-tab.active { background: var(--accent-soft); color: var(--accent-ink); }
 .preview-content:has(.output-preview) { padding: 0; }
 .output-preview { height: 100%; display: flex; flex-direction: column; position: relative; }
-.output-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #111; }
+.output-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
 .rerun-button { position: absolute; right: 14px; bottom: 14px; display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border: 1px solid rgba(255,255,255,.24); border-radius: 6px; background: rgba(15,18,32,.82); color: #fff; font-size: 11px; box-shadow: var(--shadow); }
 .rerun-button:hover { background: var(--ink); }
 .output-code, .output-editor { height: 100%; min-height: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
@@ -152,7 +152,7 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .pane-divider:hover span { background: var(--accent); }
 .preview-content:has(.output-preview) { padding: 0; }
 .output-preview { height: 100%; display: flex; flex-direction: column; position: relative; }
-.output-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #111; }
+.output-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
 .rerun-button { position: absolute; right: 14px; bottom: 14px; display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border: 1px solid rgba(255,255,255,.24); border-radius: 6px; background: rgba(15,18,32,.82); color: #fff; font-size: 11px; box-shadow: var(--shadow); }
 .rerun-button:hover { background: var(--ink); }
 .output-code, .output-editor { height: 100%; min-height: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
@@ -174,16 +174,63 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .output-code .chip { cursor: pointer; } .output-code .chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); }
 .push-drawer .chip-row { max-height: 90px; overflow: auto; }
 
-/* Dock — a floating bar pinned to the bottom of the conversation.
+/* Canvas action bar: file actions on the left, viewport and build state on the right. */
+.toolbar-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.toolbar-button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.toolbar-button:disabled:hover { background: var(--panel); color: var(--muted); }
+.menu-anchor { position: relative; }
+.toolbar-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; min-width: 240px; padding: 4px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); text-transform: none; letter-spacing: normal; }
+.toolbar-menu button { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; border-radius: 5px; text-align: left; color: var(--ink); font-weight: 400; }
+.toolbar-menu button:hover:not(:disabled) { background: var(--panel-2); }
+.toolbar-menu svg { margin-top: 2px; color: var(--muted); }
+.toolbar-menu span { display: flex; flex-direction: column; min-width: 0; } .toolbar-menu strong { font-size: 12px; font-weight: 600; } .toolbar-menu small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; text-transform: none; letter-spacing: normal; }
+.segmented button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.segmented button + button { border-left: 1px solid var(--line); }
+.segmented button:hover:not(:disabled) { background: var(--panel-2); color: var(--ink); }
+.segmented button.active { background: var(--accent-soft); color: var(--accent-ink); }
+
+/* Idle canvas: nothing generated or loaded yet. */
+.canvas-idle { gap: 6px; padding: 24px; } .canvas-idle svg { opacity: .55; margin-bottom: 4px; }
+.canvas-idle strong { color: var(--ink); font-size: 12.5px; font-weight: 600; } .canvas-idle span { max-width: 300px; line-height: 1.5; }
+
+/* Viewports. Mobile renders the frame in a phone-width column; split puts code beside it. */
+.device-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.device-stage.mobile { width: min(390px, 100%); margin: 12px auto; border: 1px solid var(--line-strong); border-radius: 18px; overflow: hidden; box-shadow: var(--shadow); }
+.preview-content:has(.output-split) { padding: 0; }
+.output-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); height: 100%; }
+.output-split > .output-code, .output-split > .output-editor { border-right: 1px solid var(--line); }
+@media (max-width: 900px) { .output-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); } .output-split > .output-code, .output-split > .output-editor { border-right: 0; border-bottom: 1px solid var(--line); } }
+.preview-panel.fullscreen { position: fixed; inset: 0; z-index: 40; border-left: 0; }
+
+/* Sync toasts sit above every overlay, so a result stays readable while the drawer is open. */
+.toast { position: fixed; right: 16px; bottom: 40px; z-index: 60; display: flex; align-items: flex-start; gap: 8px; max-width: min(420px, calc(100vw - 32px)); padding: 10px 10px 10px 12px; border: 1px solid var(--line-strong); border-left: 3px solid var(--ok); border-radius: 8px; background: var(--panel); color: var(--ink); box-shadow: var(--shadow); font-size: 12px; line-height: 1.45; animation: toast-in 160ms ease-out; }
+.toast > svg { margin-top: 1px; color: var(--ok); } .toast.error { border-left-color: var(--danger); } .toast.error > svg { color: var(--danger); }
+.toast span { flex: 1; } .toast strong { font-weight: 650; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.sync-drawer { animation: slide-in 180ms ease-out; }
+/* Fields keep their natural height; .grow is for rows, and in this full-height column it stretched them apart. */
+.sync-drawer label.grow { flex: 0 0 auto; }
+@keyframes slide-in { from { transform: translateX(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .toast, .sync-drawer, .dock .mic.recording, .rec-dot { animation: none; } }
+
+/* Dock — a solid bar pinned to the bottom of the conversation, above the status bar.
    The canvas is a flex column whose .messages child scrolls, so the dock never moves with the
-   transcript; the shell adds a fade so text scrolling under it does not collide with the edge. */
-.dock-shell { position: relative; flex: 0 0 auto; padding: 0 14px calc(8px + env(safe-area-inset-bottom)); background: linear-gradient(to bottom, transparent, var(--bg) 22px); }
-.dock-shell::before { content: ""; position: absolute; left: 0; right: 0; top: -20px; height: 20px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; }
+   transcript. The shell is opaque, bordered and stacked above the transcript, so nothing scrolling
+   behind it can show through into the input — no transparent gradient for text to bleed under. */
+.dock-shell { position: relative; z-index: 5; flex: 0 0 auto; padding: 10px 14px calc(8px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
 .dock { border: 1px solid var(--line-strong); background: var(--panel); border-radius: 14px; box-shadow: var(--shadow); padding: 8px 8px 6px; display: flex; flex-direction: column; gap: 6px; transition: border-color 120ms ease; }
 .dock:focus-within { border-color: var(--line-strong); box-shadow: var(--shadow), 0 0 0 3px var(--accent-soft); }
 .dock.dragging { border-color: var(--accent); background: var(--accent-soft); }
-.dock textarea { width: 100%; border: 0; background: transparent; resize: none; outline: none; padding: 6px 6px 2px; line-height: 1.5; max-height: 200px; }
-.dock-send { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
+.dock-input { display: flex; align-items: flex-end; gap: 4px; }
+.dock textarea { flex: 1; min-width: 0; width: 100%; border: 0; background: var(--panel); resize: none; outline: none; padding: 5px 6px; line-height: 1.5; max-height: 200px; }
+.dock-attach { flex: 0 0 auto; width: 30px; height: 30px; }
+.dock-send { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+.dock .mic { width: 30px; height: 30px; border-radius: 999px; }
+.dock .mic.recording { color: #fff; background: var(--danger); animation: mic-ring 1.4s ease-out infinite; }
+@keyframes mic-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
+.dock-recording { display: flex; align-items: center; gap: 6px; padding: 0 6px; color: var(--danger); font-size: 11.5px; }
+.rec-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
 .button.send { border-radius: 999px; padding: 5px 12px; }
 .dock-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 2px; }
 .dock-counters { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; } .dock-counters em { font-style: normal; color: var(--ink); }
@@ -331,8 +378,6 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
   .dock-hint { display: none; }
   .chip-label { display: none; }
   .model-trigger { max-width: 190px; }
-  /* The counters give up their own row so the send button keeps its place at the end of the bar. */
-  .dock-send { margin-left: auto; }
   /* On a phone the trigger sits mid-row, so a popover anchored to it runs off the edge.
      The menu becomes a bottom sheet instead: always fully on screen, wherever the chip is. */
   .model-menu { position: fixed; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 70vh; }
@@ -398,3 +443,55 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .sync-alert { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--danger); color: var(--ink); border-radius: var(--radius); padding: 6px 10px; font-size: 12px; } .sync-alert svg { color: var(--danger); flex: none; margin-top: 2px; }
 .sync-alert.conflict { border-color: var(--warn); } .sync-alert.conflict svg { color: var(--warn); }
 .sync-actions { flex-wrap: wrap; }
+
+/* Plan / Autonomous Run: a calm card. The engine's stages stay folded under "Show working". */
+.run.calm { border: 0; background: transparent; overflow: visible; display: flex; flex-direction: column; gap: 8px; }
+.run.calm.running, .run.calm.awaiting_approval { border-color: transparent; }
+.run-pulse { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
+.run-pulse .run-step { color: var(--ink); }
+.pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.run-gate { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); }
+.run-gate-head { display: flex; flex-direction: column; gap: 2px; } .run-gate-head strong { font-size: 12.5px; } .run-gate-head small { color: var(--muted); font-size: 11.5px; }
+.run-phase { display: flex; flex-direction: column; gap: 3px; } .run-phase > small { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.run-gate .run-phase .msg-body { max-height: 260px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--panel); }
+.run-foot { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 11.5px; }
+.run-foot .text-button { display: inline-flex; align-items: center; gap: 4px; }
+.run-done { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--ok); }
+.run-working { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border-left: 2px solid var(--line-strong); }
+.run-working .msg-body { max-height: 220px; overflow: auto; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; } }
+
+/* Dock work-mode toggle and the sentence under it that says what the mode does. */
+.work-modes button { padding: 4px 9px; font-size: 12px; }
+.dock-hint strong { color: var(--ink); font-weight: 600; }
+
+/* Push to GitHub: the staged file list. */
+.stage-list { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
+.stage-list .check { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.redacted-tag { margin-left: auto; font-style: normal; font-size: 10px; padding: 0 5px; border-radius: 4px; color: var(--warn); border: 1px solid var(--warn); }
+.push-drawer textarea { width: 100%; font: 12px/1.5 var(--mono); padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel); resize: vertical; }
+
+/* Memory panel and provider pipes. */
+.memory-panel { display: flex; flex-direction: column; gap: 8px; }
+.memory-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow: auto; }
+.memory-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.memory-row > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; } .memory-row small { color: var(--muted); font-size: 10.5px; }
+.memory-kind { flex: 0 0 auto; font-style: normal; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line-strong); color: var(--muted); }
+.memory-kind.preference { color: var(--accent-ink); border-color: var(--accent); } .memory-kind.failure { color: var(--danger); border-color: var(--danger); } .memory-kind.project { color: var(--ok); border-color: var(--ok); }
+.pipe-row { display: flex; flex-direction: column; gap: 8px; } .pipe-row .panel-head small { color: var(--muted); }
+.muted { color: var(--muted); font-weight: 400; }
+
+/* Private beta gate: always dark, whatever palette the workspace uses. */
+.beta-gate { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 600px at 50% -10%, #1d2340 0%, #0b0e1a 55%, #070912 100%); color: #e8e9f0; color-scheme: dark; }
+.beta-card { width: min(400px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 28px 26px 24px; border: 1px solid #262b3f; border-radius: 16px; background: rgba(22, 26, 43, 0.92); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); }
+.beta-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 11px; background: rgba(255, 106, 92, 0.14); color: #ff8a7e; }
+.beta-card h1 { font-size: 19px; line-height: 1.3; color: #fff; } .beta-card h1 span { display: block; font-size: 13px; font-weight: 500; color: #9aa0b8; margin-top: 2px; }
+.beta-card > p { color: #9aa0b8; font-size: 13px; line-height: 1.5; }
+.beta-field { display: flex; align-items: center; gap: 9px; padding: 0 12px; border: 1px solid #3a4059; border-radius: 10px; background: #0f1220; color: #9aa0b8; }
+.beta-field:focus-within { border-color: #ff6a5c; box-shadow: 0 0 0 3px rgba(255, 106, 92, 0.18); }
+.beta-field input { flex: 1; min-width: 0; padding: 11px 0; border: 0; outline: none; background: transparent; color: #e8e9f0; font-size: 14px; }
+.beta-submit { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 11px 14px; border-radius: 10px; background: #ff6a5c; color: #1a0d0b; font-weight: 650; font-size: 14px; }
+.beta-submit:hover:not(:disabled) { background: #ff7f73; }
+.beta-error { color: #f07167 !important; font-size: 12.5px; }
+.beta-note { color: #6f7590 !important; font-size: 11.5px; } .beta-card code { color: #c9cce0; }
+.rail-lock { color: var(--rail-ink); }

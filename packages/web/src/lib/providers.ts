@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -10,30 +10,47 @@ export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google'
 // `endpoint` is what the browser displays and sends, but the server does not take it on trust —
 // resolveTarget maps every named provider to a fixed base URL of its own and only a `custom`
 // provider is allowed to steer the destination, and then only to an approved origin.
-export const providers: Record<Provider, { name: string; tier: string; endpoint: string; models: string[] }> = {
-  openrouter: { name: 'OpenRouter', tier: 'Universal', endpoint: 'https://openrouter.ai/api/v1', models: ['meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-nemo:free', 'qwen/qwen-2.5-72b-instruct:free', 'deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'anthropic/claude-3.5-haiku', 'openai/gpt-4o'] },
+/**
+ * `flagship` is the model a freshly registered key lands on, so adding a key never needs a model
+ * chosen first; Discover then replaces the seed list with what the key actually reaches.
+ * `keyless` providers run with no credential at all, and `direct` ones are called straight from
+ * the browser instead of through /api/chat — which is only true of a model server on this
+ * machine, because the hosted proxy cannot reach a visitor's localhost.
+ */
+export interface ProviderInfo { name: string; tier: string; endpoint: string; models: string[]; flagship?: string; keyless?: boolean; direct?: boolean; }
+export const providers: Record<Provider, ProviderInfo> = {
+  openrouter: { name: 'OpenRouter', tier: 'Universal', endpoint: 'https://openrouter.ai/api/v1', flagship: 'anthropic/claude-3.5-sonnet', models: ['meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-nemo:free', 'qwen/qwen-2.5-72b-instruct:free', 'deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'anthropic/claude-3.5-haiku', 'openai/gpt-4o'] },
   // A subsidized gateway: 27+ models whose ids end in -free run at no cost against a normal
   // AIHubMix account key, frontier ones included. Seeds from their published free list; Discover
   // reads the live catalogue and the model field accepts anything typed, as everywhere else.
-  aihubmix: { name: 'AIHubMix', tier: 'Free gateway', endpoint: 'https://aihubmix.com/v1', models: ['gpt-5.5-free', 'gpt-4.1-free', 'gemini-3-flash-preview-free', 'coding-glm-5.1-free', 'kimi-for-coding-free', 'k2.6-code-preview-free', 'xiaomi-mimo-v2.5-free', 'coding-minimax-m2.7-free'] },
+  aihubmix: { name: 'AIHubMix', tier: 'Free gateway', endpoint: 'https://aihubmix.com/v1', flagship: 'gpt-5.5-free', models: ['gpt-5.5-free', 'gpt-4.1-free', 'gemini-3-flash-preview-free', 'coding-glm-5.1-free', 'kimi-for-coding-free', 'k2.6-code-preview-free', 'xiaomi-mimo-v2.5-free', 'coding-minimax-m2.7-free'] },
   // Hugging Face's Inference Providers router: hundreds of open models behind one OpenAI-compatible
   // chat surface at a fixed home. One HF token pays every underlying provider, accounts carry a
   // small monthly inference credit, and a `:fastest` / `:cheapest` suffix on the model id chooses
   // how the router routes. Seeds from their documented open-weights roster; Discover reads the
   // live list from /v1/models and the model field accepts anything typed, as everywhere else.
+  // No flagship on purpose: HF's free credit is small, so a new token starts on the first,
+  // low-compute seed rather than on the strongest model it could reach.
   huggingface: { name: 'Hugging Face', tier: 'Open models', endpoint: 'https://router.huggingface.co/v1', models: ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Llama-3.1-8B-Instruct', 'openai/gpt-oss-120b', 'deepseek-ai/DeepSeek-R1:auto', 'Qwen/Qwen2.5-Coder-32B-Instruct', 'zai-org/GLM-4.5', 'moonshotai/Kimi-K2-Instruct'] },
   // Managed hosted route. The endpoint is intentionally empty in the browser: the server pins
   // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.
   'cheaper-inference': { name: 'Managed inference', tier: 'Orator managed', endpoint: '', models: [] },
 
-  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
-  openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
+  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', flagship: 'groq/llama-3.3-70b-versatile', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
+  openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', flagship: 'gpt-4o', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy
   // translates in both directions; from here it is just another provider with a key.
-  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5'] },
+  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', flagship: 'claude-sonnet-4-5', models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5'] },
   // Google publishes an OpenAI-compatible surface for Gemini, so it needs no translation.
-  google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
-  cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
+  google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', flagship: 'gemini-2.5-pro', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+  cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', flagship: 'command-a-03-2025', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
+  // xAI's API is OpenAI-compatible at a fixed home; the key is an xai-… key from console.x.ai.
+  xai: { name: 'xAI Grok', tier: 'Frontier', endpoint: 'https://api.x.ai/v1', flagship: 'grok-4', models: ['grok-4', 'grok-3', 'grok-3-mini', 'grok-code-fast-1'] },
+  // Venice: OpenAI-compatible, privacy-first open-model host. Seeds only; Discover reads the live list.
+  venice: { name: 'Venice', tier: 'Private', endpoint: 'https://api.venice.ai/api/v1', flagship: 'llama-3.3-70b', models: ['llama-3.3-70b', 'qwen-2.5-coder-32b', 'mistral-31-24b', 'llama-3.2-3b'] },
+  // A model server on this machine. No key, no seeds — whatever `ollama pull` installed is the
+  // list — and called from the browser directly (see lib/pipes.ts for the localhost-only rule).
+  ollama: { name: 'Ollama (local)', tier: 'Local', endpoint: 'http://localhost:11434/v1', models: [], keyless: true, direct: true },
   xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: [] },
   // Optional future adapter only. It is deliberately not configured, discovered, or shown to
   // customers in this phase; hosted Cheaper Inference is the initial managed route.
@@ -42,7 +59,9 @@ export const providers: Record<Provider, { name: string; tier: string; endpoint:
 };
 const profiles = new Map<Provider, Connection>();
 const MODES: InferenceMode[] = ['free', 'credits', 'byok'];
-export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: providers[provider].models[0] || '', token: '', maxTokens: 1024, saveKey: false }; }
+export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: flagshipFor(provider), token: '', maxTokens: 1024, saveKey: false }; }
+/** The model a new key for this provider starts on: its flagship, else its first seed, else nothing. */
+export function flagshipFor(provider: Provider): string { return providers[provider].flagship ?? providers[provider].models[0] ?? ''; }
 
 /**
  * How a given model gets paid for, when the app has to decide for itself.

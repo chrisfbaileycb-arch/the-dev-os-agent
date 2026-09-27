@@ -81,11 +81,31 @@ export interface GithubResult { result: Record<string, unknown>; }
 export const callGithub = (operation: string, params: Record<string, unknown>, token: string, signal: AbortSignal) =>
   post<GithubResult>('/api/github', { operation, params, ...(token ? { token } : {}) }, signal).then(r => r.result);
 
-export interface PushResult { commitSha: string; branch: string; url: string; filesPushed: number; }
+export interface PushResult { commitSha: string; branch: string; url: string; filesPushed: number; /** True when the repository was empty and this commit started its history. */ createdRepoHistory?: boolean; }
 export interface PushParams { owner: string; repo: string; branch?: string; createBranch?: boolean; message: string; files: { path: string; content: string }[]; }
 /** Push a generated project as one commit. Requires the visitor's own token — there is no other kind for a write. */
 export const pushProject = (params: PushParams, token: string, signal: AbortSignal) =>
   post<{ result: PushResult }>('/api/github', { operation: 'push', params, token }, signal, 60_000).then(r => r.result);
+
+export interface GithubRepo { fullName: string; defaultBranch: string; private: boolean; canPush: boolean; empty: boolean; }
+/** The visitor's own repositories, most recently pushed first. Needs their token; there is no anonymous listing. */
+export const listRepos = (token: string, signal: AbortSignal) =>
+  post<{ result: { repos: GithubRepo[] } }>('/api/github', { operation: 'repos', token }, signal).then(r => r.result.repos);
+/** A repository's default branch, to prefill the push dialog. */
+export const repoDefaultBranch = (owner: string, repo: string, token: string, signal: AbortSignal) =>
+  post<{ result: { defaultBranch: string } }>('/api/github', { operation: 'repo_info', params: { owner, repo }, ...(token ? { token } : {}) }, signal).then(r => r.result.defaultBranch);
+
+/**
+ * A commit message written from what is being committed: a subject naming the request (or the
+ * entry file when there is none) and a body listing the staged files, so the history says what
+ * the commit holds without anyone having to open it.
+ */
+export function commitMessageFor(files: { path: string }[], request = ''): string {
+  const subject = request.replace(/\s+/g, ' ').trim();
+  const head = subject ? `Add generated app: ${subject.length > 60 ? `${subject.slice(0, 57)}...` : subject}` : `Add generated app (${files.length} file${files.length === 1 ? '' : 's'})`;
+  const listed = files.slice(0, 20).map(f => `- ${f.path}`).join('\n');
+  return `${head}\n\n${listed}${files.length > 20 ? `\n- and ${files.length - 20} more` : ''}\n\nPushed from Signal Forge OS.`;
+}
 
 export interface PageSnapshot { url: string; status: number; contentType: string; title: string; description: string; headings: string[]; wordCount: number; text: string; truncated: boolean; links: { href: string }[]; }
 export const fetchUrl = (url: string, signal: AbortSignal) => post<PageSnapshot>('/api/fetch', { url }, signal, 25_000);

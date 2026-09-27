@@ -1,5 +1,6 @@
 {
-  "name": "heybuddy-web",
+  "name": "signal-forge-os-web",
+  "description": "The Signal Forge OS web app and its Node server.",
   "version": "0.1.0",
   "private": true,
   "type": "module",

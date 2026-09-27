@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inlineLocalAssets, isSafeProjectPath, parseProject, placeholderImage, resolveLocalRef, stitchFragments, wrapScriptDocument } from '../src/lib/project';
+import { inlineLocalAssets, isSafeProjectPath, missingReactImports, parseProject, placeholderImage, resolveLocalRef, stitchFragments, withReactHookImports, wrapScriptDocument, type Project } from '../src/lib/project';
 import { highlightCode } from '../src/lib/highlight';
 
 const fence = (info: string, body: string) => `\`\`\`${info}\n${body}\n\`\`\``;
@@ -259,5 +259,37 @@ describe('inlineLocalAssets', () => {
   it('names the missing file in the placeholder so the gap reads as a gap and not as a bug', () => {
     expect(decodeURIComponent(placeholderImage('images/hero.jpg'))).toContain('>hero.jpg<');
     expect(decodeURIComponent(placeholderImage('<evil>.png'))).not.toContain('<evil>');
+  });
+});
+
+describe('withReactHookImports', () => {
+  const project = (files: Record<string, string>, entry = Object.keys(files)[0]): Project => ({ files: Object.entries(files).map(([path, content]) => ({ path, content })), entry, dependencies: {}, kind: 'react' });
+
+  it('imports exactly the hooks a file calls without importing', () => {
+    expect(missingReactImports({ path: 'src/App.tsx', content: 'export default function App() { const [n] = useState(0); useEffect(() => {}, []); return <p>{n}</p>; }' }))
+      .toBe("import { useState, useEffect } from 'react';");
+  });
+  it('binds React when a file references it without importing it', () => {
+    expect(missingReactImports({ path: 'src/App.jsx', content: 'export const Memo = React.memo(() => <React.Fragment />);' }))
+      .toBe("import * as React from 'react';");
+  });
+  it('fixes each file on its own, since imports are module-scoped', () => {
+    const next = withReactHookImports(project({
+      'src/main.tsx': "import React from 'react';\nimport Counter from './Counter';",
+      'src/Counter.tsx': 'export default function Counter() { const [n, set] = useState(0); return <button onClick={() => set(n + 1)}>{n}</button>; }',
+    }));
+    expect(next.files[0].content).toBe("import React from 'react';\nimport Counter from './Counter';");
+    expect(next.files[1].content.startsWith("import { useState } from 'react';\n")).toBe(true);
+  });
+  it('adds only the hook a partial import forgot', () => {
+    expect(missingReactImports({ path: 'src/App.tsx', content: "import { useState } from 'react';\nuseState(0); useEffect(() => {});" }))
+      .toBe("import { useEffect } from 'react';");
+  });
+  it('leaves files alone that already have what they use', () => {
+    const p = project({ 'src/App.tsx': "import * as React from 'react';\nconst { useState } = React;\nexport default () => { useState(0); return <p />; };" });
+    expect(withReactHookImports(p)).toBe(p);
+    expect(missingReactImports({ path: 'src/App.tsx', content: 'React.useState(0);' })).toBe("import * as React from 'react';");
+    expect(missingReactImports({ path: 'src/util.ts', content: 'useState(0);' })).toBe('');
+    expect(missingReactImports({ path: 'src/App.tsx', content: 'function useState() {} useState();' })).toBe('');
   });
 });
