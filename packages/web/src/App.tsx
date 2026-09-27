@@ -21,6 +21,7 @@ import { failureText, MemoryRejected, projectText, rememberRequest, retrieve } f
 import { loadMemories, removeMemory, saveMemory, touchMemories } from './lib/memoryStore';
 import { clearPipes, loadPipes, savePipes, type PipeSettings } from './lib/pipes';
 import { latestPreviewReply, parseProject } from './lib/project';
+import { ensureRunnableBuild, expectsRunnablePreview } from './lib/buildPreview';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, defaultConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
@@ -162,6 +163,11 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const active = sessions.find(s => s.id === activeId) ?? null;
   // Keep the most recent runnable artifact on the canvas while the next reply is still streaming.
   const previewContent = useMemo(() => latestPreviewReply(active?.messages ?? []), [active?.messages]);
+  const lastAssistant = active?.messages.filter(m => m.role === 'assistant' && !m.runId).at(-1);
+  const lastRequest = active?.messages.filter(m => m.role === 'user').at(-1);
+  const previewNeedsFinish = Boolean(active?.mode === 'build' && !busy && lastAssistant?.content && !parseProject(lastAssistant.content)
+    && expectsRunnablePreview(lastRequest?.content ?? '', Boolean(parseProject(previewContent))));
+  const previewIssue = active?.mode === 'build' ? lastAssistant?.error ?? (previewNeedsFinish ? 'This build did not include a runnable entry.' : undefined) : undefined;
   // Build binds the Coder / Builder agent; Chat and Plan use the agent the person chose.
   const persona = workMode === 'build' ? personaById(BUILDER_PERSONA_ID) : personaById(active?.persona ?? personaId);
   const mode: RunMode = workMode === 'plan' ? plan : 'chat';
@@ -426,28 +432,54 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: persona.name, model: label };
     patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
     const controller = new AbortController(); abortRef.current = controller; const traces: ChatMessage['tools'] = [];
+    const previous = latestPreviewReply(session.messages);
+    const previewExpected = workMode === 'build' && expectsRunnablePreview(text, Boolean(parseProject(previous)));
     try {
       const result = await chatTurn({
         connection: requestConnection(connection), personaId: persona.id, history: session.messages, input: text,
+        buildPreview: previewExpected,
         attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })),
         tools: activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools }),
         knowledge, memories: memoriesRef.current, signal: controller.signal,
         onDelta: t => patchMessage(session.id, reply.id, { content: t }),
         onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); },
       });
-      patchMessage(session.id, reply.id, { content: result.text, tokens: result.tokens, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools }, true);
-      setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens: result.tokens });
+      let content = result.text; let tokens = result.tokens; let previewError: string | undefined;
+      if (previewExpected && !parseProject(content)) {
+        setNotice('Finishing a runnable preview from the generated code…');
+        const completed = await ensureRunnableBuild({ goal: text, draft: content, previous: parseProject(previous) ? previous : undefined, connection: requestConnection(connection), signal: controller.signal });
+        content = completed.text; tokens += completed.tokens; previewError = completed.issue;
+        setNotice(previewError ?? '');
+      }
+      patchMessage(session.id, reply.id, { content, tokens, error: previewError, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools }, true);
+      setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens });
       if (result.memoriesUsed.length) void touchMemories(result.memoriesUsed, memoriesRef.current).then(commitMemories).catch(() => { /* bookkeeping only */ });
       // A build that produced runnable files leaves one line of project context behind.
-      const built = parseProject(result.text);
+      const built = parseProject(content);
       if (built) void remember('project', projectText({ request: text, files: built.files.map(f => f.path) }));
-      await charge(session.id, result.tokens);
+      await charge(session.id, tokens);
     } catch (e) {
       const stopped = controller.signal.aborted;
       const message = freeTierMessage(e);
       patchMessage(session.id, reply.id, m => stopped ? { content: `${m.content}${m.content ? '\n\n' : ''}(stopped)` } : { error: message }, true);
       if (!stopped) { setNotice(message); void remember('failure', failureText({ model: label, error: message, request: text })); }
     } finally { abortRef.current = null; setBusy(false); }
+  }
+
+  /** Recover a build saved before automatic completion was added, using its original request. */
+  async function finishExistingPreview() {
+    if (!active || !lastAssistant || !lastRequest || busy || parseProject(lastAssistant.content)) return;
+    const problem = preflight(); if (problem) { setNotice(problem); return; }
+    const controller = new AbortController(); abortRef.current = controller; setBusy(true);
+    setNotice('Finishing the saved build for the live preview…');
+    try {
+      const earlier = latestPreviewReply(active.messages.filter(m => m.id !== lastAssistant.id));
+      const recovery = await ensureRunnableBuild({ goal: lastRequest.content, draft: lastAssistant.content, previous: parseProject(earlier) ? earlier : undefined, connection: requestConnection(connection), signal: controller.signal });
+      patchMessage(active.id, lastAssistant.id, { content: recovery.text, tokens: (lastAssistant.tokens ?? 0) + recovery.tokens, error: recovery.issue }, true);
+      setNotice(recovery.issue ?? '');
+      if (recovery.tokens) await charge(active.id, recovery.tokens);
+    } catch (error) { if (!controller.signal.aborted) setNotice(errorText(error)); }
+    finally { abortRef.current = null; setBusy(false); }
   }
 
   function startWorkflow(session: Session, user: ChatMessage, text: string, files: Attached[], title: string, workflow: Exclude<RunMode, 'chat'>) {
@@ -624,6 +656,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
             <OutputPanel
               key={activeId ?? 'new'}
               content={previewContent}
+              issue={previewIssue}
+              onFinish={previewNeedsFinish ? () => void finishExistingPreview() : undefined}
               close={() => setPreviewOpen(false)}
               github={settings.github}
               updateGithub={(patch: Partial<GithubSettings>) => setSettings({ ...settings, github: { ...settings.github, ...patch } })}

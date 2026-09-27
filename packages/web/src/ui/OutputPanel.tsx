@@ -13,6 +13,8 @@ import { emptySyncState, loadSyncSettings, type GithubSyncState } from '../lib/g
 
 export interface OutputPanelProps {
   content: string;
+  issue?: string;
+  onFinish?: () => void;
   close: () => void;
   github: GithubSettings;
   openConnectors: () => void;
@@ -312,6 +314,7 @@ export default function OutputPanel(p: OutputPanelProps) {
         <button className="icon-button" aria-label="Close output panel" onClick={() => { setFullscreen(false); p.close(); }}><PanelRightClose size={14} /></button>
       </div>
     </header>
+    {p.issue && <div className="preview-issue" role="alert"><CircleAlert size={13} /><span>{p.issue}</span>{p.onFinish && <button className="button small" onClick={p.onFinish}>Finish &amp; Preview</button>}</div>}
     <div className="preview-content">
       {!project && <div className="preview-empty canvas-idle">
         <MonitorPlay size={26} strokeWidth={1.1} />
