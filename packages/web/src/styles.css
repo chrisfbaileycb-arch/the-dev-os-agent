@@ -82,6 +82,11 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .msg { display: flex; flex-direction: column; gap: 4px; max-width: 860px; } .msg.user { align-self: flex-end; width: fit-content; max-width: min(860px, 88%); }
 .msg-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); flex-wrap: wrap; } .msg-meta em, .msg-meta time { white-space: nowrap; } .msg-meta strong { color: var(--ink); font-weight: 600; } .msg-meta em { font-style: normal; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-variant-numeric: tabular-nums; }
 .msg-body { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 9px 12px; line-height: 1.5; } .msg.user .msg-body { background: var(--accent-soft); border-color: transparent; }
+.generated-reply { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.generated-source { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; min-width: 0; }
+.generated-source summary { cursor: pointer; padding: 8px 12px; color: var(--muted); font-size: 12px; }
+.generated-source[open] summary { border-bottom: 1px solid var(--line); }
+.generated-source .msg-body { border: 0; max-height: 55vh; overflow: auto; font-family: var(--mono); font-size: 11.5px; }
 .msg-error { display: flex; align-items: center; gap: 6px; color: var(--danger); font-size: 12px; }
 .tool-trace { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); border-left: 2px solid var(--line-strong); padding: 2px 8px; } .tool-trace.failed { border-color: var(--danger); } .tool-trace code { color: var(--ink); }
 /* Multi-agent run — a compact pipeline strip above one stage's output, never a wall of panels. */

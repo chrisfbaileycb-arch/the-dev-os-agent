@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, CircleAlert, CircleCheck, Code2, Columns2, Copy, Eye, FileArchive, FileDown, LoaderCircle, Maximize2, Minimize2, Monitor, MonitorPlay, PanelRightClose, Pencil, RotateCw, Server, Smartphone, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
-import { parseProject, withReactHookImports, type Project, type ProjectFile } from '../lib/project';
+import { parseProject, preparePreviewProject, type Project, type ProjectFile } from '../lib/project';
 import { buildProject, type BuildResult } from '../lib/bundle/client';
 import { highlightCode } from '../lib/highlight';
 import { archiveName, saveBlob, zipBlob } from '../lib/download';
@@ -115,6 +115,7 @@ export default function OutputPanel(p: OutputPanelProps) {
   const [editDirty, setEditDirty] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const seqRef = useRef(0);
+  const parsedRef = useRef('');
   const editTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exportRef = useRef<HTMLDivElement>(null);
 
@@ -122,9 +123,11 @@ export default function OutputPanel(p: OutputPanelProps) {
 
   const compile = (next: Project, immediate = false) => {
     abortRef.current?.abort();
+    if (editTimer.current) clearTimeout(editTimer.current);
+    editTimer.current = null;
     const controller = new AbortController(); abortRef.current = controller;
     setBuild({ kind: 'building' });
-    const run = () => void buildProject(withReactHookImports(next), controller.signal).then(result => {
+    const run = () => void buildProject(preparePreviewProject(next), controller.signal).then(result => {
       if (controller.signal.aborted) return;
       setBuild(buildState(result, ++seqRef.current));
     }).catch(error => {
@@ -139,18 +142,22 @@ export default function OutputPanel(p: OutputPanelProps) {
     // edit in progress — rather than blanking it; the chat already shows the prose. Only an empty
     // session (new, or cleared) returns the canvas to idle.
     if (!next) {
-      if (!p.content) { abortRef.current?.abort(); setProject(null); setSelectedFile(null); setActiveCode(''); setBuild({ kind: 'idle' }); setEditDirty(false); }
+      if (!p.content && !p.streaming) { abortRef.current?.abort(); parsedRef.current = ''; setProject(null); setSelectedFile(null); setActiveCode(''); setBuild({ kind: 'idle' }); setEditDirty(false); }
       return;
     }
+    const signature = JSON.stringify(next);
+    if (parsedRef.current === signature) return;
+    parsedRef.current = signature;
     setProject(next);
     setSelectedFile(next.entry);
     setActiveCode(next.files.find(file => file.path === next.entry)?.content ?? '');
     setView('preview'); setEditing(false);
     setEditDirty(false);
     compile(next, true);
-    return () => { abortRef.current?.abort(); if (editTimer.current) clearTimeout(editTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.content]);
+
+  useEffect(() => () => { abortRef.current?.abort(); parsedRef.current = ''; if (editTimer.current) clearTimeout(editTimer.current); }, []);
 
   useEffect(() => {
     if (!selected || selected.content === activeCode) return;

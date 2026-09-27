@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inlineLocalAssets, isSafeProjectPath, missingReactImports, parseProject, placeholderImage, resolveLocalRef, stitchFragments, withReactHookImports, wrapScriptDocument, type Project } from '../src/lib/project';
+import { inlineLocalAssets, isSafeProjectPath, latestPreviewReply, missingReactImports, parseProject, placeholderImage, preparePreviewProject, resolveLocalRef, stitchFragments, withReactHookImports, wrapScriptDocument, type Project } from '../src/lib/project';
 import { highlightCode } from '../src/lib/highlight';
 
 const fence = (info: string, body: string) => `\`\`\`${info}\n${body}\n\`\`\``;
@@ -207,6 +207,27 @@ describe('parseProject', () => {
       const reply = `I could write that with:\n\n${fence('js', 'console.log(1)')}\n\nWant me to?`;
       expect(parseProject(reply)).toBeNull();
     });
+  });
+});
+
+describe('live preview selection and mounting', () => {
+  it('holds the last runnable app while a later reply streams, then selects its completed app', () => {
+    const first = fence('index.html', '<html><body>First</body></html>');
+    const second = fence('index.html', '<html><body>Second</body></html>');
+    const messages = [{ role: 'assistant', content: first }, { role: 'user', content: 'Change it' }, { role: 'assistant', content: 'Writing the update…' }];
+    expect(latestPreviewReply(messages)).toBe(first);
+    messages[2].content = second;
+    expect(latestPreviewReply(messages)).toBe(second);
+  });
+
+  it('mounts a standalone component and supplies its missing hooks without changing source', () => {
+    const source = 'export default function App() { const [n, setN] = useState(0); return <button onClick={() => setN(n + 1)}>{n}</button>; }';
+    const original: Project = { kind: 'react', entry: 'src/App.tsx', dependencies: {}, files: [{ path: 'src/App.tsx', content: source }] };
+    const prepared = preparePreviewProject(original);
+    expect(original.files[0].content).toBe(source);
+    expect(prepared.files[0].content).toContain("import { useState } from 'react';");
+    expect(prepared.entry).toBe('__preview_main.tsx');
+    expect(prepared.files[1].content).toContain("createRoot(document.getElementById('root')!).render(<App />)");
   });
 });
 

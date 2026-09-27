@@ -20,7 +20,7 @@ import { DEFAULT_SPLIT_PERCENT, clampSplit, normalizeStoredSplit } from './lib/s
 import { failureText, MemoryRejected, projectText, rememberRequest, retrieve } from './lib/memory';
 import { loadMemories, removeMemory, saveMemory, touchMemories } from './lib/memoryStore';
 import { clearPipes, loadPipes, savePipes, type PipeSettings } from './lib/pipes';
-import { parseProject } from './lib/project';
+import { latestPreviewReply, parseProject } from './lib/project';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, defaultConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
@@ -47,6 +47,22 @@ const starters: { text: string; persona: string; workMode: WorkMode }[] = [
   { text: 'Write a TypeScript function that retries a fetch with exponential backoff and a hard timeout. Include the types and one usage example.', persona: 'coder', workMode: 'build' },
   { text: 'Explain the difference between a database index and a materialised view, with one example where the wrong choice hurts.', persona: 'assistant', workMode: 'chat' },
 ];
+
+function AssistantReply({ content, working }: { content: string; working: boolean }) {
+  if (!content) return <pre className="msg-body">{working ? 'Working…' : ''}</pre>;
+  const fence = content.indexOf('```');
+  const bareHtml = content.search(/<!doctype\s+html|<html\b/i);
+  const start = fence < 0 ? bareHtml : bareHtml < 0 ? fence : Math.min(fence, bareHtml);
+  if (start < 0) return <pre className="msg-body">{content}</pre>;
+  const explanation = content.slice(0, start).trim();
+  return <div className="generated-reply">
+    {explanation && <pre className="msg-body">{explanation}</pre>}
+    <details className="generated-source">
+      <summary>Generated code {working ? '· writing…' : '· show source'}</summary>
+      <pre className="msg-body">{content.slice(start)}</pre>
+    </details>
+  </div>;
+}
 /**
  * The connection as it goes over the wire. A zero-config run carries no secret at all — the
  * server funds it from its own key — so both the visitor's key and the deployment token are
@@ -144,6 +160,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const setSettings = (next: ConnectorSettings) => { saveSettings(next); setSettingsState(next); };
 
   const active = sessions.find(s => s.id === activeId) ?? null;
+  // Keep the most recent runnable artifact on the canvas while the next reply is still streaming.
+  const previewContent = useMemo(() => latestPreviewReply(active?.messages ?? []), [active?.messages]);
   // Build binds the Coder / Builder agent; Chat and Plan use the agent the person chose.
   const persona = workMode === 'build' ? personaById(BUILDER_PERSONA_ID) : personaById(active?.persona ?? personaId);
   const mode: RunMode = workMode === 'plan' ? plan : 'chat';
@@ -579,7 +597,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
                 const run = m.runId ? runs.find(r => r.id === m.runId) : undefined;
                 return <article key={m.id} className="msg agent">
                   <div className="msg-meta"><strong>{m.persona ?? 'Agent'}</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.model && <em>{m.model}</em>}{m.tokens ? <em>{m.tokens.toLocaleString()} tok</em> : null}{m.latencyMs ? <em>{m.latencyMs} ms</em> : null}</div>
-                  {run ? <RunCard run={run} onApprove={run.status === 'awaiting_approval' ? approveRun : undefined} onStop={run.status === 'awaiting_approval' ? stop : undefined} /> : <pre className="msg-body">{m.content || (busy && !m.error ? 'Working…' : '')}</pre>}
+                  {run ? <RunCard run={run} onApprove={run.status === 'awaiting_approval' ? approveRun : undefined} onStop={run.status === 'awaiting_approval' ? stop : undefined} /> : <AssistantReply content={m.content} working={busy && !m.error} />}
                   {m.tools?.map((t, i) => { const args = JSON.stringify(t.args); return <div key={i} className={t.ok ? 'tool-trace' : 'tool-trace failed'}><Wrench size={11} /><code>{t.tool} {args.length > 60 ? `${args.slice(0, 57)}...` : args}</code><span>{t.summary}</span></div>; })}
                   {m.error && <p className="msg-error"><CircleAlert size={12} />{m.error}</p>}
                 </article>;
@@ -604,7 +622,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
           {previewOpen && <>
             <button className="pane-divider" data-pane-divider {...dividerProps}><span /></button>
             <OutputPanel
-              content={active?.messages.slice().reverse().find(m => m.role === 'assistant')?.content ?? ''}
+              key={activeId ?? 'new'}
+              content={previewContent}
               close={() => setPreviewOpen(false)}
               github={settings.github}
               updateGithub={(patch: Partial<GithubSettings>) => setSettings({ ...settings, github: { ...settings.github, ...patch } })}

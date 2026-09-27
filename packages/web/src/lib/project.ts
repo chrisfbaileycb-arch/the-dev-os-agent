@@ -218,6 +218,12 @@ export function parseProject(text: string): Project | null {
   return null;
 }
 
+/** The newest runnable reply stays visible while a follow-up is still being written. */
+export function latestPreviewReply(messages: { role: string; content: string; runId?: string }[]): string {
+  const replies = messages.filter(message => message.role === 'assistant' && !message.runId).reverse();
+  return replies.find(message => parseProject(message.content))?.content ?? replies[0]?.content ?? '';
+}
+
 /**
  * A reference inside an HTML file resolved to one of the project's own files, or null.
  *
@@ -331,6 +337,24 @@ export function withReactHookImports(project: Project): Project {
     return imports ? { ...file, content: `${imports}\n${file.content}` } : file;
   });
   return { ...project, files };
+}
+
+/** Give a standalone React component a browser mount point for the preview build. */
+export function preparePreviewProject(project: Project): Project {
+  const hooked = withReactHookImports(project);
+  if (hooked.kind !== 'react' || !/(?:^|\/)App\.[jt]sx$/.test(hooked.entry)) return hooked;
+  const component = hooked.files.find(file => file.path === hooked.entry);
+  if (!component || /\b(?:createRoot|ReactDOM\.render)\s*\(/.test(component.content)) return hooked;
+  const entry = '__preview_main.tsx';
+  const importPath = `./${hooked.entry.replace(/\.[jt]sx$/, '')}`;
+  const hasDefault = /\bexport\s+default\b/.test(component.content);
+  const hasNamedApp = /\bexport\s+(?:function|const|class)\s+App\b/.test(component.content);
+  const hasLocalApp = /\b(?:function|const|class)\s+App\b/.test(component.content);
+  if (!hasDefault && !hasNamedApp && !hasLocalApp) return hooked;
+  const files = hooked.files.map(file => file.path === component.path && !hasDefault && !hasNamedApp
+    ? { ...file, content: `${file.content}\nexport default App;` } : file);
+  const importStatement = hasNamedApp ? `import { App } from '${importPath}';` : `import App from '${importPath}';`;
+  return { ...hooked, entry, files: [...files, { path: entry, content: `import { createRoot } from 'react-dom/client';\n${importStatement}\ncreateRoot(document.getElementById('root')!).render(<App />);` }] };
 }
 
 const attr = (tag: string, name: string): string | null => {
