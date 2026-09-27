@@ -139,7 +139,8 @@ export async function githubRequest<T>(input: GithubRequestInput, fetchImpl: Git
 }
 
 /** The fields of a Contents-API response this app cares about. */
-interface ContentsResponse { content?: string; encoding?: string; sha?: string; path?: string; message?: string; commit?: { sha?: string; html_url?: string }; }
+// A GET returns `content` as base64 text; a PUT returns it as the new blob's metadata object.
+interface ContentsResponse { content?: string | { sha?: string; path?: string }; encoding?: string; sha?: string; path?: string; message?: string; commit?: { sha?: string; html_url?: string }; }
 
 export interface PullResult { content: string; sha: string; path: string; size: number; }
 
@@ -188,7 +189,7 @@ export async function pushFile(state: GithubSyncState, content: string, fetchImp
   };
   const data = await githubRequest<ContentsResponse>({ method: 'PUT', path: `/repos/${target.owner}/${target.name}/contents/${encodePathSegments(path)}`, token: state.token, body, signal }, fetchImpl);
   const commitSha = data.commit?.sha ?? '';
-  return { commitSha, commitUrl: data.commit?.html_url ?? `${GITHUB_API.replace('api.', '')}/${target.owner}/${target.name}/commit/${commitSha}`, sha: data.content?.sha ?? state.sha ?? '', path: data.path ?? path, branch };
+  return { commitSha, commitUrl: data.commit?.html_url ?? `${GITHUB_API.replace('api.', '')}/${target.owner}/${target.name}/commit/${commitSha}`, sha: (typeof data.content === 'object' ? data.content?.sha : undefined) ?? state.sha ?? '', path: (typeof data.content === 'object' ? data.content?.path : undefined) ?? data.path ?? path, branch };
 }
 
 /** Is this state enough to try a request at all? The pill's badge and the buttons share the answer. */

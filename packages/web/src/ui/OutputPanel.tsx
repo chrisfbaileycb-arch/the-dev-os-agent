@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, CircleAlert, Code2, Copy, Eye, LoaderCircle, PanelRightClose, PanelRightOpen, RotateCw, Server, Settings2 } from 'lucide-react';
+import { Check, CircleAlert, Code2, Copy, Eye, GitCompareArrows, LoaderCircle, PanelRightClose, PanelRightOpen, RotateCw, Server, Settings2 } from 'lucide-react';
 import { GithubMark } from './GithubMark';
-import { parseProject, type Project, type ProjectFile } from '../lib/project';
+import { parseProject, withReactHookImports, type Project, type ProjectFile } from '../lib/project';
 import { buildProject, type BuildResult } from '../lib/bundle/client';
 import { highlightCode } from '../lib/highlight';
 import type { GithubSettings } from '../lib/connectors';
 import PushToGithub from './PushToGithub';
+import GithubSyncDrawer from './GithubSyncDrawer';
+import { emptySyncState, loadSyncSettings, type GithubSyncState } from '../lib/githubSync';
 
 export interface OutputPanelProps {
   content: string;
@@ -79,6 +81,10 @@ export default function OutputPanel(p: OutputPanelProps) {
   const [build, setBuild] = useState<BuildState>({ kind: 'idle' });
   const [refresh, setRefresh] = useState(0);
   const [pushOpen, setPushOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncState, setSyncState] = useState<GithubSyncState>(() => ({ ...emptySyncState(), ...loadSyncSettings(), sha: null }));
+  const [announcement, setAnnouncement] = useState('');
+  const announceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState(false);
   const [editDirty, setEditDirty] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -91,7 +97,7 @@ export default function OutputPanel(p: OutputPanelProps) {
     abortRef.current?.abort();
     const controller = new AbortController(); abortRef.current = controller;
     setBuild({ kind: 'building' });
-    const run = () => void buildProject(next, controller.signal).then(result => {
+    const run = () => void buildProject(withReactHookImports(next), controller.signal).then(result => {
       if (controller.signal.aborted) return;
       setBuild(buildState(result, ++seqRef.current));
     }).catch(error => {
@@ -132,6 +138,25 @@ export default function OutputPanel(p: OutputPanelProps) {
     setProject(next); compile(next);
   }
 
+  /** A pulled file replaces the one at that path, or joins the project if it is new, then rebuilds. */
+  function applyPulled(path: string, content: string) {
+    if (!project) return;
+    const exists = project.files.some(file => file.path === path);
+    const files: ProjectFile[] = exists
+      ? project.files.map(file => file.path === path ? { ...file, content } : file)
+      : [...project.files, { path, content }];
+    const next = { ...project, files };
+    setProject(next); setSelectedFile(path); setActiveCode(content); setEditDirty(false);
+    compile(next, true);
+  }
+
+  /** Screen-reader and sighted confirmation for sync results, cleared after a few seconds. */
+  function notify(message: string) {
+    setAnnouncement(message);
+    if (announceTimer.current) clearTimeout(announceTimer.current);
+    announceTimer.current = setTimeout(() => setAnnouncement(''), 4000);
+  }
+
   function rebuild() {
     if (!project) return;
     setRefresh(n => n + 1); compile(project, true);
@@ -163,6 +188,7 @@ export default function OutputPanel(p: OutputPanelProps) {
         <span className={devStatus.running ? 'dev-status running' : 'dev-status'} title="The generated app is compiled in this browser and rendered in a sandboxed frame; nothing is served from a dev server."><Server size={12} />{devStatus.text}</span>
         <button className="toolbar-button" onClick={rebuild} disabled={!project || isBuilding} title="Restart the generated app"><RotateCw size={12} />Restart</button>
         {project && <button className="toolbar-button" onClick={() => setPushOpen(true)} title="Save the current files to GitHub"><GithubMark size={12} />GitHub</button>}
+        {project && <button className="toolbar-button" onClick={() => setSyncOpen(true)} title="Pull or push one file against a GitHub branch"><GitCompareArrows size={12} />Sync file</button>}
         <button className="icon-button" aria-label="Close output panel" onClick={p.close}><PanelRightClose size={14} /></button>
       </div>
     </header>
@@ -185,6 +211,13 @@ export default function OutputPanel(p: OutputPanelProps) {
         <textarea aria-label="Generated code editor" className="code-editor" spellCheck={false} value={activeCode} onChange={event => edit(event.target.value)} />
       </div>}
     </div>
+    <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
+    <GithubSyncDrawer
+      open={syncOpen} close={() => setSyncOpen(false)}
+      state={syncState} patch={partial => setSyncState(current => ({ ...current, ...partial }))}
+      activePath={selectedFile} activeContent={activeCode} applyPulled={applyPulled}
+      files={project?.files ?? []} notify={notify}
+    />
     <PushToGithub open={pushOpen} close={() => setPushOpen(false)} files={project?.files ?? []} github={p.github} openConnectors={p.openConnectors} />
   </aside>;
 }

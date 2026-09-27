@@ -44,7 +44,7 @@ function dosDateTime(date: Date): { time: number; date: number } {
   };
 }
 
-interface ZipEntry { name: string; bytes: Uint8Array; crc: number; offset: number; }
+interface ZipEntry { name: string; nameBytes: Uint8Array; bytes: Uint8Array; crc: number; offset: number; }
 
 /** Little-endian scratch: the ZIP format is all fixed-width LE fields, so building it is a write cursor. */
 class ByteWriter {
@@ -77,6 +77,9 @@ export function zipFiles(files: ProjectFile[], when = new Date()): Uint8Array {
 
   for (const file of files) {
     const name = file.path.replace(/^\.?\//, '').replace(/\\/g, '/');
+    // The header length fields count UTF-8 bytes, not UTF-16 code units: encode the name once and
+    // use that byte array for both the length and the name itself, in both headers.
+    const nameBytes = encoder.encode(name);
     const bytes = encoder.encode(file.content);
     const crc = crc32(bytes);
     const local = new ByteWriter();
@@ -89,13 +92,13 @@ export function zipFiles(files: ProjectFile[], when = new Date()): Uint8Array {
     local.u32(crc);
     local.u32(bytes.length);        // compressed size
     local.u32(bytes.length);        // uncompressed size
-    local.u16(name.length);         // file name length, in bytes
+    local.u16(nameBytes.length);    // file name length, in bytes
     local.u16(0);                   // no extra field
-    local.text(name);
+    local.raw(nameBytes);
     const offset = body.length;
     body.raw(local.get());
     body.raw(bytes);
-    entries.push({ name, bytes, crc, offset });
+    entries.push({ name, nameBytes, bytes, crc, offset });
   }
 
   const directory = new ByteWriter();
@@ -110,14 +113,14 @@ export function zipFiles(files: ProjectFile[], when = new Date()): Uint8Array {
     directory.u32(entry.crc);
     directory.u32(entry.bytes.length);
     directory.u32(entry.bytes.length);
-    directory.u16(entry.name.length);
+    directory.u16(entry.nameBytes.length);
     directory.u16(0);               // extra
     directory.u16(0);               // comment
     directory.u16(0);               // disk number start
     directory.u16(0);               // internal attributes
     directory.u32(0);               // external attributes
     directory.u32(entry.offset);
-    directory.text(entry.name);
+    directory.raw(entry.nameBytes);
   }
 
   const end = new ByteWriter();
