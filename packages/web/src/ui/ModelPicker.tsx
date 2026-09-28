@@ -160,7 +160,7 @@ export default function ModelPicker(p: ModelPickerProps) {
           </span>
           {!unlocked && <small className="model-group-note">Add your {providerName} API key in Settings — the dropdown then lists every model that key reaches.</small>}
           {unlocked && !live && busy && <small className="model-group-note">{providers[provider].keyless ? 'Reading the models installed on this machine…' : 'Reading what your key reaches…'}</small>}
-          {providers[provider].keyless && !live && !busy && !error && <small className="model-group-note">No local models found yet. Run <code>ollama pull</code>, then refresh.</small>}
+          {providers[provider].keyless && !live && !busy && !error && <small className="model-group-note">No local models found yet. Load one in LM Studio (with its server running) or run <code>ollama pull</code>, then refresh.</small>}
           {unlocked && !live && !busy && error && <small className="model-group-note">Could not read the live list ({error}). Showing a starter set; type any model ID in Settings.</small>}
           {list.slice(0, VISIBLE_CAP).map(m => {
             const seed = findModel(m.id);

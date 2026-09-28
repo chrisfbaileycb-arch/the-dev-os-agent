@@ -199,11 +199,11 @@ export default function Connectors(p: ConnectorsProps) {
         <section className="panel pipe-row">
           <div className="panel-head"><div><strong>{providers.ollama.name}</strong><small> runs on this machine, no key</small></div><label className="switch"><input type="checkbox" checked={p.pipes.ollamaEnabled} onChange={e => togglePipe('ollama', e.target.checked)} />In model picker</label></div>
           <div className="row gap">
-            <input className={ollamaError ? 'grow input-error' : 'grow'} value={ollamaDraft} spellCheck={false} aria-label="Ollama address" onChange={e => setOllamaDraft(e.target.value)} />
+            <input className={ollamaError ? 'grow input-error' : 'grow'} value={ollamaDraft} spellCheck={false} aria-label="Local model address" onChange={e => setOllamaDraft(e.target.value)} />
             <button className="button primary small" disabled={Boolean(ollamaError) || p.discovering.has('ollama')} onClick={saveOllama}>{p.discovering.has('ollama') ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}Connect</button>
           </div>
           {ollamaError && <span className="field-error">{ollamaError}</span>}
-          <p className="help">{p.discovered.ollama?.error ? p.discovered.ollama.error : p.discovered.ollama?.models.length ? `${p.discovered.ollama.models.length} local model${p.discovered.ollama.models.length === 1 ? '' : 's'} found.` : 'Your browser calls Ollama directly — the hosted server cannot reach your machine.'} Start Ollama so it accepts this site: <code>OLLAMA_ORIGINS={typeof location === 'undefined' ? '<this site>' : location.origin} ollama serve</code>. Your browser may ask to allow access to devices on your local network.</p>
+          <p className="help">{p.discovered.ollama?.error ? p.discovered.ollama.error : p.discovered.ollama?.models.length ? `${p.discovered.ollama.models.length} local model${p.discovered.ollama.models.length === 1 ? '' : 's'} found.` : 'Your browser calls the local server directly — the hosted server cannot reach your machine.'} LM Studio (port 1234): load a model, start its local server, and turn on its CORS setting. Ollama (port 11434): allow this site with <code>OLLAMA_ORIGINS={typeof location === 'undefined' ? '<this site>' : location.origin} ollama serve</code>. Your browser may ask to allow access to devices on your local network.</p>
         </section>
         <p className="help">Google Gemini here is the AI Studio API. Google Cloud Code / Antigravity has no public API endpoint to connect to; a Vertex AI endpoint can be added by the operator as a custom endpoint.</p>
       </>}

@@ -60,14 +60,14 @@ test('the sandbox shell gives the page in-memory storage, since an opaque origin
 });
 
 test('the app policy lets the sync drawer reach api.github.com, and nothing broader', () => {
-  assert.match(CSP, /connect-src 'self' https:\/\/esm\.sh https:\/\/api\.github\.com http:\/\/localhost:11434 http:\/\/127\.0\.0\.1:11434;/);
+  assert.match(CSP, /connect-src 'self' https:\/\/esm\.sh https:\/\/api\.github\.com http:\/\/localhost:11434 http:\/\/127\.0\.0\.1:11434 http:\/\/localhost:1234 http:\/\/127\.0\.0\.1:1234;/);
   assert.doesNotMatch(CSP, /connect-src [^;]*https:(?!\/\/)/);
   assert.doesNotMatch(CSP, /connect-src [^;]*http:(?!\/\/)/);
 });
 
-test('the only local address the app may reach is Ollama on loopback', () => {
+test('the only local addresses the app may reach are Ollama and LM Studio on loopback', () => {
   const connect = CSP.match(/connect-src ([^;]*)/)[1].split(' ');
   const local = connect.filter(src => src.startsWith('http://'));
-  assert.deepEqual(local, ['http://localhost:11434', 'http://127.0.0.1:11434']);
+  assert.deepEqual(local, ['http://localhost:11434', 'http://127.0.0.1:11434', 'http://localhost:1234', 'http://127.0.0.1:1234']);
   assert.ok(!connect.some(src => src.includes('*')));
 });

@@ -106,6 +106,13 @@ describe('provider pipes', () => {
     expect(localEndpointError('http://127.0.0.1:11434')).toBe('');
     expect(localEndpointError('http://192.168.1.4:11434/v1')).toMatch(/Only this machine/);
     expect(localEndpointError('http://localhost:8080/v1')).toMatch(/11434/);
+    // LM Studio's default server address is allowed; other local ports and hosts still are not.
+    expect(localEndpointError('http://localhost:1234/v1')).toBe('');
+    expect(localEndpointError('http://127.0.0.1:1234')).toBe('');
+    expect(localEndpointError('http://localhost:8080/v1')).toMatch(/1234/);
+    expect(localEndpointError('http://localhost:5000/v1')).not.toBe('');
+    expect(localEndpointError('http://192.168.1.4:1234/v1')).toMatch(/Only this machine/);
+    expect(normalizeLocalEndpoint('http://localhost:1234')).toBe('http://localhost:1234/v1');
     expect(normalizeLocalEndpoint('http://localhost:11434/')).toBe('http://localhost:11434/v1');
   });
   it('shows every hosted pipe by default and keeps Ollama off until switched on', () => {
