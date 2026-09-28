@@ -35,7 +35,7 @@ export function createState({ env: baseEnv = process.env, db, settings = null })
   const budget = async (workspace, env) => ({ pool: Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000), freePool: monthlyPool(env), freeUsed: await db.usedThisMonth(workspace, new Date(), 'free'), free: freeTierStatus(env) });
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://state').pathname;
-    if (!['/api/state', '/api/state/clear', '/api/state/usage'].includes(path)) return false;
+    if (!['/api/state', '/api/state/clear', '/api/state/delete', '/api/state/usage'].includes(path)) return false;
     const env = currentEnv();
     try {
       checkOrigin(req, env);
@@ -49,6 +49,13 @@ export function createState({ env: baseEnv = process.env, db, settings = null })
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
       const body = await readBody(req);
       if (path === '/api/state/clear') { await db.clear(workspace); json(res, 200, { ok: true }); return true; }
+      // Deleting a session has to reach the server too: the tab merges the server's copy back in
+      // on every load, so a session removed only from this browser comes back on the next refresh.
+      if (path === '/api/state/delete') {
+        const ids = Array.isArray(body.sessions) ? body.sessions : [];
+        if (ids.length > MAX_ITEMS || !ids.every(isId)) throw new HttpError(400, 'Invalid session ids.');
+        await db.removeSessions(workspace, ids); json(res, 200, { ok: true }); return true;
+      }
       const sessions = Array.isArray(body.sessions) ? body.sessions : []; const runs = Array.isArray(body.runs) ? body.runs : []; const ledger = Array.isArray(body.ledger) ? body.ledger : [];
       if (sessions.length > MAX_ITEMS || runs.length > MAX_ITEMS || ledger.length > MAX_ITEMS) throw new HttpError(400, 'Too many items in one request.');
       sessions.forEach(validateSession); runs.forEach(validateRun); ledger.forEach(validateEntry);

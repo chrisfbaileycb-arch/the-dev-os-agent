@@ -146,6 +146,21 @@ export function validContent(content) {
 export function errorMessage(status) {
   return status === 401 || status === 403 ? 'Invalid API key or insufficient provider permissions.' : status === 429 ? 'Provider rate limit reached. Wait and retry.' : status === 404 ? 'Provider endpoint or model was not found.' : status >= 500 ? 'Provider is temporarily unavailable.' : 'Provider rejected the request. Check the model and request settings.';
 }
+/**
+ * What a visitor is told about a failed request.
+ *
+ * A bare "Provider rejected the request" gave nobody anything to act on: Anthropic answers 400 for
+ * a key that is not scoped to a workspace, an unpaid balance, an unknown model and a malformed
+ * request alike, and those are four different fixes. For the statuses that describe the request
+ * itself the provider's own sentence is passed along, bounded, and with anything shaped like a
+ * credential removed first. Auth, rate-limit and 5xx answers stay generic on purpose.
+ */
+export function clientMessage(status, detail) {
+  const base = errorMessage(status);
+  if (![400, 404, 413, 422].includes(status) || !detail) return base;
+  const safe = String(detail).replace(/\b(?:sk|xai|gsk|hf|pk)[-_][A-Za-z0-9_-]{16,}/gi, '[redacted]').replace(/\s+/g, ' ').trim().slice(0, 300);
+  return safe ? `${base} The provider said: ${safe}` : base;
+}
 // Stream upstream bytes without buffering. Pinned DNS prevents custom-host rebinding.
 export function upstream(url, { method = 'POST', headers, body, signal, address }) {
   return new Promise((resolve, reject) => {
@@ -470,7 +485,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         // send the visitor hunting for a problem that is not theirs. Report it as a tier that is
         // not answering, and leave the real status for the operator's logs.
         if (funding.mode === 'free') throw new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable');
-        throw new HttpError(status >= 300 && status < 400 ? 502 : status, errorMessage(status));
+        throw new HttpError(status >= 300 && status < 400 ? 502 : status, clientMessage(status, detail));
       }
       if (path === '/api/models') {
         let size = 0; const chunks = [];
