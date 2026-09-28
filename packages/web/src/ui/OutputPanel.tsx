@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, CircleAlert, CircleCheck, Code2, Columns2, Copy, Eye, FileArchive, FileDown, LoaderCircle, Maximize2, Minimize2, Monitor, MonitorPlay, PanelRightClose, Pencil, RotateCw, Server, Smartphone, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import { parseProject, preparePreviewProject, type Project, type ProjectFile } from '../lib/project';
+import { cssDraft } from '../lib/buildPreview';
 import { buildProject, type BuildResult } from '../lib/bundle/client';
 import { highlightCode } from '../lib/highlight';
 import { archiveName, saveBlob, zipBlob } from '../lib/download';
@@ -144,6 +145,18 @@ export default function OutputPanel(p: OutputPanelProps) {
     // edit in progress — rather than blanking it; the chat already shows the prose. Only an empty
     // session (new, or cleared) returns the canvas to idle.
     if (!next) {
+      const css = cssDraft(p.content);
+      if (css) {
+        const signature = `css:${css}`;
+        if (parsedRef.current !== signature) {
+          parsedRef.current = signature;
+          abortRef.current?.abort();
+          setProject({ files: [{ path: 'styles.css', content: css }], entry: 'styles.css', dependencies: {}, kind: 'html' });
+          setSelectedFile('styles.css'); setActiveCode(css); setView('code'); setEditing(false);
+          setBuild({ kind: 'idle' }); setEditDirty(false);
+        }
+        return;
+      }
       if (!p.content && !p.streaming) { abortRef.current?.abort(); parsedRef.current = ''; setProject(null); setSelectedFile(null); setActiveCode(''); setBuild({ kind: 'idle' }); setEditDirty(false); }
       return;
     }
@@ -255,6 +268,7 @@ export default function OutputPanel(p: OutputPanelProps) {
   const codeMarkup = highlightCode(activeCode);
   /** Every route back to the running app: re-mount the frame and restore the canonical split. */
   const showPreview = () => { setView('preview'); setEditing(false); p.onPreviewFocus(); setRefresh(n => n + 1); };
+  const sourceOnly = project?.entry === 'styles.css';
   const codeShown = view === 'code' || split;
 
   const fileTabs = project && project.files.length > 1 && <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>;
@@ -292,6 +306,7 @@ export default function OutputPanel(p: OutputPanelProps) {
     <header className="preview-head developer-toolbar">
       <div className="toolbar-group">
         <button className={codeShown ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={codeShown} disabled={!project || split} onClick={() => { if (view === 'code') showPreview(); else setView('code'); }} title="View or edit the generated source"><Code2 size={12} />View / Edit Code</button>
+        <button className="toolbar-button" onClick={() => { if ((!project || sourceOnly) && p.onFinish) p.onFinish(); else showPreview(); }} disabled={p.streaming || ((!project || sourceOnly) && !p.onFinish)} title={sourceOnly ? 'Complete the generated source into a runnable page' : 'Show the live app'}><MonitorPlay size={12} />{!project || sourceOnly ? 'Generate Preview' : 'Preview'}</button>
         <div className="menu-anchor" ref={exportRef}>
           <button className="toolbar-button" aria-haspopup="menu" aria-expanded={exportOpen} disabled={!project} onClick={() => setExportOpen(o => !o)}><FileArchive size={12} />Export<ChevronDown size={11} /></button>
           {exportOpen && <div className="toolbar-menu" role="menu">
@@ -310,7 +325,7 @@ export default function OutputPanel(p: OutputPanelProps) {
           <button aria-pressed={fullscreen} className={fullscreen ? 'active' : ''} title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => setFullscreen(f => !f)}>{fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
         </span>
         <span className={devStatus.running ? 'dev-status running' : 'dev-status'} title="The generated app is compiled in this browser and rendered in a sandboxed frame; nothing is served from a dev server."><Server size={12} />{devStatus.text}</span>
-        <button className="icon-button" onClick={rebuild} disabled={!project || isBuilding} title="Rebuild the generated app" aria-label="Rebuild the generated app"><RotateCw size={13} /></button>
+        <button className="icon-button" onClick={rebuild} disabled={!project || sourceOnly || isBuilding} title="Rebuild the generated app" aria-label="Rebuild the generated app"><RotateCw size={13} /></button>
         <button className="icon-button" aria-label="Close output panel" onClick={() => { setFullscreen(false); p.close(); }}><PanelRightClose size={14} /></button>
       </div>
     </header>

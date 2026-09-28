@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BUILD_DELIVERY_RULES, ensureRunnableBuild, expectsRunnablePreview } from '../src/lib/buildPreview';
+import { BUILD_DELIVERY_RULES, cssDraft, ensureRunnableBuild, expectsRunnablePreview } from '../src/lib/buildPreview';
 import { chatTurn } from '../src/lib/chat';
+import { parseProject } from '../src/lib/project';
 import { defaultConnection } from '../src/lib/providers';
 import type { Completion, Connection } from '../src/lib/types';
 
@@ -25,10 +26,24 @@ describe('automatic build preview delivery', () => {
   it('automatically completes a CSS fragment into a runnable entry', async () => {
     const complete = vi.fn(async (_connection: Connection, _system: string, _prompt: string, _signal: AbortSignal): Promise<Completion> => ({ text: page, tokens: 145 }));
     const result = await ensureRunnableBuild(request('```css\n.hero { color: red; }\n```'), complete);
-    expect(result).toEqual({ text: page, tokens: 145, repaired: true });
+    expect(result.tokens).toBe(145);
+    expect(result.repaired).toBe(true);
+    expect(parseProject(result.text)?.files[0].content).toContain('.hero { color: red; }');
     expect(complete).toHaveBeenCalledTimes(1);
     expect(complete.mock.calls[0][1]).toContain('complete runnable project');
     expect(complete.mock.calls[0][2]).toContain('Build a landing page for my restaurant');
+  });
+
+  it('keeps existing CSS when a short markup completion fits the output cap', async () => {
+    const draft = '```css\n.hero { color: red; }\n```';
+    expect(cssDraft(draft)).toBe('.hero { color: red; }');
+    const complete = vi.fn(async (_connection: Connection, _system: string): Promise<Completion> => ({ text: '```html\n<!doctype html><html><head></head><body><h1 class="hero">Hello</h1></body></html>\n```', tokens: 85 }));
+    const result = await ensureRunnableBuild(request(draft), complete);
+    expect(result.repaired).toBe(true);
+    const html = parseProject(result.text)?.files[0].content;
+    expect(html).toContain('<style>\n.hero { color: red; }\n</style>');
+    expect(html).toContain('<h1 class="hero">Hello</h1>');
+    expect(complete.mock.calls[0][1]).toContain('under 700 output tokens');
   });
 
   it('keeps the draft and reports failure if the second response still has no entry', async () => {
@@ -36,7 +51,7 @@ describe('automatic build preview delivery', () => {
     const result = await ensureRunnableBuild(request('original draft'), complete);
     expect(result.text).toBe('original draft');
     expect(result.tokens).toBe(60);
-    expect(result.issue).toMatch(/did not finish a runnable preview/);
+    expect(result.issue).toMatch(/stopped before finishing a runnable page/);
   });
 
   it('sends the runnable delivery contract to the model on a Build turn', async () => {
