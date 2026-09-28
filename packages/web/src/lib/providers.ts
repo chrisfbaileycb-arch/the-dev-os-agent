@@ -40,7 +40,7 @@ export const providers: Record<Provider, ProviderInfo> = {
   openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', flagship: 'gpt-4o', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy
   // translates in both directions; from here it is just another provider with a key.
-  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', flagship: 'claude-sonnet-4-5', models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5'] },
+  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', flagship: 'claude-sonnet-4-5', models: ['claude-sonnet-4-5', 'claude-opus-4-8', 'claude-haiku-4-5'] },
   // Google publishes an OpenAI-compatible surface for Gemini, so it needs no translation.
   google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', flagship: 'gemini-2.5-pro', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
   cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', flagship: 'command-a-03-2025', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },

@@ -37,6 +37,28 @@ function stripReopenedFence(chunk: string): string {
 }
 
 const MAX_CONTINUATIONS = 3;
+const MIN_OVERLAP = 8;
+
+/**
+ * Join a continuation onto the text it resumes, using the tail the model was told to repeat.
+ *
+ * Models resume with or without repeating the tail, and often drop the leading space when they do
+ * not ("links that" + "adapt"), so a bare append glues words together. The chunk is asked to begin
+ * with the last stretch of the existing text; when its start overlaps the end of the text, only
+ * the new part is appended. With no overlap it is appended as-is, because a cut can fall
+ * mid-word ("padd" + "ing") and inserting a separator there would be wrong too.
+ */
+export function joinContinuation(text: string, chunk: string): string {
+  const max = Math.min(chunk.length, text.length, 400);
+  // Overlap must be long enough, and contain a real word, to be a repeated tail rather than markup
+  // that legitimately recurs: `</div>` at the end of the text and again at the start of the chunk
+  // is two closing tags, not one repeated.
+  for (let size = max; size >= MIN_OVERLAP; size--) {
+    const head = chunk.slice(0, size);
+    if (/[A-Za-z0-9]{5}/.test(head) && text.endsWith(head)) return text + chunk.slice(size);
+  }
+  return text + chunk;
+}
 
 export interface BuildRecovery { text: string; tokens: number; issue?: string; repaired: boolean }
 type CompleteFn = typeof complete;
@@ -52,7 +74,7 @@ export async function ensureRunnableBuild(input: {
   // budget throws the work away and is cut off again by a model that ignores the size request.
   if (endsInsideFence(input.draft)) {
     let text = input.draft;
-    const system = `${composePrompt(personaById('coder'))}\n\nYour previous reply was cut off by an output limit. Continue EXACTLY where the text stops. Do not repeat anything already written, do not reopen the code fence, and do not add commentary. Finish every open tag, rule and function, then end with the closing \`\`\` fence. Keep the remainder compact.`;
+    const system = `${composePrompt(personaById('coder'))}\n\nYour previous reply was cut off by an output limit. Begin by repeating the last line of the text you were given, character for character, so the pieces can be joined, then continue EXACTLY where it stops. Do not repeat anything earlier, do not reopen the code fence, and do not add commentary. Finish every open tag, rule and function, then end with the closing \`\`\` fence. Keep the remainder compact.`;
     try {
       for (let i = 0; i < MAX_CONTINUATIONS && endsInsideFence(text); i++) {
         const prompt = `ORIGINAL REQUEST\n${input.goal.slice(0, 1500)}\n\nYOUR REPLY SO FAR ENDS WITH (continue right after the last character):\n${text.slice(-3000)}`;
@@ -60,7 +82,7 @@ export async function ensureRunnableBuild(input: {
         spent += result.tokens;
         const chunk = stripReopenedFence(result.text);
         if (!chunk.trim()) break;
-        text += chunk; // appended verbatim: the cut can fall mid-word
+        text = joinContinuation(text, chunk);
       }
     } catch (error) {
       if (input.signal.aborted) throw error;

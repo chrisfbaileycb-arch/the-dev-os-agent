@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BUILD_DELIVERY_RULES, cssDraft, ensureRunnableBuild, expectsRunnablePreview } from '../src/lib/buildPreview';
+import { BUILD_DELIVERY_RULES, cssDraft, ensureRunnableBuild, expectsRunnablePreview, joinContinuation } from '../src/lib/buildPreview';
 import { chatTurn } from '../src/lib/chat';
 import { parseProject } from '../src/lib/project';
 import { defaultConnection } from '../src/lib/providers';
@@ -92,5 +92,20 @@ describe('resuming a reply cut off by the output limit', () => {
     expect(result.repaired).toBe(false);
     expect(complete).toHaveBeenCalledTimes(4);
     expect(result.tokens).toBe(40);
+  });
+});
+
+describe('joining a continuation to the reply it resumes', () => {
+  it('drops the repeated tail so words are not glued together', () => {
+    expect(joinContinuation('<p>Dynamic preview links that', 'links that adapt to your workflow</p>')).toBe('<p>Dynamic preview links that adapt to your workflow</p>');
+  });
+  it('joins mid-word cuts directly when nothing was repeated', () => {
+    expect(joinContinuation('.btn { padd', 'ing: 1rem; }')).toBe('.btn { padding: 1rem; }');
+  });
+  it('handles a repeated tail that ends mid-word', () => {
+    expect(joinContinuation('display: inline-block; padd', 'inline-block; padding: 1rem; }')).toBe('display: inline-block; padding: 1rem; }');
+  });
+  it('does not treat a short accidental match as overlap', () => {
+    expect(joinContinuation('<div>a</div>', '</div><p>b</p>')).toBe('<div>a</div></div><p>b</p>');
   });
 });

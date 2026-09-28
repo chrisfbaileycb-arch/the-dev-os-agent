@@ -78,6 +78,8 @@ export const catalog: CatalogModel[] = [
   // are seeds — Discover reads the live list and the model field accepts anything typed.
   { id: 'gpt-4o', provider: 'openai', label: 'GPT-4o (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'On your own OpenAI key.' },
   { id: 'claude-sonnet-4-5', provider: 'anthropic', label: 'Claude Sonnet (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'On your own Anthropic key.' },
+  { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Most capable; on your own Anthropic key.' },
+  { id: 'claude-haiku-4-5', provider: 'anthropic', label: 'Claude Haiku (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.fast, note: 'Fast and inexpensive on your own Anthropic key.' },
   { id: 'gemini-2.5-pro', provider: 'google', label: 'Gemini 2.5 Pro (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'On your own Google AI Studio key.' },
   { id: 'gemini-2.5-flash', provider: 'google', label: 'Gemini 2.5 Flash (direct)', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Quick and cheap on your own Google key.' },
   { id: 'auto', provider: 'omniroute', label: 'OmniRoute auto (balanced)', tier: 'pro', weight: CREDIT_WEIGHTS.standard, note: 'Routes across the operator\'s connected providers; free tiers first.' },
