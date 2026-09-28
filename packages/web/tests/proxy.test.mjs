@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { FREE_TIER_UNAVAILABLE, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
 import { setXkiroCatalog } from '../server/freetier.mjs';
 const NL = String.fromCharCode(10);
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
@@ -450,4 +450,15 @@ test('reading the error body is bounded and can never fail the request', async (
   assert.equal(await peek(Readable.from([Buffer.from('')])), '');
   const broken = new Readable({ read() { this.destroy(new Error('socket died mid-body')); } });
   assert.equal(await peek(broken), '', 'a stream that dies while being read yields nothing, not a throw');
+});
+
+test('a rejected request explains itself, without leaking credentials, while auth and 5xx stay generic', () => {
+  const said = 'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header.';
+  assert.match(clientMessage(400, said), /Provider rejected the request.*The provider said: This API key is not scoped to a workspace/);
+  assert.match(clientMessage(404, 'model: claude-x'), /not found.*The provider said: model: claude-x/);
+  assert.ok(clientMessage(400, 'bad key sk-ant-api03-abcdefghijklmnopqrstuvwx used').includes('[redacted]'));
+  assert.ok(!clientMessage(400, 'bad key sk-ant-api03-abcdefghijklmnopqrstuvwx used').includes('abcdefghijklmnop'));
+  assert.ok(clientMessage(400, 'x'.repeat(2000)).length < 400);
+  for (const status of [401, 403, 429, 500, 503]) assert.equal(clientMessage(status, 'secret body'), errorMessage(status));
+  assert.equal(clientMessage(400, ''), errorMessage(400));
 });

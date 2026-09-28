@@ -117,7 +117,31 @@ export const sync = {
   usage: (signal?: AbortSignal) => api<UsageReading>('/api/state/usage', {}, signal),
   push: (payload: { sessions?: Session[]; runs?: Run[]; ledger?: LedgerEntry[] }) => api<{ ok: true }>('/api/state', { method: 'POST', body: JSON.stringify(payload) }),
   clear: () => api<{ ok: true }>('/api/state/clear', { method: 'POST', body: '{}' }),
+  remove: (ids: string[]) => api<{ ok: true }>('/api/state/delete', { method: 'POST', body: JSON.stringify({ sessions: ids }) }),
 };
+
+// Sessions deleted here that the server may still hold. The merge below unions the server's copy
+// back in on every load, so a delete that only reached IndexedDB was undone by the next refresh.
+// The ids wait in localStorage until the server confirms, which also covers a delete made offline.
+const TOMBSTONES_KEY = 'sf-deleted-sessions';
+function readTombstones(): string[] {
+  try { const v = JSON.parse(localStorage.getItem(TOMBSTONES_KEY) || '[]'); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(-200) : []; } catch { return []; }
+}
+function writeTombstones(ids: string[]): void {
+  try { if (ids.length) localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(ids.slice(-200))); else localStorage.removeItem(TOMBSTONES_KEY); } catch { /* storage unavailable */ }
+}
+/** Tell the server about every delete it has not confirmed yet; ids stay queued if it does not answer. */
+export async function flushDeletes(): Promise<void> {
+  const ids = readTombstones();
+  if (!ids.length) return;
+  if (await sync.remove(ids)) writeTombstones(readTombstones().filter(id => !ids.includes(id)));
+}
+/** Delete a session from this browser and, once reachable, from the server. */
+export async function removeSessionEverywhere(id: string): Promise<void> {
+  await storage.removeSession(id);
+  writeTombstones([...readTombstones().filter(x => x !== id), id]);
+  await flushDeletes();
+}
 
 const byId = <T extends { id: string }>(list: T[]) => new Map(list.map(item => [item.id, item]));
 /** Merge local and server copies: newest session wins by updatedAt; runs and ledger entries are unioned. */
@@ -135,7 +159,9 @@ export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
   const [runs, knowledge, sessions, ledger] = await Promise.all([storage.runs(), storage.knowledge(), storage.sessions(), storage.ledger()]);
   const fixedRuns = runs.map(r => r.status === 'running' || r.status === 'awaiting_approval' ? { ...r, status: 'interrupted' as const, steps: r.steps.map(s => ['pending', 'queued', 'assigned', 'running'].includes(s.status) ? { ...s, status: 'cancelled' } : s) } : r);
   const server = await sync.pull(signal);
-  const merged = merge({ sessions, runs: fixedRuns, ledger }, server);
+  const dead = new Set(readTombstones());
+  const merged = merge({ sessions: sessions.filter(s => !dead.has(s.id)), runs: fixedRuns, ledger }, server ? { ...server, sessions: server.sessions.filter(s => !dead.has(s.id)) } : server);
+  if (dead.size) void flushDeletes();
   await Promise.all([...merged.sessions.filter(s => !sessions.find(l => l.id === s.id && l.updatedAt >= s.updatedAt)).map(storage.saveSession), ...merged.runs.filter(r => !runs.find(l => l.id === r.id) || fixedRuns.find(l => l.id === r.id)?.status === 'interrupted').map(storage.saveRun), ...merged.ledger.filter(e => !ledger.find(l => l.id === e.id)).map(storage.saveLedger)]);
   if (server && (merged.toPush.sessions.length || merged.toPush.runs.length || merged.toPush.ledger.length)) void sync.push(merged.toPush);
   const pool = server?.pool ?? DEFAULT_MONTHLY_POOL;

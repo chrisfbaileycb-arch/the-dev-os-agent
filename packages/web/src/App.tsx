@@ -29,7 +29,7 @@ import { modelChoices, preferredModel, type ModelChoice } from './lib/modelChoic
 import { clearDiscovered, isFresh, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
 import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
-import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
+import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
@@ -282,7 +282,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     }
   }
   function ensureSession(): Session { return active ?? newSession(); }
-  async function deleteSession(id: string) { try { await storage.removeSession(id); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
+  async function deleteSession(id: string) { try { await removeSessionEverywhere(id); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
   /** Picking any agent other than the builder while in Build returns to Chat, since Build binds its own agent. */
   function choosePersona(id: string) {
     setPersonaId(id);
