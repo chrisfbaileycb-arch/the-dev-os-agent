@@ -156,6 +156,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const [googleEnabled, setGoogleEnabled] = useState(false);
   const abortRef = useRef<AbortController | null>(null); const worker = useRef<Worker | null>(null); const recognition = useRef<Recognition | null>(null);
   const approvedRuns = useRef(false); const endRef = useRef<HTMLDivElement>(null);
+  const attemptedPreviewRecovery = useRef(new Set<string>());
 
   const setMcp = (list: McpConnection[]) => { saveConnections(list); setMcpState(list); };
   const setSettings = (next: ConnectorSettings) => { saveSettings(next); setSettingsState(next); };
@@ -481,6 +482,18 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     } catch (error) { if (!controller.signal.aborted) setNotice(errorText(error)); }
     finally { abortRef.current = null; setBusy(false); }
   }
+
+  // Older sessions may contain a CSS-only Build reply from before automatic completion existed.
+  // Recover each saved reply once when its canvas is opened; a failed provider call must not loop.
+  useEffect(() => {
+    if (!ready || !previewOpen || !previewNeedsFinish || !active || !lastAssistant || !lastRequest || busy || lastAssistant.error) return;
+    const key = `${active.id}:${lastAssistant.id}`;
+    if (attemptedPreviewRecovery.current.has(key)) return;
+    attemptedPreviewRecovery.current.add(key);
+    void finishExistingPreview();
+    // The key, rather than callback identity, controls retries across session changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, previewOpen, previewNeedsFinish, active?.id, lastAssistant?.id, lastAssistant?.error, busy]);
 
   function startWorkflow(session: Session, user: ChatMessage, text: string, files: Attached[], title: string, workflow: Exclude<RunMode, 'chat'>) {
     const runId = crypto.randomUUID();
