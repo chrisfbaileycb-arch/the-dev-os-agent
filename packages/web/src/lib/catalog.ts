@@ -113,5 +113,28 @@ export function creditsFor(model: string, tokens: number, mode: InferenceMode): 
   if ((mode !== 'credits' && mode !== 'free') || !(tokens > 0)) return 0;
   return Math.ceil((tokens * weightFor(model)) / 10) / 100;
 }
+/**
+ * Vendors price output tokens at about five times input tokens, and a coding agent resends a large
+ * prompt on every call, so one blended per-token weight overcharges input-heavy work and
+ * undercharges long generations. These rates keep the class weights above as the reference: at
+ * three input tokens per output token, input costs weight/2 and output five times that, which
+ * charges exactly what the blended weight did. Only the mix changes the bill.
+ */
+export const OUTPUT_TO_INPUT = 5;
+export interface Usage { input: number; output: number; }
+export function ratesFor(model: string): { input: number; output: number } {
+  const input = weightFor(model) / 2;
+  return { input, output: input * OUTPUT_TO_INPUT };
+}
+/**
+ * Credits for a completed request when the provider reported input and output separately.
+ * Same two-decimal rounding and the same rule as creditsFor: a BYOK run is never charged.
+ */
+export function creditsForUsage(model: string, usage: Usage, mode: InferenceMode): number {
+  const input = Math.max(0, usage.input || 0); const output = Math.max(0, usage.output || 0);
+  if ((mode !== 'credits' && mode !== 'free') || !(input + output > 0)) return 0;
+  const rate = ratesFor(model);
+  return Math.ceil((input * rate.input + output * rate.output) / 10) / 100;
+}
 /** Rough token estimate for counters before a provider reports usage. */
 export function estimateTokens(text: string): number { return text ? Math.ceil(text.length / 4) : 0; }

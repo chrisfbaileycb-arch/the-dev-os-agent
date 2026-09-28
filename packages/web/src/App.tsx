@@ -334,7 +334,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
    * the browser re-reads that number instead of inventing a second one; every other mode writes
    * its own ledger row locally and syncs it.
    */
-  async function charge(sessionId: string, count: number) {
+  async function charge(sessionId: string, count: number, usage?: { input: number; output: number }) {
     if (inference === 'free') {
       const reading = await sync.usage();
       if (!reading) return;
@@ -346,7 +346,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       return;
     }
     try {
-      const entry = await recordUsage({ sessionId, model: connection.model, mode: inference, tokens: count });
+      const entry = await recordUsage({ sessionId, model: connection.model, mode: inference, tokens: count, usage });
       const next = [entry, ...ledgerRef.current]; ledgerRef.current = next; setLedger(next);
       setBalance(b => computeBalance(next, b.pool, b.source));
     } catch (e) { setNotice(errorText(e)); }
@@ -458,7 +458,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // A build that produced runnable files leaves one line of project context behind.
       const built = parseProject(content);
       if (built) void remember('project', projectText({ request: text, files: built.files.map(f => f.path) }));
-      await charge(session.id, tokens);
+      await charge(session.id, tokens, result.usage);
     } catch (e) {
       const stopped = controller.signal.aborted;
       const message = freeTierMessage(e);
