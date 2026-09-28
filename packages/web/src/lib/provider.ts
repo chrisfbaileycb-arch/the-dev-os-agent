@@ -66,7 +66,7 @@ export async function complete(c: Connection, system: string, prompt: string, si
       : await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), model: c.model, messages, max_tokens: c.maxTokens }) });
     await checkResponse(response);
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new ProviderError('Expected a streaming SSE response from /api/chat.');
-    let text = ''; let tokens = 0; let finished = false;
+    let text = ''; let tokens = 0; let inputTokens = 0; let outputTokens = 0; let split = false; let finished = false;
     for await (const event of sseEvents(response.body)) {
       signal.throwIfAborted();
       if (event.data === '[DONE]') { finished = true; break; }
@@ -81,17 +81,18 @@ export async function complete(c: Connection, system: string, prompt: string, si
         ?? (data.type === 'content_block_delta' ? data.delta?.text : undefined);
       if (typeof delta === 'string') { text += delta; onDelta?.(text); }
       if (Number.isFinite(data.usage?.total_tokens)) tokens = data.usage.total_tokens;
-      if (data.type === 'message-end') { const usage = data.delta?.usage?.tokens; if (usage) tokens = (usage.input_tokens || 0) + (usage.output_tokens || 0); finished = true; }
+      if (Number.isFinite(data.usage?.prompt_tokens) && Number.isFinite(data.usage?.completion_tokens)) { inputTokens = data.usage.prompt_tokens; outputTokens = data.usage.completion_tokens; split = true; }
+      if (data.type === 'message-end') { const usage = data.delta?.usage?.tokens; if (usage) { tokens = (usage.input_tokens || 0) + (usage.output_tokens || 0); inputTokens = usage.input_tokens || 0; outputTokens = usage.output_tokens || 0; split = true; } finished = true; }
       // Anthropic reports the prompt on message_start and the completion on message_delta, so
       // the total is only whole once both have arrived.
-      if (data.type === 'message_start' && Number.isFinite(data.message?.usage?.input_tokens)) tokens = data.message.usage.input_tokens;
-      if (data.type === 'message_delta' && Number.isFinite(data.usage?.output_tokens)) tokens += data.usage.output_tokens;
+      if (data.type === 'message_start' && Number.isFinite(data.message?.usage?.input_tokens)) { tokens = data.message.usage.input_tokens; inputTokens = tokens; }
+      if (data.type === 'message_delta' && Number.isFinite(data.usage?.output_tokens)) { tokens += data.usage.output_tokens; outputTokens = data.usage.output_tokens; split = true; }
       if (data.type === 'message_stop') finished = true;
       if (data.choices?.[0]?.finish_reason) finished = true;
     }
     if (!finished) throw new ProviderError('Provider stream ended before completion. Retry the run.');
     if (!text.trim()) throw new ProviderError('The model returned no text. Try a different model or increase the output limit.');
-    return { text, tokens: Math.max(0, tokens) };
+    return { text, tokens: Math.max(0, tokens), ...(split ? { inputTokens: Math.max(0, inputTokens), outputTokens: Math.max(0, outputTokens) } : {}) };
   } catch (e) {
     if (signal.aborted) throw signal.reason;
     if (timeout.aborted) throw new ProviderError('Provider request timed out.', true);

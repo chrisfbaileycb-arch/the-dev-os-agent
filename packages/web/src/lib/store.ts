@@ -1,6 +1,6 @@
 import type { Knowledge, MemoryEntry, Run, Workflow } from './types';
 import type { WorkMode } from './roster';
-import { creditsFor, DEFAULT_FREE_POOL, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tier } from './catalog';
+import { creditsFor, creditsForUsage, DEFAULT_FREE_POOL, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tier, type Usage } from './catalog';
 
 // Local-first workspace store. IndexedDB is the source of truth for the open tab; the server
 // keeps a copy in SQLite keyed by an anonymous workspace id so sessions and credit balances
@@ -83,8 +83,17 @@ export function serverBalance(pool: number, used: number, month = monthKey()): B
   const spent = Math.round(Math.max(0, used) * 100) / 100;
   return { pool, used: spent, remaining: Math.max(0, Math.round((pool - spent) * 100) / 100), month, source: 'server' };
 }
-export function makeEntry(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number }): LedgerEntry {
-  return { id: crypto.randomUUID(), at: new Date().toISOString(), sessionId: input.sessionId, model: input.model, tier: tierFor(input.model), mode: input.mode, tokens: Math.max(0, Math.round(input.tokens)), credits: creditsFor(input.model, input.tokens, input.mode) };
+/**
+ * A ledger row. When the provider reported input and output separately the credits are priced by
+ * direction; any tokens beyond that split (a recovery call, say) are priced at the blended rate.
+ * The row itself keeps its existing shape: total tokens and the credits they cost.
+ */
+export function makeEntry(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number; usage?: Usage }): LedgerEntry {
+  const split = input.usage ? input.usage.input + input.usage.output : 0;
+  const credits = input.usage && split > 0
+    ? Math.round((creditsForUsage(input.model, input.usage, input.mode) + creditsFor(input.model, Math.max(0, input.tokens - split), input.mode)) * 100) / 100
+    : creditsFor(input.model, input.tokens, input.mode);
+  return { id: crypto.randomUUID(), at: new Date().toISOString(), sessionId: input.sessionId, model: input.model, tier: tierFor(input.model), mode: input.mode, tokens: Math.max(0, Math.round(input.tokens)), credits };
 }
 
 // Server sync. Failures are silent: the tab keeps working from IndexedDB and retries on next load.
@@ -137,7 +146,7 @@ export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
 export async function persistSession(session: Session): Promise<void> { await storage.saveSession(session); void sync.push({ sessions: [session] }); }
 /** Only a finished run is pushed to the server copy; one that is live or waiting at a gate stays local. */
 export async function persistRun(run: Run): Promise<void> { await storage.saveRun(run); if (run.status !== 'running' && run.status !== 'awaiting_approval') void sync.push({ runs: [run] }); }
-export async function recordUsage(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number }): Promise<LedgerEntry> {
+export async function recordUsage(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number; usage?: Usage }): Promise<LedgerEntry> {
   const entry = makeEntry(input); await storage.saveLedger(entry); void sync.push({ ledger: [entry] }); return entry;
 }
 export async function clearWorkspaceData(): Promise<void> {
