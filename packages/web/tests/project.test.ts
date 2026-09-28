@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inlineLocalAssets, isSafeProjectPath, latestPreviewReply, missingReactImports, parseProject, placeholderImage, preparePreviewProject, resolveLocalRef, stitchFragments, withReactHookImports, wrapScriptDocument, type Project } from '../src/lib/project';
+import { inlineLocalAssets, missingLocalImports, isSafeProjectPath, latestPreviewReply, missingReactImports, parseProject, placeholderImage, preparePreviewProject, resolveLocalRef, stitchFragments, withReactHookImports, wrapScriptDocument, type Project } from '../src/lib/project';
 import { highlightCode } from '../src/lib/highlight';
 
 const fence = (info: string, body: string) => `\`\`\`${info}\n${body}\n\`\`\``;
@@ -312,5 +312,27 @@ describe('withReactHookImports', () => {
     expect(missingReactImports({ path: 'src/App.tsx', content: 'React.useState(0);' })).toBe("import * as React from 'react';");
     expect(missingReactImports({ path: 'src/util.ts', content: 'useState(0);' })).toBe('');
     expect(missingReactImports({ path: 'src/App.tsx', content: 'function useState() {} useState();' })).toBe('');
+  });
+});
+
+describe('truncated multi-file replies', () => {
+  const truncated = "```src/main.tsx\nimport App from './App';\nimport './index.css';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')!).render(<App />);\n```\n```src/App.tsx\nexport default function App() { return <div>hi";
+
+  it('is not a project when its own imports never arrived', () => {
+    expect(parseProject(truncated)).toBeNull();
+  });
+
+  it('reports which imports dangle', () => {
+    expect(missingLocalImports([{ path: 'src/main.tsx', content: "import App from './App';\nimport './index.css';" }])).toEqual(['src/main.tsx -> ./App', 'src/main.tsx -> ./index.css']);
+  });
+
+  it('stays a project once every import resolves', () => {
+    const full = "```src/main.tsx\nimport App from './App';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')!).render(<App />);\n```\n```src/App.tsx\nexport default function App() { return <div>hi</div>; }\n```";
+    expect(parseProject(full)?.kind).toBe('react');
+  });
+
+  it('falls back to a sibling html document', () => {
+    const mixed = `${truncated}\n\`\`\`html\n<!doctype html><html><body>ok</body></html>\n\`\`\``;
+    expect(parseProject(mixed)?.entry).toBe('index.html');
   });
 });

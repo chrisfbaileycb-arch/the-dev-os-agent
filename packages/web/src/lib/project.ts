@@ -156,6 +156,37 @@ function looksLikeExecutableScript(text: string): boolean {
 }
 
 
+const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*|\bimport\s+)['"](\.{1,2}\/[^'"]*|\/[^'"]+)['"]/g;
+const CANDIDATE_SUFFIXES = ['', '.tsx', '.ts', '.jsx', '.js', '.css', '.json', '/index.tsx', '/index.ts', '/index.jsx', '/index.js'];
+
+/**
+ * Relative imports a project's source files make that no project file satisfies.
+ *
+ * A reply cut off mid-project (a provider stream error, a free-tier output cap) often leaves the
+ * first closed fence — `src/main.tsx` — importing `./App` and `./index.css` that never arrived.
+ * Such a set looks like a project but can only fail in the bundler, so it is reported here and
+ * treated as incomplete rather than runnable.
+ */
+export function missingLocalImports(files: ProjectFile[]): string[] {
+  const known = new Set(files.map(f => f.path));
+  const missing: string[] = [];
+  for (const file of files) {
+    if (!/\.(tsx?|jsx?|mjs)$/.test(file.path)) continue;
+    const dir = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '';
+    for (const m of file.content.matchAll(RELATIVE_IMPORT)) {
+      const spec = m[1];
+      const parts: string[] = [];
+      for (const part of (spec.startsWith('/') ? spec.slice(1) : dir ? `${dir}/${spec}` : spec).split('/')) {
+        if (part === '' || part === '.') continue;
+        if (part === '..') parts.pop(); else parts.push(part);
+      }
+      const target = parts.join('/');
+      if (!CANDIDATE_SUFFIXES.some(suffix => known.has(target + suffix))) missing.push(`${file.path} -> ${spec}`);
+    }
+  }
+  return missing;
+}
+
 function reactEntry(paths: string[]): string | null {
   for (const candidate of REACT_ENTRY_PRIORITY) if (paths.includes(candidate)) return candidate;
   return paths.find(p => /\.(tsx|jsx)$/.test(p)) ?? null;
@@ -183,13 +214,16 @@ export function parseProject(text: string): Project | null {
     const dependencies = pkg ? parsePackageJson(pkg.content) : {};
     const paths = files.map(f => f.path);
     const isReact = paths.some(p => /\.(tsx|jsx)$/.test(p)) || 'react' in dependencies;
-    if (isReact) {
+    // A set whose own imports dangle was truncated; it is not a project, so the recovery pass runs.
+    const incomplete = missingLocalImports(files).length > 0;
+    if (isReact && !incomplete) {
       const entry = reactEntry(paths);
       if (entry) return { files, entry, dependencies, kind: 'react' };
     }
     const html = paths.find(p => /\.html?$/.test(p));
     if (html) return { files, entry: html, dependencies, kind: 'html' };
-    return null;
+    if (!incomplete) return null;
+    // Incomplete: fall through so a sibling html fence or bare document can still carry the reply.
   }
   const htmlFences = found.filter(f => f.lang === 'html' || f.lang === 'htm');
   if (htmlFences.length === 1) {
