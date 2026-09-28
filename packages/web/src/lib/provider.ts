@@ -39,7 +39,7 @@ export async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerat
 /** A provider the browser calls itself — a model server on this machine — rather than through /api/chat. */
 export const isDirect = (c: Connection): boolean => Boolean(c.provider && providers[c.provider]?.direct);
 const directBase = (c: Connection) => normalizeLocalEndpoint(c.endpoint);
-const directUnreachable = (c: Connection) => new ProviderError(`Cannot reach the local model server at ${directBase(c)}. Start Ollama with this site allowed, for example: OLLAMA_ORIGINS=${typeof location === 'undefined' ? '<this site>' : location.origin} ollama serve`);
+const directUnreachable = (c: Connection) => new ProviderError(`Cannot reach the local model server at ${directBase(c)}. In LM Studio, start the local server and turn on its CORS setting. For Ollama, allow this site: OLLAMA_ORIGINS=${typeof location === 'undefined' ? '<this site>' : location.origin} ollama serve`);
 const requestBody = (c: Connection) => ({ provider: c.provider || 'custom', apiKey: c.token, baseUrl: c.endpoint, ...(c.serverAccessToken ? { serverAccessToken: c.serverAccessToken } : {}) });
 /** The workspace header is how the server meters a zero-config run against its free credit pool. */
 const apiHeaders = () => ({ 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId() });

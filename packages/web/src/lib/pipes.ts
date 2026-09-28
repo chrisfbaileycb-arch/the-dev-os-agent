@@ -49,15 +49,18 @@ export function pipeEnabled(provider: Provider, pipes: PipeSettings): boolean {
 /**
  * Why a local model address will not work, or '' if it will.
  *
- * Loopback only, port 11434 only, no credentials or query. Anything else is either blocked by the
- * page's CSP (and would fail with an opaque network error) or is not "this machine" at all.
+ * Loopback only, on the default port of a supported local server — Ollama's 11434 or LM Studio's
+ * 1234 — with no credentials or query. Anything else is either blocked by the page's CSP (and
+ * would fail with an opaque network error) or is not "this machine" at all. Keep this list in step
+ * with connect-src in server/csp.mjs: the two are the same decision made in two places.
  */
+export const LOCAL_MODEL_PORTS = ['11434', '1234'] as const;
 export function localEndpointError(value: string): string {
   let url: URL;
-  try { url = new URL(value.trim()); } catch { return 'Enter the Ollama address, for example http://localhost:11434/v1.'; }
+  try { url = new URL(value.trim()); } catch { return 'Enter the local address, for example http://localhost:1234/v1 (LM Studio) or http://localhost:11434/v1 (Ollama).'; }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'Use an http:// address.';
   if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') return 'Only this machine (localhost or 127.0.0.1) can be used for a local model.';
-  if ((url.port || (url.protocol === 'https:' ? '443' : '80')) !== '11434') return 'Use Ollama’s default port, 11434 — it is the only local port this app is allowed to reach.';
+  if (!(LOCAL_MODEL_PORTS as readonly string[]).includes(url.port || (url.protocol === 'https:' ? '443' : '80'))) return 'Use LM Studio’s port 1234 or Ollama’s port 11434 — those are the only local ports this app is allowed to reach.';
   if (url.username || url.password || url.search || url.hash) return 'The address cannot carry credentials, a query, or a fragment.';
   return '';
 }

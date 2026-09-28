@@ -18,12 +18,13 @@
 // the browser with the visitor's own token. The token never touches this server, so the request
 // has to leave from the page, and this is the one host it needs.
 //
-// And connect-src reaches Ollama's default port on this machine's loopback addresses, for the
-// local model pipe (src/lib/pipes.ts). A hosted server cannot reach a visitor's localhost, so a
-// local model is only usable if the page calls it directly. Only the loopback names on port
-// 11434 are allowed — nothing else on the local network — and Ollama itself must also be started
-// with this app's origin in OLLAMA_ORIGINS before it answers.
-export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://esm.sh https://api.github.com http://localhost:11434 http://127.0.0.1:11434; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+// And connect-src reaches the default ports of two local model servers on this machine's loopback
+// addresses, for the local model pipe (src/lib/pipes.ts): Ollama on 11434 and LM Studio on 1234. A
+// hosted server cannot reach a visitor's localhost, so a local model is only usable if the page
+// calls it directly. Only the loopback names on those two ports are allowed — nothing else on the
+// local network — and the server itself must also allow this app's origin before it answers:
+// OLLAMA_ORIGINS for Ollama, the CORS option in LM Studio's server settings.
+export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://esm.sh https://api.github.com http://localhost:11434 http://127.0.0.1:11434 http://localhost:1234 http://127.0.0.1:1234; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 /**
  * The policy for the generated-app sandbox, and the reasoning behind how open it is.

@@ -50,7 +50,7 @@ export const providers: Record<Provider, ProviderInfo> = {
   venice: { name: 'Venice', tier: 'Private', endpoint: 'https://api.venice.ai/api/v1', flagship: 'llama-3.3-70b', models: ['llama-3.3-70b', 'qwen-2.5-coder-32b', 'mistral-31-24b', 'llama-3.2-3b'] },
   // A model server on this machine. No key, no seeds — whatever `ollama pull` installed is the
   // list — and called from the browser directly (see lib/pipes.ts for the localhost-only rule).
-  ollama: { name: 'Ollama (local)', tier: 'Local', endpoint: 'http://localhost:11434/v1', models: [], keyless: true, direct: true },
+  ollama: { name: 'Local model (LM Studio or Ollama)', tier: 'Local', endpoint: 'http://localhost:11434/v1', models: [], keyless: true, direct: true },
   xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: [] },
   // Optional future adapter only. It is deliberately not configured, discovered, or shown to
   // customers in this phase; hosted Cheaper Inference is the initial managed route.
