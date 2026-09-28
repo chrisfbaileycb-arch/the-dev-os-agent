@@ -63,3 +63,34 @@ describe('automatic build preview delivery', () => {
     expect(body.messages[0].content).toContain(BUILD_DELIVERY_RULES);
   });
 });
+
+describe('resuming a reply cut off by the output limit', () => {
+  const cut = '```html\n<!doctype html><html><head><style>\n.logo { font-size: 1.5rem; }\n.btn { display: inline-block; padd';
+
+  it('continues from where it stopped instead of restarting', async () => {
+    const chunks = ['ing: 1rem; }\n</style></head><body><h1 class="logo">Hi</h1>', '</body></html>\n```'];
+    const complete = vi.fn(async (_c: Connection, _s: string, _p: string, _sig: AbortSignal): Promise<Completion> => ({ text: chunks.shift() ?? '', tokens: 100 }));
+    const result = await ensureRunnableBuild(request(cut), complete);
+    expect(result.repaired).toBe(true);
+    expect(result.tokens).toBe(200);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(String(complete.mock.calls[0][2])).toContain('padd');
+    const html = parseProject(result.text)?.files[0].content ?? '';
+    expect(html).toContain('.btn { display: inline-block; padding: 1rem; }');
+    expect(html).toContain('<h1 class="logo">Hi</h1>');
+  });
+
+  it('drops a code fence the model reopened', async () => {
+    const complete = vi.fn(async (): Promise<Completion> => ({ text: '```html\ning: 1rem; }</style></head><body>ok</body></html>\n```', tokens: 50 }));
+    const result = await ensureRunnableBuild(request(cut), complete);
+    expect(parseProject(result.text)?.files[0].content).toContain('padding: 1rem; }</style>');
+  });
+
+  it('gives up after three continuations and falls back to the compact pass', async () => {
+    const complete = vi.fn(async (): Promise<Completion> => ({ text: 'more css', tokens: 10 }));
+    const result = await ensureRunnableBuild(request(cut), complete);
+    expect(result.repaired).toBe(false);
+    expect(complete).toHaveBeenCalledTimes(4);
+    expect(result.tokens).toBe(40);
+  });
+});
