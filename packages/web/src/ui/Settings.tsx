@@ -5,6 +5,7 @@ import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
 import { flagshipFor, providers, switchProvider, type Keyring, type Provider, DEFAULT_OUTPUT_TOKENS, OUTPUT_LIMITS } from '../lib/providers';
 import { rankChoices, type ModelChoice } from '../lib/modelChoices';
+import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
@@ -26,7 +27,7 @@ export interface SettingsProps {
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
-const BYOK_PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic', 'google', 'xai', 'groq', 'cohere', 'venice', 'aihubmix', 'huggingface', 'xkiro'];
+const BYOK_PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic', 'google', 'github', 'cerebras', 'xai', 'groq', 'cohere', 'venice', 'aihubmix', 'huggingface', 'xkiro'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
   openrouter: 'Your OpenRouter key',
   openai: 'Your OpenAI key',
@@ -39,6 +40,8 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
   aihubmix: 'Your AIHubMix key',
   huggingface: 'Your Hugging Face token',
   xkiro: 'Your xKiro key',
+  github: 'A GitHub token with Models: read',
+  cerebras: 'Your Cerebras key',
 };
 
 export default function Settings(p: SettingsProps) {
@@ -130,6 +133,21 @@ export default function Settings(p: SettingsProps) {
             <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember this token in this browser</label>
           </> : <>
             <p className="help">Orator sends requests through its protected gateway. Select the provider you already use and enter its key — that is all. It starts on the provider's flagship model and reads the live catalog by itself; change the model here or from the dropdown on the prompt bar whenever you like. Your key is used only for that provider and is never bundled into the app.</p>
+            <details className="free-keys">
+              <summary>No key yet? Get a free one in a few minutes</summary>
+              <p className="help">Each of these is free from a US company. Your own free key comes with its own limits, so it keeps working when the shared free tier is busy.</p>
+              <ul className="free-key-list">
+                {FREE_KEY_OPTIONS.map(o => <li key={o.provider}>
+                  <h3>{o.name}</h3>
+                  <ol>{o.steps.map(step => <li key={step}>{step}</li>)}</ol>
+                  {o.note && <p className="help">{o.note}</p>}
+                  <span className="row gap">
+                    <a className="button small" href={o.getKeyUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden="true" />Get a {providers[o.provider].name} key<span className="sr-only"> (opens in a new tab)</span></a>
+                    <button className="button primary small" disabled={p.busy} onClick={() => pickProvider(o.provider)}>Use {providers[o.provider].name}</button>
+                  </span>
+                </li>)}
+              </ul>
+            </details>
             <div className="form-grid">
               <label>Provider<select value={provider} disabled={p.busy} onChange={e => pickProvider(e.target.value as Provider)}>{BYOK_PROVIDERS.map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
               <label>API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.token || p.keys[provider] || ''} placeholder={KEY_HINTS[provider]} onChange={e => setKey(provider, e.target.value)} /></label>

@@ -59,7 +59,7 @@ export function payLabel(inference: InferenceMode): string {
 /** How many rows a filtered group shows before asking for a narrower filter. */
 const VISIBLE_CAP = 60;
 /** Vendors in the order their groups appear; gateways after the direct vendors. */
-const ORDER: Provider[] = ['ollama', 'openrouter', 'anthropic', 'openai', 'google', 'xai', 'groq', 'cohere', 'venice', 'xkiro', 'aihubmix', 'huggingface'];
+const ORDER: Provider[] = ['ollama', 'openrouter', 'anthropic', 'openai', 'google', 'github', 'cerebras', 'xai', 'groq', 'cohere', 'venice', 'xkiro', 'aihubmix', 'huggingface'];
 const tierOf = (m: ModelChoice) => TIER_LABELS[capabilityTier(m.id, m.label)];
 
 export default function ModelPicker(p: ModelPickerProps) {

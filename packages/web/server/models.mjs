@@ -34,7 +34,7 @@ export function entryIsFree(provider, entry) {
  * dropdown between loads is worth more than any sort this module could impose.
  */
 export function normalizeModelList(provider, payload, limit = 2000) {
-  const entries = provider === 'cohere' ? payload?.models : payload?.data;
+  const entries = provider === 'cohere' ? payload?.models : provider === 'github' && Array.isArray(payload) ? payload : payload?.data;
   if (!Array.isArray(entries)) return null;
   const out = [];
   const seen = new Set();
@@ -65,5 +65,7 @@ export function normalizeModelList(provider, payload, limit = 2000) {
  */
 export function modelsUrl(provider, base) {
   if (provider === 'cohere') return 'https://api.cohere.com/v1/models';
+  // GitHub Models lists its catalogue apart from the inference host, as a bare JSON array.
+  if (provider === 'github') return 'https://models.github.ai/catalog/models';
   return `${base}/models`;
 }

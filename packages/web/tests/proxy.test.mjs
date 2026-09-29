@@ -475,3 +475,18 @@ test('plan tokens: per-subscriber tokens unlock, revoked or unknown ones do not,
     assert.equal((await post(url, { ...base, apiKey: undefined, serverAccessToken: 'operator-token-cccccccc' })).status, 403, 'with no paid models configured a token must not unlock every server key');
   });
 });
+
+test('free-key providers route to their own fixed homes on the visitor key', async () => {
+  const { resolveTarget } = await import('../server/proxy.mjs');
+  const { modelsUrl, normalizeModelList } = await import('../server/models.mjs');
+  assert.equal((await resolveTarget('github')).base, 'https://models.github.ai/inference');
+  assert.equal((await resolveTarget('cerebras')).base, 'https://api.cerebras.ai/v1');
+  assert.equal(modelsUrl('github', 'https://models.github.ai/inference'), 'https://models.github.ai/catalog/models');
+  assert.deepEqual(normalizeModelList('github', [{ id: 'openai/gpt-4.1-mini', name: 'OpenAI GPT-4.1-mini' }]).map(m => m.id), ['openai/gpt-4.1-mini']);
+  let seen;
+  await withProxy({ env: {}, transport: async (url, options) => { seen = { url, auth: options.headers.Authorization }; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await post(url, { ...base, provider: 'github', model: 'openai/gpt-4.1-mini', apiKey: 'github_pat_visitor' })).status, 200);
+  });
+  assert.equal(seen.url, 'https://models.github.ai/inference/chat/completions');
+  assert.equal(seen.auth, 'Bearer github_pat_visitor');
+});

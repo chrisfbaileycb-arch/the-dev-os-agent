@@ -44,6 +44,10 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     // xAI (Grok) and Venice both speak the OpenAI chat surface at a fixed home.
     xai: 'https://api.x.ai/v1',
     venice: 'https://api.venice.ai/api/v1',
+    // Free, US-based options a visitor can get a key for in minutes: GitHub Models (a GitHub token
+    // with models:read, rate-limited for prototyping) and Cerebras (open-weight models, free tier).
+    github: 'https://models.github.ai/inference',
+    cerebras: 'https://api.cerebras.ai/v1',
     'cheaper-inference': cheaperInferenceBase(env),
     xkiro: xkiroBase(env),
   };
@@ -270,7 +274,7 @@ export function outputLimit(provider, model, max) {
  * token count into a failed run. Requested only where it is known to be supported.
  */
 export const usageReportable = (provider, target) =>
-  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xai', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xai', 'cerebras', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
 
 /**
  * An OpenAI-shaped chat request as Anthropic's /v1/messages wants it.

@@ -26,6 +26,7 @@ import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, defaultConnection, requestConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
 import { modelChoices, preferredModel, type ModelChoice } from './lib/modelChoices';
+import { firstHealthyFree } from './lib/freeHealth';
 import { clearDiscovered, isFresh, keyFingerprint, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
 import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
@@ -221,6 +222,19 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         }
         return c;
       });
+      // The first funded model is only a placeholder until one has been seen to answer.
+      if (d.free.enabled && d.free.models.length) {
+        void firstHealthyFree(d.free.models, id => d.free.providers[id], controller.signal).then(id => {
+          if (controller.signal.aborted) return;
+          if (!id) { setNotice('The free models are not answering right now. Get a free key in Settings (Google, GitHub, Groq or Cerebras) and keep going.'); return; }
+          const served = d.free.providers[id];
+          setConnection(c => {
+            if (c.inference !== 'free' || c.model === id) return c;
+            const chosen = (served && Object.hasOwn(providers, served) ? served : c.provider ?? 'xkiro') as Provider;
+            return { ...c, model: id, provider: chosen, endpoint: providers[chosen].endpoint };
+          });
+        });
+      }
       if (!d.free.enabled && d.reachable) setNotice(FREE_TIER_WARMING);
       else if (!d.reachable) setNotice('Could not reach this deployment, so no model is selected yet. Reload to try again, or add your own key in Settings.');
       else setNotice('');

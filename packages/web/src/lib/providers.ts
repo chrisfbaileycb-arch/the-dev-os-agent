@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -36,7 +36,7 @@ export const providers: Record<Provider, ProviderInfo> = {
   // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.
   'cheaper-inference': { name: 'Managed inference', tier: 'Orator managed', endpoint: '', models: [] },
 
-  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', flagship: 'groq/llama-3.3-70b-versatile', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
+  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', flagship: 'groq/llama-3.3-70b-versatile', models: ['groq/llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'groq/llama-3.1-8b-instant'] },
   openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', flagship: 'gpt-4o', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy
   // translates in both directions; from here it is just another provider with a key.
@@ -52,6 +52,11 @@ export const providers: Record<Provider, ProviderInfo> = {
   // A model server on this machine. No key, no seeds — whatever `ollama pull` installed is the
   // list — and called from the browser directly (see lib/pipes.ts for the localhost-only rule).
   ollama: { name: 'Local model (LM Studio or Ollama)', tier: 'Local', endpoint: 'http://localhost:11434/v1', models: [], keyless: true, direct: true },
+  // Free with a GitHub account: a fine-grained token with the models:read permission. Rate-limited
+  // for prototyping, which is exactly right for one person building on their own free key.
+  github: { name: 'GitHub Models', tier: 'Free key', endpoint: 'https://models.github.ai/inference', flagship: 'openai/gpt-4.1-mini', models: ['openai/gpt-4.1-mini', 'openai/gpt-4.1', 'openai/gpt-4.1-nano'] },
+  // US-hosted open-weight models, including OpenAI's gpt-oss, on a free account with no card.
+  cerebras: { name: 'Cerebras', tier: 'Free key', endpoint: 'https://api.cerebras.ai/v1', flagship: 'gpt-oss-120b', models: ['gpt-oss-120b'] },
   xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: [] },
   // Optional future adapter only. It is deliberately not configured, discovered, or shown to
   // customers in this phase; hosted Cheaper Inference is the initial managed route.
