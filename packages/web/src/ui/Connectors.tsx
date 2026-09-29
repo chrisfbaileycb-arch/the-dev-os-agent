@@ -3,6 +3,7 @@ import { Check, Cpu, Database, FileText, Globe, LoaderCircle, Plug, Plus, Refres
 import { GithubMark } from './GithubMark';
 import { guessTransport, refreshTools, type McpConnection, type McpTransport } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
+import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset } from '../lib/mcpPresets';
 import { localEndpointError, normalizeLocalEndpoint, pipeEnabled, PIPE_PROVIDERS, type PipeSettings } from '../lib/pipes';
 import { providers, type Keyring, type Provider } from '../lib/providers';
 import type { Discovered } from '../lib/discovered';
@@ -54,6 +55,7 @@ export default function Connectors(p: ConnectorsProps) {
   const [ollamaDraft, setOllamaDraft] = useState(p.pipes.ollamaUrl);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [preset, setPreset] = useState<McpPreset | null>(null);
 
   const urlError = (() => {
     const v = url.trim();
@@ -157,12 +159,25 @@ export default function Connectors(p: ConnectorsProps) {
 
       {p.tab === 'mcp' && <>
         <section className="panel">
+          <h3>Quick add</h3>
+          <p className="help">Pick a server to prefill the form below, paste the credential it names, and press Connect. These accept a token (or none); servers that only offer an OAuth sign-in cannot connect from here.</p>
+          {MCP_PRESET_GROUPS.map(group => <div key={group} className="preset-group">
+            <small>{group}</small>
+            <div className="preset-grid">{MCP_PRESETS.filter(x => x.group === group).map(preset => {
+              const connected = presetConnected(preset, p.mcp);
+              return <button key={preset.id} className={url === preset.url ? 'preset active' : 'preset'} disabled={connected} title={connected ? 'Already connected' : preset.url} onClick={() => { const f = presetForm(preset); setName(f.name); setUrl(f.url); setTransport(f.transport); setToken(''); setPreset(preset); }}>
+                <strong>{preset.name}</strong><small>{connected ? 'Connected' : preset.blurb}</small>
+              </button>;
+            })}</div>
+          </div>)}
+        </section>
+        <section className="panel">
           <h3>Add a Model Context Protocol server</h3>
           <p className="help">Connect a remote MCP server over Streamable HTTP (MCP 2025-06-18) or the older HTTP+SSE transport (2024-11-05). Its tools become available to the agent you are chatting with. Requirements: the server must be reachable over <strong>https://</strong> on a public host — local servers and <code>localhost</code> are not reachable from a hosted app. Use a tunnel (e.g. ngrok) with a bearer token for local development, or connect a cloud-hosted MCP server.</p>
           <div className="form-grid">
             <label>Name<input value={name} maxLength={40} placeholder="Shop orders" onChange={e => setName(e.target.value)} /></label>
             <label className="grow">Server URL<input type="url" value={url} placeholder="https://mcp.example.com/mcp" onChange={e => setUrl(e.target.value)} className={urlError ? 'input-error' : ''} />{urlError && <span className="field-error">{urlError}</span>}</label>
-            <label className="grow">Bearer token (optional)<input type="password" autoComplete="off" spellCheck={false} value={token} placeholder="Token the server expects" onChange={e => setToken(e.target.value)} /></label>
+            <label className="grow">Bearer token (optional)<input type="password" autoComplete="off" spellCheck={false} value={token} placeholder={preset && url === preset.url ? (preset.token ? `${preset.token} (required)` : 'Not needed for this server') : 'Token the server expects'} onChange={e => setToken(e.target.value)} /></label>
             <label>Transport<select value={transport} onChange={e => setTransport(e.target.value as McpTransport | 'auto')}>
               <option value="auto">Automatic{url.trim() ? ` (${guessTransport(url) === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'})` : ''}</option>
               <option value="http">Streamable HTTP</option>
