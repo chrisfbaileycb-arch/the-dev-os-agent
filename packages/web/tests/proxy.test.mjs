@@ -462,3 +462,16 @@ test('a rejected request explains itself, without leaking credentials, while aut
   for (const status of [401, 403, 429, 500, 503]) assert.equal(clientMessage(status, 'secret body'), errorMessage(status));
   assert.equal(clientMessage(400, ''), errorMessage(400));
 });
+
+test('plan tokens: per-subscriber tokens unlock, revoked or unknown ones do not, and no plan list means no plan access', async () => {
+  const { planHolder } = await import('../server/proxy.mjs');
+  const env = { PLAN_ACCESS_TOKENS: 'sub-token-aaaaaaaaaaaa, sub-token-bbbbbbbbbbbb', SERVER_CREDIT_ACCESS_TOKEN: 'operator-token-cccccccc' };
+  const a = planHolder('sub-token-aaaaaaaaaaaa', env), b = planHolder('sub-token-bbbbbbbbbbbb', env);
+  assert.ok(a && b && a !== b, 'each subscriber is metered separately');
+  assert.equal(planHolder('operator-token-cccccccc', env), 'plan:operator');
+  assert.equal(planHolder('sub-token-zzzzzzzzzzzz', env), null);
+  assert.equal(planHolder('sub-token-aaaaaaaaaaaa', { ...env, PLAN_ACCESS_TOKENS: 'sub-token-bbbbbbbbbbbb' }), null, 'removing a token revokes it');
+  await withProxy({ env: { GROQ_API_KEY: 'server-key', SERVER_CREDIT_ACCESS_TOKEN: 'operator-token-cccccccc' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    assert.equal((await post(url, { ...base, apiKey: undefined, serverAccessToken: 'operator-token-cccccccc' })).status, 403, 'with no paid models configured a token must not unlock every server key');
+  });
+});

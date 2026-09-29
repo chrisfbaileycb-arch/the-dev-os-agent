@@ -40,7 +40,11 @@ function withShim(html) {
   return SHIM + html;
 }
 
+// Refuse to render anything unless this document really is sandboxed and embedded by its parent.
+// A document with a real origin (not "null") would run generated code with this app's access.
+var OPAQUE = String(self.origin) === 'null';
 window.addEventListener('message', function (event) {
+  if (!OPAQUE || window.parent === window || event.source !== window.parent) return;
   var data = event.data;
   if (!data || typeof data !== 'object' || typeof data.html !== 'string') return;
   document.open();

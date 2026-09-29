@@ -169,3 +169,21 @@ export function saveKeyring(ring: Partial<Keyring>): void {
 }
 
 export function clearProviderStorage(): void { profiles.clear(); for (const p of Object.keys(providers)) localStorage.removeItem(`ft-provider-${p}`); localStorage.removeItem('ft-active-provider'); }
+
+/**
+ * The connection as it goes over the wire. A zero-config run carries no secret at all — the
+ * server funds it from its own key — so both the visitor's key and the deployment token are
+ * stripped before the request leaves the tab.
+ */
+export const requestConnection = (c: Connection, keys?: Partial<Keyring>): Connection => {
+  if (c.inference === 'free') return { ...c, token: '', serverAccessToken: '' };
+  if (c.inference === 'credits') return { ...c, token: '' };
+  // Your own key: always the key saved for the provider this request goes to. The keyring and the
+  // active connection used to be separate, so picking a model from another provider kept the old
+  // provider's key on the connection and sent it along — the wrong provider got your key, and the
+  // right one got none. The keyring entry for this provider wins; the connection's own token is
+  // used only when nothing is saved for it.
+  const provider = c.provider ?? 'custom';
+  const saved = keys?.[provider]?.trim();
+  return { ...c, token: saved || c.token || '', serverAccessToken: '' };
+};

@@ -9,7 +9,9 @@ import { FREE_MODELS, OMNIROUTE_DEFAULT_BASE, XKIRO_DEFAULT_BASE, createBurstLim
 import { openSettings } from '../server/settings.mjs';
 import { createMeter, deltaLength, usageFrom } from '../server/meter.mjs';
 
-const workspace = '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f';
+// The free quota is charged to the network address (or a signed-in account), never to a header
+// the browser can change. These tests run over loopback, so that address is the workspace.
+const workspace = '127.0.0.1';
 const base = { provider: 'groq', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
 
 /**
@@ -528,4 +530,16 @@ test('the dashboard publishes a stacked key field as the pool the router reads',
   assert.deepEqual(settings.env().GROQ_API_KEY_POOL, undefined);
   assert.equal(settings.env().GROQ_API_KEY, 'only-one-key');
   assert.equal(settings.keyStatus().find(r => r.provider === 'groq').hint, '…-key');
+});
+
+test('a new X-Workspace-Id header does not buy a fresh month of free credits', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.recordUsage(workspace, { model: 'groq/llama-3.3-70b-versatile', tokens: 100_000, credits: 50 });
+    await withProxy({ env: { GROQ_API_KEY: 'server-key', FREE_CREDIT_MONTHLY_POOL: '10' }, db, transport: async () => { throw Error('must not call'); } }, async url => {
+      for (const id of ['aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000002']) {
+        assert.equal((await chat(url, base, { 'X-Workspace-Id': id })).status, 402, `header ${id} must not reset the quota`);
+      }
+    });
+  } finally { db.close(); }
 });

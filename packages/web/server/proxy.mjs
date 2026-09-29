@@ -2,7 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { modelsUrl, normalizeModelList } from './models.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
@@ -91,13 +91,31 @@ export function cleanKey(value) {
 /** Present but unusable — the case worth naming in a log, and the one silence made unfindable. */
 export const malformed = value => typeof value === 'string' && value.trim().length > 0 && !cleanKey(value);
 
+const sameSecret = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length > 0 && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+
+/**
+ * Who a plan token belongs to, or null.
+ *
+ * There used to be one shared SERVER_CREDIT_ACCESS_TOKEN handed to every subscriber. Anyone it
+ * was forwarded to, and anyone who cancelled, kept plan access for good, and nobody's usage could
+ * be told apart. Now each subscriber gets their own token in PLAN_ACCESS_TOKENS (comma-separated;
+ * remove one to revoke that subscriber alone), and usage is metered per token. The old single
+ * token still works as the operator's own token, so nothing breaks on deploy.
+ */
+export function planHolder(supplied, env = process.env) {
+  if (typeof supplied !== 'string' || !supplied.trim()) return null;
+  const token = supplied.trim();
+  const issued = String(env.PLAN_ACCESS_TOKENS || '').split(',').map(t => t.trim()).filter(t => t.length >= 16);
+  if (issued.some(t => sameSecret(token, t))) return 'plan:' + createHash('sha256').update(token).digest('hex').slice(0, 24);
+  if (sameSecret(token, env.SERVER_CREDIT_ACCESS_TOKEN)) return 'plan:operator';
+  return null;
+}
+
 export function keyFor(body, env = process.env) {
   if (body.apiKey !== undefined && (typeof body.apiKey !== 'string' || body.apiKey.length > 8192 || /[\r\n]/.test(body.apiKey))) throw new HttpError(400, 'Invalid API key format.');
   if (body.apiKey?.trim()) return cleanKey(body.apiKey);
-  const expected = env.SERVER_CREDIT_ACCESS_TOKEN;
-  const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
-  if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
+  if (!planHolder(body.serverAccessToken, env)) return '';
   return cleanKey(env[PROVIDER_KEY_VARS[body.provider]]);
 }
 /**
@@ -369,6 +387,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // entry, and refused for any model outside the operator's paid list once one exists: the
       // access token unlocks the plan, not every key the deployment holds.
       let provider = funding.mode === 'free' ? funding.entry.provider : body.provider;
+      // With no paid models configured, a plan token used to unlock every key the deployment
+      // holds, for any model. A plan now means the operator's plan list, and nothing else.
+      if (funding.mode === 'credits' && path === '/api/chat' && !paidModels(env).length) throw new HttpError(403, 'This deployment has no paid plan models configured. Use your own key.', 'plan_model_required');
       if (funding.mode === 'credits' && path === '/api/chat' && paidModels(env).length) {
         const plan = paidModel(body.model, env);
         if (!plan) throw new HttpError(403, 'That model is not on this deployment\'s paid plan. Pick a plan model from the dropdown, or use your own key.', 'plan_model_required');
@@ -389,13 +410,22 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // anonymous browser-minted header. The session cookie is self-contained and signed, so
       // no database read is needed here — the workspace_id is embedded in the token.
       const session = parseSession(req.headers['cookie'], env.SESSION_SECRET);
-      const workspace = session?.workspaceId ?? (typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'].slice(0, 64) : ip);
+      // The quota is charged to something the visitor cannot mint: their signed-in account, or
+      // their network address. The browser's x-workspace-id header used to be the key, and a new
+      // header value was a fresh month of free credits on every request.
+      const workspace = session?.workspaceId ?? ip;
+      const planWorkspace = funding.mode === 'credits' ? planHolder(body.serverAccessToken, env) : null;
       if (funding.mode === 'free' && path === '/api/chat') {
         const burst = takeBurst(ip);
         if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`, 'free_tier_busy');
         const pool = monthlyPool(env);
         const used = db ? await db.usedThisMonth(workspace, new Date(), 'free') : 0;
-        if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own OpenRouter or Groq key in Settings — both offer free accounts — or wait for the monthly reset.`, 'free_tier_exhausted');
+        if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own free Google AI Studio, GitHub, Groq or Cerebras key in Settings, or wait for the monthly reset.`, 'free_tier_exhausted');
+      }
+      if (planWorkspace && path === '/api/chat' && db) {
+        const planPool = Number(env.PLAN_CREDIT_MONTHLY_POOL ?? 20000) || 0;
+        const planUsed = await db.usedThisMonth(planWorkspace, new Date(), 'credits');
+        if (planPool > 0 && planUsed >= planPool) throw new HttpError(402, `This plan has used its ${planPool} credits for the month.`, 'plan_exhausted');
       }
       // Anthropic authenticates with x-api-key and a pinned API version rather than a bearer
       // token; every other provider here takes Authorization.
@@ -497,11 +527,11 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // all three shapes in one place rather than this proxy rewriting a stream mid-flight. A
       // free-tier stream additionally runs through a read-only meter so its real cost is
       // recorded from the bytes that crossed the wire, never from a client-reported number.
-      const meter = funding.mode === 'free' ? createMeter({ promptChars: payload.length }) : null;
+      const meter = funding.mode === 'free' || planWorkspace ? createMeter({ promptChars: payload.length }) : null;
       if (meter) response.pipe(meter).pipe(res); else response.pipe(res);
       await new Promise((resolve, reject) => { response.on('end', resolve); response.on('error', reject); res.on('close', resolve); });
       // Bill even when the visitor navigated away mid-stream: the tokens were still spent.
-      if (meter && db) { try { const tokens = meter.total(); await db.recordUsage(workspace, { model: body.model, tier: 'free', mode: 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
+      if (meter && db) { try { const tokens = meter.total(); const plan = Boolean(planWorkspace); await db.recordUsage(plan ? planWorkspace : workspace, { model: body.model, tier: plan ? 'plan' : 'free', mode: plan ? 'credits' : 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
       return true;
     } catch (error) {
       if (!(error instanceof HttpError)) console.error('[DEBUG-NONHTTP]', error && error.constructor.name, error && error.message);

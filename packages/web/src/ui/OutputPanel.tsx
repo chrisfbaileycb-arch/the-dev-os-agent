@@ -61,7 +61,7 @@ function SandboxFrame({ html, refresh }: { html: string; refresh: number }) {
     ref={frameRef}
     title="Live generated app preview"
     className="output-frame"
-    sandbox="allow-scripts allow-modals allow-forms allow-popups allow-popups-to-escape-sandbox"
+    sandbox="allow-scripts allow-modals allow-forms allow-popups"
     src="/sandbox.html"
     onLoad={() => frameRef.current?.contentWindow?.postMessage({ html }, '*')}
   />;
