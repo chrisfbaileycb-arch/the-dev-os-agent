@@ -82,3 +82,9 @@ test('the sandbox page is sandboxed by its own response header, not only by the 
   const panel = readFileSync(new URL('../src/ui/OutputPanel.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(panel, /allow-popups-to-escape-sandbox/);
 });
+
+test('the sandbox shell reports whether the app actually ran, not just that it compiled', () => {
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  for (const state of ['"ready"', '"blank"', '"error"']) assert.ok(shell.includes(state), `reports ${state}`);
+  assert.match(shell, /type:"sf-preview"/);
+});

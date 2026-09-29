@@ -511,3 +511,4 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .free-key-list > li { border: 1px solid var(--border, rgba(127,127,127,.3)); border-radius: 8px; padding: 10px 12px; }
 .free-key-list h3 { margin: 0 0 4px; font-size: 14px; }
 .free-key-list ol { margin: 0 0 8px; padding-left: 20px; }
+.preview-runtime-error { margin: 6px 8px; font-size: 12px; }
