@@ -182,7 +182,7 @@ test('Anthropic is translated to /v1/messages, headers and all', async () => {
   const payload = JSON.parse(captured.body);
   assert.equal(payload.system, 'be brief');
   assert.deepEqual(payload.messages, [{ role: 'user', content: 'hello' }]);
-  assert.equal(payload.max_tokens, 4096);
+  assert.equal(payload.max_tokens, 8192, "a request that names no limit gets the full-app default");
   assert.equal(payload.stream_options, undefined, 'an unknown field is a 400 there, not an ignored hint');
 });
 
