@@ -46,8 +46,14 @@ export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; st
  * anywhere is data the model wrote into it. So the grants below are wide on purpose. 'unsafe-eval'
  * is there for the libraries that need it (in-browser Babel, template compilers); 'self' is absent
  * because an opaque origin has no self to match.
+ *
+ * The leading `sandbox` directive is what makes that promise hold. The iframe attribute only
+ * applies when this app embeds the page; anyone could open /sandbox.html directly, or frame it
+ * from their own site, and post HTML into it — and without this directive that document ran with
+ * this app's real origin, able to read every visitor's saved provider keys. With it, the browser
+ * gives the document an opaque origin however it is loaded.
  */
-export const SANDBOX_CSP = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; connect-src https: wss:; media-src data: blob: https:; worker-src blob:; frame-src https:; object-src 'none'; base-uri 'none'; form-action 'none'";
+export const SANDBOX_CSP = "sandbox allow-scripts allow-modals allow-forms allow-popups; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; connect-src https: wss:; media-src data: blob: https:; worker-src blob:; frame-src https:; object-src 'none'; base-uri 'none'; form-action 'none'";
 
 /** Which policy a given served file gets. `root` is the absolute path to the dist directory. */
 export function cspFor(file, root) {

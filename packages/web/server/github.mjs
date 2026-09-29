@@ -233,7 +233,9 @@ export function createGithub({ env = process.env, fetchImpl = fetch } = {}) {
       for await (const chunk of req) { size += chunk.length; if (size > MAX_PUSH_BYTES + 100_000) throw new HttpError(413, 'Request is too large.'); chunks.push(chunk); }
       let body; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'Invalid JSON body.'); }
       const token = typeof body?.token === 'string' && body.token.length <= 512 && !/[\r\n]/.test(body.token) ? body.token.trim() : '';
-      const workspace = typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'] : (req.socket.remoteAddress || 'unknown');
+      // Rate limits are keyed on the network address: a browser-supplied workspace header can be
+      // changed on every request, which made each request its own fresh budget.
+      const workspace = req.socket.remoteAddress || 'unknown';
       const result = body?.operation === 'push' ? await push(body?.params, token, workspace)
         : body?.operation === 'repos' ? await repos(token, workspace)
           : body?.operation === 'repo_info' ? await repoInfo(body?.params, token, workspace)

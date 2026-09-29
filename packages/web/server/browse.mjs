@@ -81,7 +81,9 @@ export function createBrowse({ env = process.env, resolve = lookup, allowPrivate
       let size = 0; const chunks = []; for await (const chunk of req) { size += chunk.length; if (size > 10_000) throw new HttpError(413, 'Request is too large.'); chunks.push(chunk); }
       let body; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'Invalid JSON body.'); }
       if (typeof body?.url !== 'string' || body.url.length > 2000) throw new HttpError(400, 'A page url is required.');
-      const workspace = typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'] : (req.socket.remoteAddress || 'unknown');
+      // Rate limits are keyed on the network address: a browser-supplied workspace header can be
+      // changed on every request, which made each request its own fresh budget.
+      const workspace = req.socket.remoteAddress || 'unknown';
       json(200, await inspect(body.url, workspace)); return true;
     } catch (error) { json(error instanceof HttpError ? error.status : 500, { error: { message: error instanceof HttpError ? error.message : 'Browse failed.' } }); return true; }
   }

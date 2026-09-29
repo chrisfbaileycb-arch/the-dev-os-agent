@@ -23,10 +23,11 @@ import { clearPipes, loadPipes, savePipes, type PipeSettings } from './lib/pipes
 import { latestPreviewReply, parseProject } from './lib/project';
 import { ensureRunnableBuild, expectsRunnablePreview } from './lib/buildPreview';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, defaultConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
+import { clearProviderStorage, defaultConnection, requestConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
 import { modelChoices, preferredModel, type ModelChoice } from './lib/modelChoices';
-import { clearDiscovered, isFresh, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
+import { firstHealthyFree } from './lib/freeHealth';
+import { clearDiscovered, isFresh, keyFingerprint, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
 import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
 import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
@@ -64,15 +65,7 @@ function AssistantReply({ content, working }: { content: string; working: boolea
     </details>
   </div>;
 }
-/**
- * The connection as it goes over the wire. A zero-config run carries no secret at all — the
- * server funds it from its own key — so both the visitor's key and the deployment token are
- * stripped before the request leaves the tab.
- */
-const requestConnection = (c: Connection): Connection =>
-  c.inference === 'free' ? { ...c, token: '', serverAccessToken: '' }
-    : c.inference === 'credits' ? { ...c, token: '' }
-      : { ...c, serverAccessToken: '' };
+
 
 async function readTextFile(file: File): Promise<Attached> {
   if (!/\.(txt|md|csv|json|html)$/i.test(file.name) || file.size > 200_000) throw new Error(`${file.name}: attach text, Markdown, CSV, JSON, or HTML files under 200 KB.`);
@@ -229,6 +222,19 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         }
         return c;
       });
+      // The first funded model is only a placeholder until one has been seen to answer.
+      if (d.free.enabled && d.free.models.length) {
+        void firstHealthyFree(d.free.models, id => d.free.providers[id], controller.signal).then(id => {
+          if (controller.signal.aborted) return;
+          if (!id) { setNotice('The free models are not answering right now. Get a free key in Settings (Google, GitHub, Groq or Cerebras) and keep going.'); return; }
+          const served = d.free.providers[id];
+          setConnection(c => {
+            if (c.inference !== 'free' || c.model === id) return c;
+            const chosen = (served && Object.hasOwn(providers, served) ? served : c.provider ?? 'xkiro') as Provider;
+            return { ...c, model: id, provider: chosen, endpoint: providers[chosen].endpoint };
+          });
+        });
+      }
       if (!d.free.enabled && d.reachable) setNotice(FREE_TIER_WARMING);
       else if (!d.reachable) setNotice('Could not reach this deployment, so no model is selected yet. Reload to try again, or add your own key in Settings.');
       else setNotice('');
@@ -319,7 +325,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       const provider = known && Object.hasOwn(providers, known) ? known : c.provider ?? 'openrouter';
       // `mode` is the group the visitor picked from, which is a statement of intent and is taken
       // as one. Without it, inferenceFor decides — and now leaves a deliberate choice alone.
-      return { ...c, mode: 'remote', model: id, provider, endpoint: provider === 'ollama' ? pipes.ollamaUrl : providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models) };
+      // A different provider never inherits the previous provider's key.
+      const token = provider === c.provider ? c.token : (keys[provider] ?? '');
+      return { ...c, mode: 'remote', model: id, provider, token, endpoint: provider === 'ollama' ? pipes.ollamaUrl : providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models) };
     });
     setNotice('');
   }
@@ -437,7 +445,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     const previewExpected = workMode === 'build' && expectsRunnablePreview(text, Boolean(parseProject(previous)));
     try {
       const result = await chatTurn({
-        connection: requestConnection(connection), personaId: persona.id, history: session.messages, input: text,
+        connection: requestConnection(connection, keys), personaId: persona.id, history: session.messages, input: text,
         buildPreview: previewExpected,
         attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })),
         tools: activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools }),
@@ -448,7 +456,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       let content = result.text; let tokens = result.tokens; let previewError: string | undefined;
       if (previewExpected && !parseProject(content)) {
         setNotice('Finishing a runnable preview from the generated code…');
-        const completed = await ensureRunnableBuild({ goal: text, draft: content, previous: parseProject(previous) ? previous : undefined, connection: requestConnection(connection), signal: controller.signal });
+        const completed = await ensureRunnableBuild({ goal: text, draft: content, previous: parseProject(previous) ? previous : undefined, connection: requestConnection(connection, keys), signal: controller.signal });
         content = completed.text; tokens += completed.tokens; previewError = completed.issue;
         setNotice(previewError ?? '');
       }
@@ -475,7 +483,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     setNotice('Finishing the saved build for the live preview…');
     try {
       const earlier = latestPreviewReply(active.messages.filter(m => m.id !== lastAssistant.id));
-      const recovery = await ensureRunnableBuild({ goal: lastRequest.content, draft: lastAssistant.content, previous: parseProject(earlier) ? earlier : undefined, connection: requestConnection(connection), signal: controller.signal });
+      const recovery = await ensureRunnableBuild({ goal: lastRequest.content, draft: lastAssistant.content, previous: parseProject(earlier) ? earlier : undefined, connection: requestConnection(connection, keys), signal: controller.signal });
       patchMessage(active.id, lastAssistant.id, { content: recovery.text, tokens: (lastAssistant.tokens ?? 0) + recovery.tokens, error: recovery.issue }, true);
       setNotice(recovery.issue ?? '');
       if (recovery.tokens) await charge(active.id, recovery.tokens);
@@ -526,7 +534,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // stage-candidate list is the deployment's funded ids only when the visitor is actually on
       // the free tier — a BYOK run stays on the visitor's own model for every stage.
       const stageCandidates = inference === 'free' ? deployment.free.models : [];
-      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, approvalGates: true });
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection, keys), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, approvalGates: true });
     } catch (e) { fail(errorText(e)); }
   }
 
@@ -548,7 +556,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     try {
       const found = await listModels({ ...defaultConnection(provider), ...(provider === 'ollama' ? { endpoint: pipes.ollamaUrl } : {}), token: key ?? '', inference: 'byok' }, new AbortController().signal);
       const models = modelChoices(found);
-      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now() } }; saveDiscovered(next); return next; });
+      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now(), key: keyFingerprint(key) } }; saveDiscovered(next); return next; });
       // A key registered without choosing a model lands on the provider's flagship, or the
       // strongest model it reaches — quiet discoveries included, so nobody has to pick one first.
       const ids = models.map(m => m.id);
@@ -564,7 +572,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   // A key, saved or being typed, lists its models by itself: the dropdown should show what the
   // key reaches without a trip to Settings. Debounced so a key being pasted asks once.
   useEffect(() => {
-    const due = [...keyed].filter(id => !isFresh(discovered[id]) && !discovering.has(id));
+    const due = [...keyed].filter(id => !isFresh(discovered[id], Date.now(), keyFingerprint(id === connection.provider && connection.token?.trim() ? connection.token : keys[id])) && !discovering.has(id));
     if (!due.length) return;
     const timer = setTimeout(() => { for (const id of due) void discover(id, true); }, 700);
     return () => clearTimeout(timer);

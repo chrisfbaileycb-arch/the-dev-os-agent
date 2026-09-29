@@ -182,7 +182,7 @@ test('Anthropic is translated to /v1/messages, headers and all', async () => {
   const payload = JSON.parse(captured.body);
   assert.equal(payload.system, 'be brief');
   assert.deepEqual(payload.messages, [{ role: 'user', content: 'hello' }]);
-  assert.equal(payload.max_tokens, 4096);
+  assert.equal(payload.max_tokens, 8192, "a request that names no limit gets the full-app default");
   assert.equal(payload.stream_options, undefined, 'an unknown field is a 400 there, not an ignored hint');
 });
 
@@ -461,4 +461,32 @@ test('a rejected request explains itself, without leaking credentials, while aut
   assert.ok(clientMessage(400, 'x'.repeat(2000)).length < 400);
   for (const status of [401, 403, 429, 500, 503]) assert.equal(clientMessage(status, 'secret body'), errorMessage(status));
   assert.equal(clientMessage(400, ''), errorMessage(400));
+});
+
+test('plan tokens: per-subscriber tokens unlock, revoked or unknown ones do not, and no plan list means no plan access', async () => {
+  const { planHolder } = await import('../server/proxy.mjs');
+  const env = { PLAN_ACCESS_TOKENS: 'sub-token-aaaaaaaaaaaa, sub-token-bbbbbbbbbbbb', SERVER_CREDIT_ACCESS_TOKEN: 'operator-token-cccccccc' };
+  const a = planHolder('sub-token-aaaaaaaaaaaa', env), b = planHolder('sub-token-bbbbbbbbbbbb', env);
+  assert.ok(a && b && a !== b, 'each subscriber is metered separately');
+  assert.equal(planHolder('operator-token-cccccccc', env), 'plan:operator');
+  assert.equal(planHolder('sub-token-zzzzzzzzzzzz', env), null);
+  assert.equal(planHolder('sub-token-aaaaaaaaaaaa', { ...env, PLAN_ACCESS_TOKENS: 'sub-token-bbbbbbbbbbbb' }), null, 'removing a token revokes it');
+  await withProxy({ env: { GROQ_API_KEY: 'server-key', SERVER_CREDIT_ACCESS_TOKEN: 'operator-token-cccccccc' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    assert.equal((await post(url, { ...base, apiKey: undefined, serverAccessToken: 'operator-token-cccccccc' })).status, 403, 'with no paid models configured a token must not unlock every server key');
+  });
+});
+
+test('free-key providers route to their own fixed homes on the visitor key', async () => {
+  const { resolveTarget } = await import('../server/proxy.mjs');
+  const { modelsUrl, normalizeModelList } = await import('../server/models.mjs');
+  assert.equal((await resolveTarget('github')).base, 'https://models.github.ai/inference');
+  assert.equal((await resolveTarget('cerebras')).base, 'https://api.cerebras.ai/v1');
+  assert.equal(modelsUrl('github', 'https://models.github.ai/inference'), 'https://models.github.ai/catalog/models');
+  assert.deepEqual(normalizeModelList('github', [{ id: 'openai/gpt-4.1-mini', name: 'OpenAI GPT-4.1-mini' }]).map(m => m.id), ['openai/gpt-4.1-mini']);
+  let seen;
+  await withProxy({ env: {}, transport: async (url, options) => { seen = { url, auth: options.headers.Authorization }; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await post(url, { ...base, provider: 'github', model: 'openai/gpt-4.1-mini', apiKey: 'github_pat_visitor' })).status, 200);
+  });
+  assert.equal(seen.url, 'https://models.github.ai/inference/chat/completions');
+  assert.equal(seen.auth, 'Bearer github_pat_visitor');
 });

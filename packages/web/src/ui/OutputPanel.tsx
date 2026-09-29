@@ -54,21 +54,37 @@ function buildState(result: BuildResult, seq: number): BuildState {
  * policy in server/csp.mjs). The one thing an opaque origin costs, working `localStorage`, the
  * sandbox shell gives back with an in-memory shim.
  */
-function SandboxFrame({ html, refresh }: { html: string; refresh: number }) {
+type Runtime = { state: 'starting' } | { state: 'ready' } | { state: 'blank' } | { state: 'error'; message: string };
+
+function SandboxFrame({ html, refresh, onRuntime }: { html: string; refresh: number; onRuntime: (r: Runtime) => void }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  // The page inside reports whether it actually ran: ready once something is on screen, blank if
+  // nothing rendered, error on the first uncaught error. Only messages from this frame count.
+  useEffect(() => {
+    onRuntime({ state: 'starting' });
+    const listen = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow) return;
+      const d = event.data;
+      if (!d || typeof d !== 'object' || d.type !== 'sf-preview') return;
+      if (d.state === 'ready' || d.state === 'blank') onRuntime({ state: d.state });
+      else if (d.state === 'error') onRuntime({ state: 'error', message: typeof d.message === 'string' ? d.message : 'Unknown error' });
+    };
+    window.addEventListener('message', listen);
+    return () => window.removeEventListener('message', listen);
+  }, [html, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
   return <iframe
     key={refresh}
     ref={frameRef}
     title="Live generated app preview"
     className="output-frame"
-    sandbox="allow-scripts allow-modals allow-forms allow-popups allow-popups-to-escape-sandbox"
+    sandbox="allow-scripts allow-modals allow-forms allow-popups"
     src="/sandbox.html"
     onLoad={() => frameRef.current?.contentWindow?.postMessage({ html }, '*')}
   />;
 }
 
 /** What the badge above the toolbar can honestly say about the preview. */
-type PreviewStatus = 'idle' | 'building' | 'live' | 'failed';
+type PreviewStatus = 'idle' | 'building' | 'starting' | 'live' | 'blank' | 'crashed' | 'failed';
 
 /**
  * The state of the preview, named for what it actually is.
@@ -79,7 +95,10 @@ type PreviewStatus = 'idle' | 'building' | 'live' | 'failed';
  */
 function statusLabel(status: PreviewStatus): { text: string; running: boolean } {
   if (status === 'building') return { text: 'Building…', running: false };
-  if (status === 'live') return { text: 'Preview live', running: true };
+  if (status === 'starting') return { text: 'Starting app…', running: false };
+  if (status === 'live') return { text: 'App running', running: true };
+  if (status === 'blank') return { text: 'Built, but nothing rendered', running: false };
+  if (status === 'crashed') return { text: 'App crashed', running: false };
   if (status === 'failed') return { text: 'Build failed', running: false };
   return { text: 'Idle', running: false };
 }
@@ -108,6 +127,7 @@ export default function OutputPanel(p: OutputPanelProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [activeCode, setActiveCode] = useState('');
   const [build, setBuild] = useState<BuildState>({ kind: 'idle' });
+  const [runtime, setRuntime] = useState<Runtime>({ state: 'starting' });
   const [refresh, setRefresh] = useState(0);
   const [pushOpen, setPushOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
@@ -263,7 +283,11 @@ export default function OutputPanel(p: OutputPanelProps) {
   const isBuilding = build.kind === 'building';
   // The badge tracks the build state, which is the only state there is: a compiled result or a
   // failure, never a server that might or might not be listening.
-  const previewStatus: PreviewStatus = isBuilding || (p.streaming && project) ? 'building' : build.kind === 'ready' ? 'live' : build.kind === 'error' ? 'failed' : 'idle';
+  // "Live" used to mean only that the code compiled. It now means the page actually ran and put
+  // something on screen, as reported from inside the sandbox.
+  const previewStatus: PreviewStatus = isBuilding || (p.streaming && project) ? 'building'
+    : build.kind === 'ready' ? (runtime.state === 'ready' ? 'live' : runtime.state === 'blank' ? 'blank' : runtime.state === 'error' ? 'crashed' : 'starting')
+      : build.kind === 'error' ? 'failed' : 'idle';
   const devStatus = statusLabel(previewStatus);
   const codeMarkup = highlightCode(activeCode);
   /** Every route back to the running app: re-mount the frame and restore the canonical split. */
@@ -298,7 +322,7 @@ export default function OutputPanel(p: OutputPanelProps) {
       {p.streaming && <span className="streaming-note">Live code stream · preview refreshes when complete</span>}
       {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
       {build.kind === 'idle' && <div className="preview-empty"><Code2 size={20} strokeWidth={1.25} /><span>{selectedFile} is not a page on its own. Open it in the code view, or pull an HTML or React entry file.</span></div>}
-      {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} /><button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Rerun</button></>}
+      {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} onRuntime={setRuntime} />{runtime.state === 'error' && <p className="preview-runtime-error" role="alert">The app crashed: {runtime.message}</p>}{runtime.state === 'blank' && <p className="preview-runtime-error" role="status">The app built but put nothing on screen. Check the code view, or ask the agent to fix the blank page.</p>}<button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Rerun</button></>}
     </div>
   </div>;
 

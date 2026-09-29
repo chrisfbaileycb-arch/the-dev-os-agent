@@ -207,7 +207,9 @@ export function createMcp({ env = process.env, resolve = lookup, allowPrivate = 
       if (typeof body?.url !== 'string' || body.url.length > 2000) throw new HttpError(400, 'An MCP server url is required.');
       if (!METHODS.has(body.method)) throw new HttpError(400, 'Unsupported MCP method.');
       const authorization = typeof body.authorization === 'string' && body.authorization.length <= 4096 && !/[\r\n]/.test(body.authorization) ? body.authorization : undefined;
-      const workspace = typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'] : (req.socket.remoteAddress || 'unknown');
+      // Rate limits are keyed on the network address: a browser-supplied workspace header can be
+      // changed on every request, which made each request its own fresh budget.
+      const workspace = req.socket.remoteAddress || 'unknown';
       const now = Date.now(); for (const [k, v] of windows) if (now - v.start > 3_600_000) windows.delete(k);
       const window = windows.get(workspace) || { start: now, count: 0 }; window.count++; windows.set(workspace, window);
       if (window.count > budget) throw new HttpError(429, `MCP budget reached (${budget} calls per hour). Try again later.`);

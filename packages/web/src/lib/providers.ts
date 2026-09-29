@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -36,13 +36,14 @@ export const providers: Record<Provider, ProviderInfo> = {
   // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.
   'cheaper-inference': { name: 'Managed inference', tier: 'Orator managed', endpoint: '', models: [] },
 
-  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', flagship: 'groq/llama-3.3-70b-versatile', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
+  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', flagship: 'groq/llama-3.3-70b-versatile', models: ['groq/llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'groq/llama-3.1-8b-instant'] },
   openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', flagship: 'gpt-4o', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy
   // translates in both directions; from here it is just another provider with a key.
-  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', flagship: 'claude-sonnet-4-5', models: ['claude-sonnet-4-5', 'claude-opus-4-8', 'claude-haiku-4-5'] },
+  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', flagship: 'claude-sonnet-5-5', models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5-20251001'] },
   // Google publishes an OpenAI-compatible surface for Gemini, so it needs no translation.
-  google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', flagship: 'gemini-2.5-pro', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+  // The first three run on a free Google AI Studio key; the free key is the flagship's reason for being first.
+  google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', flagship: 'gemini-3-flash-preview', models: ['gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash', 'gemini-2.5-pro'] },
   cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', flagship: 'command-a-03-2025', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
   // xAI's API is OpenAI-compatible at a fixed home; the key is an xai-… key from console.x.ai.
   xai: { name: 'xAI Grok', tier: 'Frontier', endpoint: 'https://api.x.ai/v1', flagship: 'grok-4', models: ['grok-4', 'grok-3', 'grok-3-mini', 'grok-code-fast-1'] },
@@ -51,15 +52,28 @@ export const providers: Record<Provider, ProviderInfo> = {
   // A model server on this machine. No key, no seeds — whatever `ollama pull` installed is the
   // list — and called from the browser directly (see lib/pipes.ts for the localhost-only rule).
   ollama: { name: 'Local model (LM Studio or Ollama)', tier: 'Local', endpoint: 'http://localhost:11434/v1', models: [], keyless: true, direct: true },
+  // Free with a GitHub account: a fine-grained token with the models:read permission. Rate-limited
+  // for prototyping, which is exactly right for one person building on their own free key.
+  github: { name: 'GitHub Models', tier: 'Free key', endpoint: 'https://models.github.ai/inference', flagship: 'openai/gpt-4.1-mini', models: ['openai/gpt-4.1-mini', 'openai/gpt-4.1', 'openai/gpt-4.1-nano'] },
+  // US-hosted open-weight models, including OpenAI's gpt-oss, on a free account with no card.
+  cerebras: { name: 'Cerebras', tier: 'Free key', endpoint: 'https://api.cerebras.ai/v1', flagship: 'gpt-oss-120b', models: ['gpt-oss-120b'] },
   xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: [] },
   // Optional future adapter only. It is deliberately not configured, discovered, or shown to
   // customers in this phase; hosted Cheaper Inference is the initial managed route.
   omniroute: { name: 'Optional self-hosted route', tier: 'Future adapter', endpoint: '', models: [] },
   custom: { name: 'Custom endpoint', tier: 'Custom', endpoint: '', models: [] },
 };
+/**
+ * How long one reply may run, in tokens. The default used to be 1,024 with no control to raise it,
+ * which cut a complete app off partway through and made the preview fail. 8,192 fits a full
+ * multi-file build; the larger settings are for models that can produce more in one reply.
+ * A saved value of 1,024 or less is treated as that old default and replaced.
+ */
+export const OUTPUT_LIMITS = [2048, 4096, 8192, 16384, 32000, 64000];
+export const DEFAULT_OUTPUT_TOKENS = 8192;
 const profiles = new Map<Provider, Connection>();
 const MODES: InferenceMode[] = ['free', 'credits', 'byok'];
-export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: flagshipFor(provider), token: '', maxTokens: 1024, saveKey: false }; }
+export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: flagshipFor(provider), token: '', maxTokens: DEFAULT_OUTPUT_TOKENS, saveKey: false }; }
 /** The model a new key for this provider starts on: its flagship, else its first seed, else nothing. */
 export function flagshipFor(provider: Provider): string { return providers[provider].flagship ?? providers[provider].models[0] ?? ''; }
 
@@ -108,7 +122,7 @@ export function loadConnection(provider: Provider): Connection {
     const model = typeof stored.model === 'string' ? stored.model : base.model;
     const inference = MODES.includes(stored.inference) ? stored.inference as InferenceMode : 'byok';
     // The funded list is unknown here, so the stored mode is kept as saved rather than re-derived.
-    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: [512,1024,2048,4096].includes(stored.maxTokens) ? stored.maxTokens : 1024, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
+    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: OUTPUT_LIMITS.includes(stored.maxTokens) && stored.maxTokens > 1024 ? stored.maxTokens : DEFAULT_OUTPUT_TOKENS, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
   } catch { return base; }
 }
 /**
@@ -169,3 +183,21 @@ export function saveKeyring(ring: Partial<Keyring>): void {
 }
 
 export function clearProviderStorage(): void { profiles.clear(); for (const p of Object.keys(providers)) localStorage.removeItem(`ft-provider-${p}`); localStorage.removeItem('ft-active-provider'); }
+
+/**
+ * The connection as it goes over the wire. A zero-config run carries no secret at all — the
+ * server funds it from its own key — so both the visitor's key and the deployment token are
+ * stripped before the request leaves the tab.
+ */
+export const requestConnection = (c: Connection, keys?: Partial<Keyring>): Connection => {
+  if (c.inference === 'free') return { ...c, token: '', serverAccessToken: '' };
+  if (c.inference === 'credits') return { ...c, token: '' };
+  // Your own key: always the key saved for the provider this request goes to. The keyring and the
+  // active connection used to be separate, so picking a model from another provider kept the old
+  // provider's key on the connection and sent it along — the wrong provider got your key, and the
+  // right one got none. The keyring entry for this provider wins; the connection's own token is
+  // used only when nothing is saved for it.
+  const provider = c.provider ?? 'custom';
+  const saved = keys?.[provider]?.trim();
+  return { ...c, token: saved || c.token || '', serverAccessToken: '' };
+};

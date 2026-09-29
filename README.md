@@ -6,30 +6,32 @@ Your AI crew. Always in your corner. A privacy-first workspace for one person or
 
 Everything an operator configures — provider keys, which models are free and which are on the paid plan, the free-tier limits — is entered in an admin dashboard at `/admin` (gated by `ADMIN_TOKEN`) and applies to the next request without a redeploy. A visitor who brings a key sees every model that key reaches, listed live from the provider in the prompt bar's model menu.
 
-Built in the United States as an original alternative to the well-known clients. Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio; original code and prompts throughout, with the Apache and MIT notices for the FreeToken and Ruflo code carried in `web/`.
+Built in the United States as an original alternative to the well-known clients. Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio; original code and prompts throughout, with the Apache and MIT notices for the FreeToken and Ruflo code carried in `packages/web/`.
 
-The application lives in [`web/`](web/). Read [`web/README.md`](web/README.md) for what is in the box, the API, environment variables, security boundaries, and verification steps. The earlier Floot-hosted edition has been removed; `web/` is the only edition, and Render is the deployment target.
+The application lives in [`packages/web/`](packages/web/). Read [`packages/web/README.md`](packages/web/README.md) for what is in the box, the API, environment variables, security boundaries, and verification steps. The earlier Floot-hosted edition has been removed; `packages/web/` is the only edition, and Render is the deployment target.
+
+`web/` at the repo root is only a Render build bridge (a two-script package.json). Do not edit application code there.
 
 It is an installable progressive web app. On a Chromebook, or in Chrome on any desktop, the address-bar install icon (or the Install button in Settings) adds the workspace to the shelf or dock, where it opens in its own window. It ships an offline shell, so an installed copy opens without a connection and the scripted preview keeps working; hosted provider runs still need the network.
 
 ## Layout
 
 ```
-web/            Vite + React 19 front end, Web Worker orchestrator, Node 22 server
-web/src/ui/     Rail, Dock, ModelPicker, RunCard (pipeline strip), Connectors, Roster, Knowledge, Settings, StatusBar
-web/src/lib/    catalog (models, tiers, credit weights), providers (connection profiles), deployment (what this host funds),
+packages/web/            Vite + React 19 front end, Web Worker orchestrator, Node 22 server
+packages/web/src/ui/     Rail, Dock, ModelPicker, RunCard (pipeline strip), Connectors, Roster, Knowledge, Settings, StatusBar
+packages/web/src/lib/    catalog (models, tiers, credit weights), providers (connection profiles), deployment (what this host funds),
                 connectors (GitHub, URL crawler, documents, MCP as agent tools), roster (personas, safety baseline),
                 store (IndexedDB + server sync), chat (single-agent turn with tool loop), orchestrator (five-stage workflows)
-web/server/     index.mjs (static + API), proxy.mjs (SSE provider proxy and funding decision), admin.mjs (/api/admin dashboard
+packages/web/server/     index.mjs (static + API), proxy.mjs (SSE provider proxy and funding decision), admin.mjs (/api/admin dashboard
                 routes), settings.mjs (dashboard keys, knobs and tiers laid over the environment), secrets.mjs (AES-GCM
                 sealing for stored keys), models.mjs (one shape for every provider's model list), freetier.mjs (zero-config
                 allowlist and quotas), meter.mjs (server-side token metering), db.mjs (SQLite), state.mjs (/api/state),
                 fetch.mjs (/api/fetch), github.mjs (/api/github), mcp.mjs (/api/mcp), browse.mjs (/api/browse),
                 jobs.mjs (/api/jobs queue), worker.mjs (Render background worker)
-web/public/     manifest.webmanifest, icons/ (Signal Forge OS icon set), licences
-web/pwa/        service-worker.js template and build-worker.mjs, which emits dist/sw.js with the real precache list
-web/src/vendor/ruflo/   Browser-adapted Ruflo Agent and Task domain entities
-web/tests/      vitest unit tests and node:test server tests (mocked upstreams, a local fixture page for Chromium)
+packages/web/public/     manifest.webmanifest, icons/ (Signal Forge OS icon set), licences
+packages/web/pwa/        service-worker.js template and build-worker.mjs, which emits dist/sw.js with the real precache list
+packages/web/src/vendor/ruflo/   Browser-adapted Ruflo Agent and Task domain entities
+packages/web/tests/      vitest unit tests and node:test server tests (mocked upstreams, a local fixture page for Chromium)
 render.yaml     Render Blueprint: a Docker web service with a persistent disk at /data, plus an optional background worker
 .github/workflows/web.yml   CI: npm ci, Chromium install, npm test, npm run test:server, npm run build
 ```
@@ -67,7 +69,7 @@ consequences worth knowing:
   `FREE_MAX_PER_HOUR` — an in-memory per-IP window — the cap that actually bounds spend on the
   deployment's keys.
 
-Both are reversible without a rewrite; see **Scaling up** in [`web/README.md`](web/README.md).
+Both are reversible without a rewrite; see **Scaling up** in [`packages/web/README.md`](packages/web/README.md).
 
 The zero-config free tier is off until `GROQ_API_KEY` or `OPENROUTER_API_KEY` is set in the Render
 dashboard. Until then visitors see *"Public free tier warming up — enter your own key in Settings or
@@ -81,11 +83,11 @@ The server streams provider responses as Server-Sent Events and keeps a SQLite f
   - Set `ADMIN_TOKEN` in the dashboard, open `/admin`, and enter provider keys and model tiers there — or set `GROQ_API_KEY` or `OPENROUTER_API_KEY` directly to switch the zero-config free tier on. Without them the app still deploys and works, but opens in the scripted preview and asks each visitor for their own key.
   - Leave `APP_ORIGIN` unset: the server already matches the request origin against its own host, and a wrong value makes every API call fail with 403.
   - Set `BROWSE_ALLOWED_HOSTS` afterwards only if you want the Browser Agent switched on.
-- **Any container host**: build `web/Dockerfile` (Playwright base image with Chromium); the image listens on port 8080 and stores data under `/data`.
-- **Any Node host**: from `web/`, run `npm ci && npm run build && npm start`; without Chromium the browse route answers 503 and everything else works.
+- **Any container host**: build `packages/web/Dockerfile` (Playwright base image with Chromium); the image listens on port 8080 and stores data under `/data`.
+- **Any Node host**: from `packages/web/`, run `npm ci && npm run build && npm start`; without Chromium the browse route answers 503 and everything else works.
 
-Copy `web/.env.example` for the full list of server environment variables. Never prefix secrets with `VITE_`.
+Copy `packages/web/.env.example` for the full list of server environment variables. Never prefix secrets with `VITE_`.
 
 ## Licenses
 
-Apache 2.0 for this project (see [`LICENSE`](LICENSE)). Third-party notices, including the MIT-licensed Ruflo subset, are in [`web/THIRD_PARTY_NOTICES.md`](web/THIRD_PARTY_NOTICES.md).
+Apache 2.0 for this project (see [`LICENSE`](LICENSE)). Third-party notices, including the MIT-licensed Ruflo subset, are in [`packages/web/THIRD_PARTY_NOTICES.md`](packages/web/THIRD_PARTY_NOTICES.md).

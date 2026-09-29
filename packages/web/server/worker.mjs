@@ -66,7 +66,7 @@ export async function runStage({ job, system, prompt, fetchImpl = fetch }) {
     headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': job.workspaceId },
     // No key is sent: background jobs are zero-config only, so the proxy funds them from the
     // deployment's own keys and meters them against the workspace's free allowance.
-    body: JSON.stringify({ provider: connection.provider || 'groq', model: connection.model, max_tokens: connection.maxTokens || 1024, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] }),
+    body: JSON.stringify({ provider: connection.provider || 'groq', model: connection.model, max_tokens: connection.maxTokens || 8192, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] }),
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => null);

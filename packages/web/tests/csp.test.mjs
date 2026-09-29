@@ -71,3 +71,20 @@ test('the only local addresses the app may reach are Ollama and LM Studio on loo
   assert.deepEqual(local, ['http://localhost:11434', 'http://127.0.0.1:11434', 'http://localhost:1234', 'http://127.0.0.1:1234']);
   assert.ok(!connect.some(src => src.includes('*')));
 });
+
+test('the sandbox page is sandboxed by its own response header, not only by the embedding iframe', () => {
+  // Without this, /sandbox.html opened directly or framed by another site ran with this app's
+  // real origin and could read visitors' saved keys.
+  assert.match(SANDBOX_CSP, /^sandbox allow-scripts/);
+  assert.doesNotMatch(SANDBOX_CSP, /allow-same-origin/);
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  assert.match(shell, /event\.source !== window\.parent/, 'only the embedding app may post a page in');
+  const panel = readFileSync(new URL('../src/ui/OutputPanel.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(panel, /allow-popups-to-escape-sandbox/);
+});
+
+test('the sandbox shell reports whether the app actually ran, not just that it compiled', () => {
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  for (const state of ['"ready"', '"blank"', '"error"']) assert.ok(shell.includes(state), `reports ${state}`);
+  assert.match(shell, /type:"sf-preview"/);
+});
