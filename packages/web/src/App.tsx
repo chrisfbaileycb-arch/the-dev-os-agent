@@ -7,6 +7,7 @@ import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
+import GithubPullDialog from './ui/GithubPullDialog';
 import { usePaneResize } from './ui/SplitPane';
 import OutputPanel from './ui/OutputPanel';
 import Pricing from './ui/Pricing';
@@ -121,6 +122,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   // Agents the user wrote. Held here because the drawer creates them and the dock displays them.
   const [custom, setCustom] = useState<Persona[]>(customAgents);
   const [photos, setPhotos] = useState<Photo[]>([]);
+  const [githubPullOpen, setGithubPullOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
   const [previewOpen, setPreviewOpen] = useState(false);
   /**
@@ -663,7 +665,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
               attachments={attachments} photos={photos} addFiles={f => void addFiles(f)}
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
-              openConnectors={() => openConnectors()} connectorCount={connectorCount}
+              openConnectors={() => openConnectors()} connectorCount={connectorCount} openGithubPull={() => setGithubPullOpen(true)}
               model={connection.model} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
               discovered={discovered} discovering={discovering} pipes={pipes}
               pickModel={pickModel} modelNeedsKey={modelNeedsKey} modelNeedsPlan={setPlanPrompt} discover={id => void discover(id)}
@@ -699,6 +701,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
+    <GithubPullDialog open={githubPullOpen} close={() => setGithubPullOpen(false)} github={settings.github} addFiles={f => void addFiles(f)} openConnectors={() => openConnectors('github')} notify={setNotice} />
     <Connectors
       open={connectorsOpen} close={() => setConnectorsOpen(false)} tab={connectorTab} setTab={setConnectorTab}
       settings={settings} setSettings={setSettings} mcp={mcp} setMcp={setMcp}

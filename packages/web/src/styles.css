@@ -364,6 +364,11 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .connector-tab:hover { border-color: var(--line-strong); } .connector-tab.active { border-color: var(--accent); background: var(--accent-soft); }
 .connector-tab span { display: flex; flex-direction: column; min-width: 0; } .connector-tab strong { font-weight: 600; font-size: 12.5px; } .connector-tab small { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .connector-tab em { font-style: normal; margin-left: auto; font-size: 10.5px; background: var(--accent); color: #fff; border-radius: 9px; padding: 0 5px; }
+.preset-group { display: flex; flex-direction: column; gap: 5px; } .preset-group > small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.preset { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 1px; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 7px 10px; color: var(--ink); min-width: 0; }
+.preset:hover:not(:disabled) { border-color: var(--line-strong); } .preset.active { border-color: var(--accent); background: var(--accent-soft); } .preset:disabled { opacity: .6; }
+.preset strong { font-weight: 600; font-size: 12.5px; } .preset small { color: var(--muted); font-size: 11px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dropzone { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 20px 12px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--muted); text-align: center; }
 .dropzone.dragging { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .dropzone p { font-size: 12px; }
@@ -389,7 +394,7 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
      The menu becomes a bottom sheet instead: always fully on screen, wherever the chip is. */
   .model-menu { position: fixed; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 70vh; }
   .dock-counters { width: 100%; margin-left: 0; order: 9; text-align: center; }
-  .connector-tabs { grid-template-columns: minmax(0, 1fr); }
+  .connector-tabs, .preset-grid { grid-template-columns: minmax(0, 1fr); }
   .plan-grid { grid-template-columns: minmax(0, 1fr); }
   .page { padding: 12px 12px 24px; }
   .mode-picker, .mode-picker.three { grid-template-columns: minmax(0, 1fr); }

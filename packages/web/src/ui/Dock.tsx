@@ -13,6 +13,7 @@ import type { Discovered } from '../lib/discovered';
 import type { ModelChoice } from '../lib/modelChoices';
 import type { PipeSettings } from '../lib/pipes';
 import ModelPicker from './ModelPicker';
+import { GithubMark } from './GithubMark';
 import { iconFor } from './icons';
 
 // The prompt dock: a solid bar pinned to the bottom of the conversation, above the status bar,
@@ -38,7 +39,7 @@ export interface DockProps {
   persona: Persona; openRoster: () => void;
   attachments: Attached[]; photos: Photo[];
   addFiles: (files: File[]) => void; removeAttachment: (name: string) => void; removePhoto: (name: string) => void;
-  openConnectors: () => void; connectorCount: number;
+  openConnectors: () => void; connectorCount: number; openGithubPull: () => void;
   model: string; inference: InferenceMode; free: FreeTier; paid: PaidTier; labels: Record<string, string>; reach: Reach; keyed: Set<Provider>;
   discovered: Discovered; discovering: Set<Provider>; pipes: PipeSettings;
   pickModel: (id: string, mode?: InferenceMode, provider?: Provider) => void; modelNeedsKey: (model: CatalogModel) => void; modelNeedsPlan: (model: ModelChoice) => void; discover: (provider: Provider) => void;
@@ -83,6 +84,7 @@ export default function Dock(p: DockProps) {
           the three things a message needs, one reach from where you type. */}
       <div className="dock-input">
         <button className="icon-button dock-attach" title="Attach a file or photo" aria-label="Attach a file or photo" disabled={p.busy} onClick={() => fileInput.current?.click()}><FolderOpen size={16} strokeWidth={1.75} /></button>
+        <button className="icon-button dock-attach" title="Pull a file from GitHub" aria-label="Pull a file from GitHub" disabled={p.busy} onClick={p.openGithubPull}><GithubMark size={16} strokeWidth={1.75} /></button>
         <input ref={fileInput} type="file" className="sr-only" tabIndex={-1} accept=".txt,.md,.csv,.json,.html,image/*" multiple onChange={e => { p.addFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
         <label className="sr-only" htmlFor="draft">Message</label>
         <textarea
