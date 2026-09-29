@@ -67,7 +67,10 @@ describe('loadConnection', () => {
     expect(loadConnection('anthropic').maxTokens).toBe(4096);
 
     storage.set('ft-provider-anthropic', JSON.stringify({ maxTokens: 1337 }));
-    expect(loadConnection('anthropic').maxTokens).toBe(1024);
+    expect(loadConnection('anthropic').maxTokens).toBe(8192);
+    // The old 1,024 default was too short for a complete app; a saved 1,024 is upgraded.
+    storage.set('ft-provider-anthropic', JSON.stringify({ maxTokens: 1024 }));
+    expect(loadConnection('anthropic').maxTokens).toBe(8192);
   });
 
   it('loads token only if saveKey is true', () => {

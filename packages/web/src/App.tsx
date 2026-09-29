@@ -26,7 +26,7 @@ import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, defaultConnection, requestConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
 import { modelChoices, preferredModel, type ModelChoice } from './lib/modelChoices';
-import { clearDiscovered, isFresh, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
+import { clearDiscovered, isFresh, keyFingerprint, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
 import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
 import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
@@ -542,7 +542,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     try {
       const found = await listModels({ ...defaultConnection(provider), ...(provider === 'ollama' ? { endpoint: pipes.ollamaUrl } : {}), token: key ?? '', inference: 'byok' }, new AbortController().signal);
       const models = modelChoices(found);
-      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now() } }; saveDiscovered(next); return next; });
+      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now(), key: keyFingerprint(key) } }; saveDiscovered(next); return next; });
       // A key registered without choosing a model lands on the provider's flagship, or the
       // strongest model it reaches — quiet discoveries included, so nobody has to pick one first.
       const ids = models.map(m => m.id);
@@ -558,7 +558,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   // A key, saved or being typed, lists its models by itself: the dropdown should show what the
   // key reaches without a trip to Settings. Debounced so a key being pasted asks once.
   useEffect(() => {
-    const due = [...keyed].filter(id => !isFresh(discovered[id]) && !discovering.has(id));
+    const due = [...keyed].filter(id => !isFresh(discovered[id], Date.now(), keyFingerprint(id === connection.provider && connection.token?.trim() ? connection.token : keys[id])) && !discovering.has(id));
     if (!due.length) return;
     const timer = setTimeout(() => { for (const id of due) void discover(id, true); }, 700);
     return () => clearTimeout(timer);

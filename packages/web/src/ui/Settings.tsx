@@ -3,8 +3,8 @@ import { Check, Coins, CreditCard, ExternalLink, KeyRound, LoaderCircle, Monitor
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
-import { flagshipFor, providers, switchProvider, type Keyring, type Provider } from '../lib/providers';
-import { rankChoices } from '../lib/modelChoices';
+import { flagshipFor, providers, switchProvider, type Keyring, type Provider, DEFAULT_OUTPUT_TOKENS, OUTPUT_LIMITS } from '../lib/providers';
+import { rankChoices, type ModelChoice } from '../lib/modelChoices';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
@@ -74,7 +74,11 @@ export default function Settings(p: SettingsProps) {
   }
 
   const live = p.discovered[provider];
-  const choices = useMemo(() => rankChoices(live?.models ?? []), [live]);
+  // The dropdown always has something to choose from. It used to stay empty and disabled until
+  // live discovery answered, so a slow or failed catalog read looked like a broken setting. The
+  // built-in list shows at once; the live list replaces it when it arrives.
+  const choices = useMemo(() => rankChoices(live?.models?.length ? live.models : providers[provider].models.map((id): ModelChoice => ({ id, label: id }))), [live, provider]);
+  const fromSeeds = !live?.models?.length;
   const checking = p.discovering.has(provider);
   const selectedInChoices = choices.some(choice => choice.id === c.model);
   const recent = p.ledger.slice().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8);
@@ -130,7 +134,7 @@ export default function Settings(p: SettingsProps) {
               <label>Provider<select value={provider} disabled={p.busy} onChange={e => pickProvider(e.target.value as Provider)}>{BYOK_PROVIDERS.map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
               <label>API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.token || p.keys[provider] || ''} placeholder={KEY_HINTS[provider]} onChange={e => setKey(provider, e.target.value)} /></label>
               <label className="grow">Model <small className="muted">(optional — starts on {providers[provider].flagship ?? 'the strongest model found'})</small><span className="row">
-                <select aria-label="Preferred model" value={selectedInChoices ? c.model : ''} disabled={p.busy || checking || choices.length === 0} onChange={e => pickModel(e.target.value)}>
+                <select aria-label="Preferred model" value={selectedInChoices ? c.model : ''} disabled={p.busy || choices.length === 0} onChange={e => pickModel(e.target.value)}>
                   {choices.length === 0 && <option value="">{checking ? 'Loading available models…' : c.token || p.keys[provider] ? 'Discover models from this provider' : 'Enter a key to list its models'}</option>}
                   {choices.length > 0 && !selectedInChoices && <option value="">{c.model ? `${c.model} (typed)` : `Choose one of ${choices.length.toLocaleString()} models`}</option>}
                   {choices.map(choice => <option key={choice.id} value={choice.id}>{choice.label}{choice.free ? ' · free' : ''}</option>)}
@@ -139,9 +143,14 @@ export default function Settings(p: SettingsProps) {
               </span></label>
             </div>
             {live && !live.error && <p className="help">{choices.length.toLocaleString()} models reachable on your {providers[provider].name} key, read {new Date(live.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. The same list is in the dropdown on the prompt bar.</p>}
-            {live?.error && <p className="help">Could not read the live list: {live.error}. You can still type a model ID below.</p>}
+            {fromSeeds && <p className="help">{checking ? 'Reading the live list from your provider. You can pick from the built-in list now.' : 'Showing the built-in list. Discover reads every model your key reaches.'}</p>}
+            {live?.error && <p className="help" role="alert">Could not read the live list: {live.error}. The built-in list still works, and you can type a model ID below.</p>}
             <button type="button" className="text-button" onClick={() => setManualModel(value => !value)}>{manualModel ? 'Hide manual model ID' : 'Can’t find your model? Enter its ID'}</button>
             {manualModel && <label>Model ID<input value={c.model} maxLength={200} placeholder="Provider model ID" onChange={e => pickModel(e.target.value)} /></label>}
+            <label>Longest reply<select aria-describedby="reply-length-help" value={c.maxTokens} disabled={p.busy} onChange={e => set({ maxTokens: Number(e.target.value) })}>
+              {OUTPUT_LIMITS.map(n => <option key={n} value={n}>{n.toLocaleString()} tokens{n === DEFAULT_OUTPUT_TOKENS ? ' (recommended)' : ''}</option>)}
+            </select></label>
+            <p className="help" id="reply-length-help">How much one reply may write. 8,192 fits a complete multi-file app. Your provider bills what is actually written, not this limit.</p>
             <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember this key in this browser</label>
             <p className="help">Keys stay in this browser only when you choose Remember. They are not sent to third-party scripts, placed in the app bundle, or returned by the server.</p>
           </>}

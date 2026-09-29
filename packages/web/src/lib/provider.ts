@@ -15,7 +15,7 @@ export function validateConnection(c: Connection): void {
   if (c.inference !== 'free' && (!c.provider || c.provider === 'custom')) validateEndpoint(c.endpoint);
   if (isDirect(c)) { const problem = localEndpointError(c.endpoint); if (problem) throw new Error(problem); }
   if (!c.model.trim() || c.model.length > 200) throw new Error('Choose a model from your provider.');
-  if (!Number.isInteger(c.maxTokens) || c.maxTokens < 64 || c.maxTokens > 4096) throw new Error('Output limit must be between 64 and 4096 tokens.');
+  if (!Number.isInteger(c.maxTokens) || c.maxTokens < 64 || c.maxTokens > 65536) throw new Error('Reply length must be between 64 and 65,536 tokens.');
 }
 export async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<{ event: string; data: string }> {
   const reader = body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let event = ''; let lines: string[] = []; let bytes = 0; let ended = false;

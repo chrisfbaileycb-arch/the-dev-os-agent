@@ -40,9 +40,10 @@ export const providers: Record<Provider, ProviderInfo> = {
   openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', flagship: 'gpt-4o', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy
   // translates in both directions; from here it is just another provider with a key.
-  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', flagship: 'claude-sonnet-4-5', models: ['claude-sonnet-4-5', 'claude-opus-4-8', 'claude-haiku-4-5'] },
+  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', flagship: 'claude-sonnet-5-5', models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5-20251001'] },
   // Google publishes an OpenAI-compatible surface for Gemini, so it needs no translation.
-  google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', flagship: 'gemini-2.5-pro', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+  // The first three run on a free Google AI Studio key; the free key is the flagship's reason for being first.
+  google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', flagship: 'gemini-3-flash-preview', models: ['gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash', 'gemini-2.5-pro'] },
   cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', flagship: 'command-a-03-2025', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
   // xAI's API is OpenAI-compatible at a fixed home; the key is an xai-… key from console.x.ai.
   xai: { name: 'xAI Grok', tier: 'Frontier', endpoint: 'https://api.x.ai/v1', flagship: 'grok-4', models: ['grok-4', 'grok-3', 'grok-3-mini', 'grok-code-fast-1'] },
@@ -57,9 +58,17 @@ export const providers: Record<Provider, ProviderInfo> = {
   omniroute: { name: 'Optional self-hosted route', tier: 'Future adapter', endpoint: '', models: [] },
   custom: { name: 'Custom endpoint', tier: 'Custom', endpoint: '', models: [] },
 };
+/**
+ * How long one reply may run, in tokens. The default used to be 1,024 with no control to raise it,
+ * which cut a complete app off partway through and made the preview fail. 8,192 fits a full
+ * multi-file build; the larger settings are for models that can produce more in one reply.
+ * A saved value of 1,024 or less is treated as that old default and replaced.
+ */
+export const OUTPUT_LIMITS = [2048, 4096, 8192, 16384, 32000, 64000];
+export const DEFAULT_OUTPUT_TOKENS = 8192;
 const profiles = new Map<Provider, Connection>();
 const MODES: InferenceMode[] = ['free', 'credits', 'byok'];
-export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: flagshipFor(provider), token: '', maxTokens: 1024, saveKey: false }; }
+export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: flagshipFor(provider), token: '', maxTokens: DEFAULT_OUTPUT_TOKENS, saveKey: false }; }
 /** The model a new key for this provider starts on: its flagship, else its first seed, else nothing. */
 export function flagshipFor(provider: Provider): string { return providers[provider].flagship ?? providers[provider].models[0] ?? ''; }
 
@@ -108,7 +117,7 @@ export function loadConnection(provider: Provider): Connection {
     const model = typeof stored.model === 'string' ? stored.model : base.model;
     const inference = MODES.includes(stored.inference) ? stored.inference as InferenceMode : 'byok';
     // The funded list is unknown here, so the stored mode is kept as saved rather than re-derived.
-    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: [512,1024,2048,4096].includes(stored.maxTokens) ? stored.maxTokens : 1024, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
+    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: OUTPUT_LIMITS.includes(stored.maxTokens) && stored.maxTokens > 1024 ? stored.maxTokens : DEFAULT_OUTPUT_TOKENS, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
   } catch { return base; }
 }
 /**
