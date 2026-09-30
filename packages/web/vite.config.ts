@@ -67,8 +67,8 @@ const devHosts = { host: '0.0.0.0', allowedHosts: true as const, strictPort: fal
 // deliberately DOM-only. Reading it through a narrow local type keeps that boundary — nothing else
 // in the repo gains a Node global, and no @types/node is pulled into the client compile.
 const nodeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
-const port = Number.parseInt(nodeProcess?.env?.PORT ?? '', 10);
-const devPort = Number.isInteger(port) && port > 0 ? { port, strictPort: true } : {};
+const port = Number.parseInt(nodeProcess?.env?.PORT ?? '', 10) || 3000;
+const devPort = { port, strictPort: false };
 
 /**
  * The private-beta passcode, reduced to a salted PBKDF2 hash at build time.
@@ -81,10 +81,10 @@ const devPort = Number.isInteger(port) && port > 0 ? { port, strictPort: true } 
  */
 export default defineConfig(async ({ mode, command }) => {
   const env = loadEnv(mode, '.', 'VITE_');
-  const passcode = (nodeProcess?.env?.VITE_BETA_ACCESS_KEY ?? env.VITE_BETA_ACCESS_KEY ?? '').trim() || (command === 'serve' ? BETA_DEV_PASSCODE : '');
+  const passcode = (nodeProcess?.env?.VITE_BETA_ACCESS_KEY ?? env.VITE_BETA_ACCESS_KEY ?? '').trim() || BETA_DEV_PASSCODE;
   const hash = passcode ? await deriveBetaHash(passcode) : '';
   return {
-  define: { __BETA_ACCESS_HASH__: JSON.stringify(hash), __BETA_DEV_FALLBACK__: JSON.stringify(command === 'serve' && !(nodeProcess?.env?.VITE_BETA_ACCESS_KEY ?? env.VITE_BETA_ACCESS_KEY ?? '').trim()) },
+  define: { __BETA_ACCESS_HASH__: JSON.stringify(hash), __BETA_DEV_FALLBACK__: JSON.stringify(!(nodeProcess?.env?.VITE_BETA_ACCESS_KEY ?? env.VITE_BETA_ACCESS_KEY ?? '').trim()) },
   base: './',
   plugins: [api, shellWorker],
   server: { ...devHosts, ...devPort },

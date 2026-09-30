@@ -22,4 +22,19 @@ describe('MCP presets', () => {
     expect(presetConnected(github, [{ url: 'https://API.githubcopilot.com/mcp' }])).toBe(true);
     expect(presetConnected(github, [{ url: 'https://mcp.linear.app/mcp' }])).toBe(false);
   });
+  it('includes all 20 active protocol MCP integrations', () => {
+    const expected = [
+      'github', 'supabase', 'database', 'playwright', 'fs',
+      'firecrawl', 'exa', 'vercel', 'render', 'cloudflare',
+      'docker', 'sentry', 'stripe', 'postman', 'figma',
+      'linear', 'jira', 'slack', 'notion', 'thinking'
+    ];
+    for (const id of expected) {
+      const preset = MCP_PRESETS.find(p => p.id === id);
+      expect(preset, `MCP preset ${id} must exist`).toBeDefined();
+      expect(preset?.name.length).toBeGreaterThan(0);
+      expect(preset?.url).toMatch(/^https:\/\//);
+      expect(preset?.blurb.length).toBeGreaterThan(0);
+    }
+  });
 });

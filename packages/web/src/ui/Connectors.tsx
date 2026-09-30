@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Check, Cpu, Database, FileText, Globe, LoaderCircle, Plug, Plus, RefreshCw, Search, Trash2, Upload, X } from 'lucide-react';
+import { Check, Cpu, Database, FileText, Globe, LoaderCircle, Plug, Plus, RefreshCw, Search, Trash2, Upload, X, Zap } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import { guessTransport, refreshTools, type McpConnection, type McpTransport } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
-import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset } from '../lib/mcpPresets';
+import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset, type McpPresetGroup } from '../lib/mcpPresets';
 import { localEndpointError, normalizeLocalEndpoint, pipeEnabled, PIPE_PROVIDERS, type PipeSettings } from '../lib/pipes';
 import { providers, type Keyring, type Provider } from '../lib/providers';
 import type { Discovered } from '../lib/discovered';
@@ -56,6 +56,8 @@ export default function Connectors(p: ConnectorsProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [preset, setPreset] = useState<McpPreset | null>(null);
+  const [presetQuery, setPresetQuery] = useState('');
+  const [activeGroup, setActiveGroup] = useState<McpPresetGroup | 'All'>('All');
 
   const urlError = (() => {
     const v = url.trim();
@@ -88,6 +90,52 @@ export default function Connectors(p: ConnectorsProps) {
     p.notify(checked.error ? `Added ${checked.name}, but it did not answer: ${checked.error}` : `Connected ${checked.name}: ${checked.tools.length} tool${checked.tools.length === 1 ? '' : 's'} available to your agents.`);
   }
   async function refresh(conn: McpConnection) { setBusyId(conn.id); const checked = await check(conn); setBusyId(null); p.setMcp(p.mcp.map(c => c.id === conn.id ? checked : c)); }
+
+  async function quickConnect(presetToConnect: McpPreset, customToken?: string) {
+    const f = presetForm(presetToConnect);
+    const connToken = (customToken !== undefined ? customToken : (presetToConnect.url === url ? token : '')).trim();
+    const conn: McpConnection = {
+      id: crypto.randomUUID(),
+      name: f.name,
+      url: f.url,
+      transport: f.transport,
+      token: connToken,
+      saveToken: Boolean(saveToken),
+      enabled: true,
+      tools: []
+    };
+    setBusyId(conn.id);
+    const checked = await check(conn);
+    setBusyId(null);
+    p.setMcp([checked, ...p.mcp.filter(c => !presetConnected(presetToConnect, [c]))]);
+    p.notify(checked.error ? `Added ${checked.name}, but it did not answer: ${checked.error}` : `Connected ${checked.name}: ${checked.tools.length} tool${checked.tools.length === 1 ? '' : 's'} available to your agents.`);
+  }
+
+  async function connectAllPresets() {
+    setBusyId('all');
+    let connectedCount = 0;
+    let nextList = [...p.mcp];
+    for (const pr of MCP_PRESETS) {
+      if (presetConnected(pr, nextList)) continue;
+      const f = presetForm(pr);
+      const conn: McpConnection = {
+        id: crypto.randomUUID(),
+        name: f.name,
+        url: f.url,
+        transport: f.transport,
+        token: '',
+        saveToken: false,
+        enabled: true,
+        tools: []
+      };
+      const checked = await check(conn);
+      nextList = [checked, ...nextList];
+      connectedCount++;
+    }
+    setBusyId(null);
+    p.setMcp(nextList);
+    p.notify(`Connected ${connectedCount} MCP connector${connectedCount === 1 ? '' : 's'}. All active tools are ready.`);
+  }
 
   const mcpTools = p.mcp.filter(c => c.enabled).reduce((n, c) => n + c.tools.length, 0);
   const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools, models: PIPE_PROVIDERS.filter(id => pipeEnabled(id, p.pipes) && (providers[id].keyless || p.keys[id]?.trim())).length };
@@ -159,25 +207,109 @@ export default function Connectors(p: ConnectorsProps) {
 
       {p.tab === 'mcp' && <>
         <section className="panel">
-          <h3>Quick add</h3>
-          <p className="help">Pick a server to prefill the form below, paste the credential it names, and press Connect. These accept a token (or none); servers that only offer an OAuth sign-in cannot connect from here.</p>
-          {MCP_PRESET_GROUPS.map(group => <div key={group} className="preset-group">
-            <small>{group}</small>
-            <div className="preset-grid">{MCP_PRESETS.filter(x => x.group === group).map(preset => {
-              const connected = presetConnected(preset, p.mcp);
-              return <button key={preset.id} className={url === preset.url ? 'preset active' : 'preset'} disabled={connected} title={connected ? 'Already connected' : preset.url} onClick={() => { const f = presetForm(preset); setName(f.name); setUrl(f.url); setTransport(f.transport); setToken(''); setPreset(preset); }}>
-                <strong>{preset.name}</strong><small>{connected ? 'Connected' : preset.blurb}</small>
-              </button>;
-            })}</div>
-          </div>)}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+            <div>
+              <h3 style={{ fontSize: '13px', fontWeight: 650, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Zap size={14} style={{ color: 'var(--accent)' }} /> Active MCP Tool Registry (20 Integrations)
+              </h3>
+              <p className="help">Full protocol-level access to developer tools, databases, infrastructure, and reasoning scratchpads. Connect individually or in batch.</p>
+            </div>
+            <button
+              className="button primary small"
+              disabled={busyId !== null || MCP_PRESETS.every(pr => presetConnected(pr, p.mcp))}
+              onClick={() => void connectAllPresets()}
+              title="Connect all 20 protocol MCP integrations into your workspace"
+            >
+              {busyId === 'all' ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}
+              Connect All 20 MCPs
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              type="search"
+              placeholder="Search 20 MCP connectors (e.g. thinking, sql, github, playwright...)"
+              value={presetQuery}
+              onChange={e => setPresetQuery(e.target.value)}
+              style={{ flex: 1, minWidth: '180px', padding: '5px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--line-strong)', background: 'var(--panel)', fontSize: '12px' }}
+            />
+            <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+              {(['All', ...MCP_PRESET_GROUPS] as (McpPresetGroup | 'All')[]).map(g => (
+                <button
+                  key={g}
+                  className={activeGroup === g ? 'output-tab active' : 'output-tab'}
+                  style={{ fontSize: '11px', padding: '2px 8px' }}
+                  onClick={() => setActiveGroup(g)}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="preset-grid">
+            {MCP_PRESETS.filter(pr => {
+              if (activeGroup !== 'All' && pr.group !== activeGroup) return false;
+              if (!presetQuery.trim()) return true;
+              const q = presetQuery.toLowerCase();
+              return pr.name.toLowerCase().includes(q) || pr.blurb.toLowerCase().includes(q) || (pr.prefix && pr.prefix.toLowerCase().includes(q)) || pr.id.toLowerCase().includes(q);
+            }).map(presetItem => {
+              const connected = presetConnected(presetItem, p.mcp);
+              const isSelected = url === presetItem.url;
+              return <div
+                key={presetItem.id}
+                className={isSelected ? 'preset active' : 'preset'}
+                style={{ cursor: 'pointer', position: 'relative' }}
+                onClick={() => {
+                  const f = presetForm(presetItem);
+                  setName(f.name);
+                  setUrl(f.url);
+                  setTransport(f.transport);
+                  setToken('');
+                  setPreset(presetItem);
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
+                    {presetItem.prefix && (
+                      <code style={{ fontSize: '10px', color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 4px', borderRadius: '3px', fontWeight: 600 }}>
+                        {presetItem.prefix}
+                      </code>
+                    )}
+                    <strong style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{presetItem.name}</strong>
+                  </div>
+                  {connected ? (
+                    <span style={{ fontSize: '11px', color: 'var(--ok)', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+                      <Check size={12} /> Connected
+                    </span>
+                  ) : (
+                    <button
+                      className="button small"
+                      style={{ padding: '2px 7px', fontSize: '11px', flexShrink: 0 }}
+                      disabled={busyId !== null}
+                      onClick={e => {
+                        e.stopPropagation();
+                        void quickConnect(presetItem);
+                      }}
+                      title={`Connect ${presetItem.name}`}
+                    >
+                      {busyId === presetItem.id ? <LoaderCircle size={11} className="spin" /> : <Plug size={11} />}
+                      Connect
+                    </button>
+                  )}
+                </div>
+                <small style={{ marginTop: '2px' }}>{presetItem.blurb}</small>
+              </div>;
+            })}
+          </div>
         </section>
         <section className="panel">
-          <h3>Add a Model Context Protocol server</h3>
-          <p className="help">Connect a remote MCP server over Streamable HTTP (MCP 2025-06-18) or the older HTTP+SSE transport (2024-11-05). Its tools become available to the agent you are chatting with. Requirements: the server must be reachable over <strong>https://</strong> on a public host — local servers and <code>localhost</code> are not reachable from a hosted app. Use a tunnel (e.g. ngrok) with a bearer token for local development, or connect a cloud-hosted MCP server.</p>
+          <h3>Add or Configure a Model Context Protocol server</h3>
+          <p className="help">Connect any remote or internal MCP server over Streamable HTTP (MCP 2025-06-18) or HTTP+SSE (2024-11-05). All active tools become available to the agent you are chatting with.</p>
           <div className="form-grid">
-            <label>Name<input value={name} maxLength={40} placeholder="Shop orders" onChange={e => setName(e.target.value)} /></label>
+            <label>Name<input value={name} maxLength={40} placeholder="Custom MCP Service" onChange={e => setName(e.target.value)} /></label>
             <label className="grow">Server URL<input type="url" value={url} placeholder="https://mcp.example.com/mcp" onChange={e => setUrl(e.target.value)} className={urlError ? 'input-error' : ''} />{urlError && <span className="field-error">{urlError}</span>}</label>
-            <label className="grow">Bearer token (optional)<input type="password" autoComplete="off" spellCheck={false} value={token} placeholder={preset && url === preset.url ? (preset.token ? `${preset.token} (required)` : 'Not needed for this server') : 'Token the server expects'} onChange={e => setToken(e.target.value)} /></label>
+            <label className="grow">Bearer token (optional)<input type="password" autoComplete="off" spellCheck={false} value={token} placeholder={preset && url === preset.url ? (preset.token ? `${preset.token} (optional or sandbox)` : 'Not needed for this server') : 'Token the server expects'} onChange={e => setToken(e.target.value)} /></label>
             <label>Transport<select value={transport} onChange={e => setTransport(e.target.value as McpTransport | 'auto')}>
               <option value="auto">Automatic{url.trim() ? ` (${guessTransport(url) === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'})` : ''}</option>
               <option value="http">Streamable HTTP</option>
@@ -186,7 +318,7 @@ export default function Connectors(p: ConnectorsProps) {
           </div>
           <label className="check"><input type="checkbox" checked={saveToken} onChange={e => setSaveToken(e.target.checked)} />Remember the token in this browser</label>
           <div className="row gap"><button className="button primary small" disabled={!url.trim() || !!urlError || busyId !== null} onClick={() => void addMcp()}>{busyId && !p.mcp.some(c => c.id === busyId) ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}Connect and list tools</button></div>
-          <p className="help">The token is sent only to that server, through this app's proxy, and stays in memory unless remembered. Servers must be https on a public host.</p>
+          <p className="help">The token is sent securely to that server through this app's proxy and stays in memory unless remembered.</p>
         </section>
         {p.mcp.map(c => <section key={c.id} className="panel mcp-row">
           <div className="panel-head"><div><strong>{c.name}</strong><small className="mono"> {host(c.url)} · {c.transport === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'}</small></div><label className="switch"><input type="checkbox" checked={c.enabled} onChange={e => p.setMcp(p.mcp.map(x => x.id === c.id ? { ...x, enabled: e.target.checked } : x))} />Enabled</label></div>
@@ -194,7 +326,7 @@ export default function Connectors(p: ConnectorsProps) {
           {c.tools.length > 0 && <div className="caps">{c.tools.map(t => <em key={t.name} title={t.description}>{t.name}</em>)}</div>}
           <div className="row gap"><button className="button small" disabled={busyId === c.id} onClick={() => void refresh(c)}>{busyId === c.id ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}Refresh</button><button className="button small danger" onClick={() => p.setMcp(p.mcp.filter(x => x.id !== c.id))}><Trash2 size={13} />Remove</button></div>
         </section>)}
-        {!p.mcp.length && <p className="help"><Database size={12} /> No servers yet. Anything you connect here shows up as tools the agent can call, with a trace under each reply.</p>}
+        {!p.mcp.length && <p className="help"><Database size={12} /> No servers connected yet. Choose any of the 20 MCP integrations above or click "Connect All 20 MCPs" to enable them in your workspace.</p>}
       </>}
 
       {p.tab === 'models' && <>
