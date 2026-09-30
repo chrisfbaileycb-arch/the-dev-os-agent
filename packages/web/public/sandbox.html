@@ -31,28 +31,101 @@ var SHIM = '<script>(function(){' +
   'function mem(){var m=new Map();return{get length(){return m.size},key:function(i){return Array.from(m.keys())[i]||null},getItem:function(k){return m.has(String(k))?m.get(String(k)):null},setItem:function(k,v){m.set(String(k),String(v))},removeItem:function(k){m.delete(String(k))},clear:function(){m.clear()}}}' +
   'function blocked(n){try{var s=window[n];s.getItem;return false}catch(e){return true}}' +
   '["localStorage","sessionStorage"].forEach(function(n){if(blocked(n)){try{Object.defineProperty(window,n,{value:mem(),configurable:true})}catch(e){}}});' +
-  'function tell(state,msg){try{parent.postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){}}' +
+  'function tell(state,msg){try{(window.top||window.parent).postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){try{parent.postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){}}}' +
+  'var origAEL=window.addEventListener;' +
+  'window.addEventListener=function(t,l,o){if(t==="DOMContentLoaded"&&document.readyState!=="loading"){try{setTimeout(function(){typeof l==="function"?l.call(window,new Event("DOMContentLoaded")):l&&l.handleEvent&&l.handleEvent(new Event("DOMContentLoaded"))},0)}catch(e){}return}return origAEL.apply(this,arguments)};' +
+  'var origDocAEL=document.addEventListener;' +
+  'document.addEventListener=function(t,l,o){if(t==="DOMContentLoaded"&&document.readyState!=="loading"){try{setTimeout(function(){typeof l==="function"?l.call(document,new Event("DOMContentLoaded")):l&&l.handleEvent&&l.handleEvent(new Event("DOMContentLoaded"))},0)}catch(e){}return}return origDocAEL.apply(this,arguments)};' +
   'var failed=false;window.addEventListener("load",function(){setTimeout(function(){if(failed)return;var b=document.body;var seen=b&&((b.innerText||"").trim().length>0||b.querySelector("canvas,svg,img,video,iframe,input,button,select,textarea"));tell(seen?"ready":"blank")},1200)});' +
   'window.addEventListener("unhandledrejection",function(e){failed=true;tell("error",(e.reason&&e.reason.message)||e.reason)});' +
   'var shown=false;window.addEventListener("error",function(e){failed=true;tell("error",e.message);if(shown)return;shown=true;var b=document.createElement("pre");b.setAttribute("data-preview-error","");b.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;margin:0;padding:8px 10px;background:#fff3f2;color:#b8362b;border:1px solid #f0b8b2;border-radius:6px;font:12px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.15)";b.textContent="Runtime error: "+(e.message||"unknown")+(e.filename?"\\n"+e.filename.replace(/^.*\\//,"")+":"+e.lineno:"");(document.body||document.documentElement).appendChild(b)});' +
   '})()<\/script>';
 
+function wrapClientScripts(html) {
+  return html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, function (match, attrs, code) {
+    if (/\bsrc\s*=/i.test(attrs)) return match;
+    var typeMatch = attrs.match(/\btype\s*=\s*["']?([^"'\s>]+)/i);
+    if (typeMatch) {
+      var t = typeMatch[1].toLowerCase();
+      if (t !== 'text/javascript' && t !== 'application/javascript' && t !== 'javascript' && t !== 'module') {
+        return match;
+      }
+      if (t === 'module' && /\bimport\s+[\s\S]*?\s+from\s+['"]|\bimport\s*['"]/.test(code)) {
+        return match;
+      }
+    }
+    var trimmed = code.trim();
+    if (!trimmed) return match;
+    if (trimmed.indexOf('document.readyState') !== -1 && trimmed.indexOf('DOMContentLoaded') !== -1) {
+      return match;
+    }
+    var wrapped = '\n(function(){\n' +
+      '  function __runScript(){\n' +
+      code + '\n' +
+      '  }\n' +
+      '  if (document.readyState !== "loading") {\n' +
+      '    __runScript();\n' +
+      '  } else {\n' +
+      '    window.addEventListener("DOMContentLoaded", __runScript);\n' +
+      '  }\n' +
+      '})();\n';
+    return '<script' + attrs + '>' + wrapped + '<\/script>';
+  });
+}
+
 function withShim(html) {
-  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, function (m) { return m + SHIM; });
-  if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, function (m) { return m + SHIM; });
-  return SHIM + html;
+  var wrapped = wrapClientScripts(html);
+  if (/<head[^>]*>/i.test(wrapped)) return wrapped.replace(/<head[^>]*>/i, function (m) { return m + SHIM; });
+  if (/<html[^>]*>/i.test(wrapped)) return wrapped.replace(/<html[^>]*>/i, function (m) { return m + SHIM; });
+  return SHIM + wrapped;
 }
 
 // Refuse to render anything unless this document really is sandboxed and embedded by its parent.
 // A document with a real origin (not "null") would run generated code with this app's access.
 var OPAQUE = String(self.origin) === 'null';
+var prevBlobUrl = null;
 window.addEventListener('message', function (event) {
+  if (event.data && typeof event.data === 'object' && event.data.type === 'sf-preview') {
+    if (window.parent && window.parent !== window) {
+      try { window.parent.postMessage(event.data, '*'); } catch (e) {}
+    }
+    return;
+  }
   if (!OPAQUE || window.parent === window || event.source !== window.parent) return;
   var data = event.data;
   if (!data || typeof data !== 'object' || typeof data.html !== 'string') return;
-  document.open();
-  document.write(withShim(data.html));
-  document.close();
+
+  var existing = document.getElementById('preview-frame');
+  if (existing) {
+    try { existing.remove(); } catch (e) {}
+  }
+  if (prevBlobUrl) {
+    try { URL.revokeObjectURL(prevBlobUrl); } catch (e) {}
+    prevBlobUrl = null;
+  }
+
+  var frame = document.createElement('iframe');
+  frame.id = 'preview-frame';
+  frame.setAttribute('sandbox', 'allow-scripts allow-modals allow-forms');
+  frame.setAttribute('title', 'Preview canvas');
+  frame.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;border:none;margin:0;padding:0;display:block;';
+
+  var prepared = withShim(data.html);
+
+  // Sandboxed srcdoc bridge with robust Blob URL fallback
+  if ('srcdoc' in frame) {
+    frame.srcdoc = prepared;
+  } else {
+    try {
+      var blob = new Blob([prepared], { type: 'text/html;charset=utf-8' });
+      prevBlobUrl = URL.createObjectURL(blob);
+      frame.src = prevBlobUrl;
+    } catch (e) {
+      frame.srcdoc = prepared;
+    }
+  }
+
+  document.body.appendChild(frame);
 });
 </script>
 </body>

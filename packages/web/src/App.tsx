@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, Download, KeyRound, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
+import { CircleAlert, CircleCheck, Download, KeyRound, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
 import Rail, { type Page } from './ui/Rail';
 import Dock, { type Attached, type RunMode } from './ui/Dock';
 import RunCard from './ui/RunCard';
@@ -8,6 +8,7 @@ import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
 import GithubPullDialog from './ui/GithubPullDialog';
+import type { SyncToast } from './ui/GithubSyncDrawer';
 import { usePaneResize } from './ui/SplitPane';
 import OutputPanel from './ui/OutputPanel';
 import Pricing from './ui/Pricing';
@@ -116,6 +117,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   /** Which provider groups the model picker shows, and where a local Ollama lives. */
   const [pipes, setPipesState] = useState<PipeSettings>(loadPipes);
   const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false); const [notice, setNotice] = useState('');
+  const [modelFallback, setModelFallback] = useState<{ extended: string; fallback: string } | null>(null);
   const [rosterOpen, setRosterOpen] = useState(false); const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
   /** A premium model the visitor picked that nothing here can pay for, awaiting their own key. */
   const [keyPrompt, setKeyPrompt] = useState<CatalogModel | null>(null);
@@ -155,11 +157,20 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
 
   const setMcp = (list: McpConnection[]) => { saveConnections(list); setMcpState(list); };
   const setSettings = (next: ConnectorSettings) => { saveSettings(next); setSettingsState(next); };
+  const [toast, setToast] = useState<SyncToast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = (next: SyncToast) => {
+    setToast(next);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), next.tone === 'error' ? 7000 : 4000);
+  };
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
   const active = sessions.find(s => s.id === activeId) ?? null;
   // Keep the most recent runnable artifact on the canvas while the next reply is still streaming.
   const previewContent = useMemo(() => latestPreviewReply(active?.messages ?? []), [active?.messages]);
   const lastAssistant = active?.messages.filter(m => m.role === 'assistant' && !m.runId).at(-1);
+  const lastTruncated = Boolean(lastAssistant?.truncated && !busy);
   const lastRequest = active?.messages.filter(m => m.role === 'user').at(-1);
   const previewNeedsFinish = Boolean(active?.mode === 'build' && !busy && lastAssistant?.content && !parseProject(lastAssistant.content)
     && expectsRunnablePreview(lastRequest?.content ?? '', Boolean(parseProject(previewContent))));
@@ -269,6 +280,43 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   function newSession(): Session { const s: Session = { id: crypto.randomUUID(), title: 'New session', persona: workMode === 'build' ? personaId : persona.id, createdAt: now(), updatedAt: now(), messages: [], mode: workMode, plan }; commitSessions([s, ...sessionsRef.current]); setActiveId(s.id); setPage('workspace'); return s; }
   /** Open a session and return to how the person was working in it. */
   function openSession(s: Session) { setActiveId(s.id); setPersonaId(s.persona); setWorkModeState(s.mode ?? 'chat'); setPlanState(s.plan ?? 'build'); }
+
+  /** Pull a whole repository into the workspace, hydrating IndexedDB and opening the preview. */
+  function importProjectToWorkspace(project: { owner: string; repo: string; branch: string; files: { path: string; content: string }[] }) {
+    const title = `${project.owner}/${project.repo}`;
+    const fencedFiles = project.files.map(f => `\`\`\`${f.path}\n${f.content}\n\`\`\``).join('\n\n');
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: `Imported repository ${title} (branch ${project.branch}) with ${project.files.length} file${project.files.length === 1 ? '' : 's'}.`,
+      at: now(),
+    };
+    const assistantMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: `I've imported **${title}** on branch \`${project.branch}\` with ${project.files.length} file${project.files.length === 1 ? '' : 's'}:\n\n${fencedFiles}`,
+      at: now(),
+      persona: BUILDER_PERSONA_ID,
+    };
+    const session: Session = {
+      id: crypto.randomUUID(),
+      title: `${title} (${project.branch})`,
+      persona: BUILDER_PERSONA_ID,
+      createdAt: now(),
+      updatedAt: now(),
+      messages: [userMsg, assistantMsg],
+      mode: 'build',
+      plan: 'build',
+    };
+    commitSessions([session, ...sessionsRef.current]);
+    setActiveId(session.id);
+    setPersonaId(BUILDER_PERSONA_ID);
+    setWorkModeState('build');
+    setPreviewOpen(true);
+    resetSplit();
+    setPage('workspace');
+    void persistSession(session).catch(e => setNotice(errorText(e)));
+  }
   /** The mode toggle, bound to the active session so switching sessions restores it. */
   function chooseWorkMode(next: WorkMode) {
     setWorkModeState(next);
@@ -422,8 +470,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     recognition.current = r; try { r.start(); setListening(true); } catch { setNotice('Voice input could not start in this browser.'); }
   }
 
-  function send() {
-    const text = draft.trim(); if (!text || busy || !ready) return;
+  function send(overrideText?: string) {
+    const text = (typeof overrideText === 'string' ? overrideText : draft).trim(); if (!text || busy || !ready) return;
     const problem = preflight(); if (problem) { setNotice(problem); return; }
     // "remember that …" saves a preference as well as going to the agent as usual.
     const preference = rememberRequest(text);
@@ -431,7 +479,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     if (mode !== 'chat' && photos.length) { setNotice('Photos go with chat messages. Workflows work from text; remove the photo or switch to Chat.'); return; }
     // A workflow is five requests, so a BYOK visitor is asked once per session before it spends.
     if (mode !== 'chat' && inference === 'byok' && !approvedRuns.current) { setConfirm('run'); return; }
-    const session = ensureSession(); const files = attachments; const shots = photos;
+    const session = ensureSession(); const files = typeof overrideText === 'string' ? [] : attachments; const shots = typeof overrideText === 'string' ? [] : photos;
     const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, at: now(), attachments: files.map(a => ({ name: a.name, chars: a.content.length })), photos: shots.map(ph => ({ name: ph.name, thumb: ph.thumb })) };
     const title = session.messages.length ? session.title : text.replace(/\s+/g, ' ').slice(0, 60);
     setDraft(''); setAttachments([]); setPhotos([]); if (!preference) setNotice(''); setBusy(true); setPage('workspace');
@@ -462,7 +510,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         content = completed.text; tokens += completed.tokens; previewError = completed.issue;
         setNotice(previewError ?? '');
       }
-      patchMessage(session.id, reply.id, { content, tokens, error: previewError, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools }, true);
+      patchMessage(session.id, reply.id, { content, tokens, error: previewError, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools, truncated: result.truncated }, true);
       setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens });
       if (result.memoriesUsed.length) void touchMemories(result.memoriesUsed, memoriesRef.current).then(commitMemories).catch(() => { /* bookkeeping only */ });
       // A build that produced runnable files leaves one line of project context behind.
@@ -473,7 +521,13 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       const stopped = controller.signal.aborted;
       const message = freeTierMessage(e);
       patchMessage(session.id, reply.id, m => stopped ? { content: `${m.content}${m.content ? '\n\n' : ''}(stopped)` } : { error: message }, true);
-      if (!stopped) { setNotice(message); void remember('failure', failureText({ model: label, error: message, request: text })); }
+      if (!stopped) {
+        setNotice(message);
+        void remember('failure', failureText({ model: label, error: message, request: text }));
+        if (e instanceof ProviderError && e.fallbackModel) {
+          setModelFallback({ extended: connection.model, fallback: e.fallbackModel });
+        }
+      }
     } finally { abortRef.current = null; setBusy(false); }
   }
 
@@ -489,7 +543,14 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       patchMessage(active.id, lastAssistant.id, { content: recovery.text, tokens: (lastAssistant.tokens ?? 0) + recovery.tokens, error: recovery.issue }, true);
       setNotice(recovery.issue ?? '');
       if (recovery.tokens) await charge(active.id, recovery.tokens);
-    } catch (error) { if (!controller.signal.aborted) setNotice(errorText(error)); }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setNotice(errorText(error));
+        if (error instanceof ProviderError && error.fallbackModel) {
+          setModelFallback({ extended: connection.model, fallback: error.fallbackModel });
+        }
+      }
+    }
     finally { abortRef.current = null; setBusy(false); }
   }
 
@@ -620,9 +681,30 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   return <div className={collapsed ? 'app rail-collapsed' : 'app'}>
     <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} admin={adminActive} onLock={onLock} />
     <div className="main">
-      {(!online || notice) && <div className="notices">
+      {(!online || notice || modelFallback) && <div className="notices">
         {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. Hosted models need a connection.</span></div>}
-        {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
+        {modelFallback && (
+          <div className="notice warning" role="status">
+            <CircleAlert size={13} />
+            <span>Extended catalog model <strong>{modelFallback.extended}</strong> is unavailable. Switch to active default model <strong>{modelFallback.fallback}</strong>?</span>
+            <button
+              type="button"
+              className="notice-action"
+              onClick={() => {
+                const targetModel = modelFallback.fallback;
+                setConnection(c => ({ ...c, model: targetModel }));
+                setNotice(`Switched to active default model: ${modelLabel(targetModel, labels)}`);
+                setModelFallback(null);
+              }}
+            >
+              Switch to {modelLabel(modelFallback.fallback, labels)}
+            </button>
+            <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setModelFallback(null)}>
+              <X size={13} />
+            </button>
+          </div>
+        )}
+        {notice && !modelFallback && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
       </div>}
       <div className="content">
         {page === 'workspace' && <div className={`${previewOpen ? 'workspace with-preview' : 'workspace'}${resizing ? ' resizing' : ''}`} style={previewOpen ? { gridTemplateColumns: `224px minmax(0, ${chatPercent}fr) 8px minmax(0, ${100 - chatPercent}fr)` } : undefined}>
@@ -672,6 +754,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
               busy={busy} ready={ready} send={send} stop={stop}
               listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice}
               tokens={tokens}
+              truncated={lastTruncated}
+              onContinue={() => send('continue from where you left off')}
             />
           </section>
           {previewOpen && <>
@@ -701,7 +785,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
-    <GithubPullDialog open={githubPullOpen} close={() => setGithubPullOpen(false)} github={settings.github} addFiles={f => void addFiles(f)} openConnectors={() => openConnectors('github')} notify={setNotice} />
+    <GithubPullDialog open={githubPullOpen} close={() => setGithubPullOpen(false)} github={settings.github} addFiles={f => void addFiles(f)} openConnectors={() => openConnectors('github')} notify={setNotice} notifyToast={showToast} onImportProject={importProjectToWorkspace} />
     <Connectors
       open={connectorsOpen} close={() => setConnectorsOpen(false)} tab={connectorTab} setTab={setConnectorTab}
       settings={settings} setSettings={setSettings} mcp={mcp} setMcp={setMcp}
@@ -737,5 +821,10 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         : <p>This removes sessions, runs, the ledger, notes, connectors, and saved connection details from this browser and from the server copy. Export anything you want to keep first.</p>}
       <div className="row gap end"><button className="button small" autoFocus onClick={() => setConfirm(null)}>Cancel</button><button className={confirm === 'run' ? 'button primary small' : 'button danger small'} onClick={() => { if (confirm === 'run') { approvedRuns.current = true; setConfirm(null); send(); } else void clearAll(); }}>{confirm === 'run' ? 'Approve and run' : 'Delete everything'}</button></div>
     </section></div>}
+    {toast && <div className={`toast ${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
+      {toast.tone === 'error' ? <CircleAlert size={14} /> : <CircleCheck size={14} />}
+      <span><strong>{toast.title}</strong>{toast.message}</span>
+      <button className="icon-button" aria-label="Dismiss" onClick={() => setToast(null)}><X size={12} /></button>
+    </div>}
   </div>;
 }

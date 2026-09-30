@@ -5,7 +5,16 @@ import type { GatewayModel } from './deployment';
 // without a provider. Three questions live here: which discovered ids are chat models worth
 // offering, what a human should read for each, and which one a fresh discovery should land on.
 
-export interface ModelChoice { id: string; label: string; /** Free at the provider itself, by the provider's own signal. */ free?: boolean; }
+export interface ModelChoice {
+  id: string;
+  label: string;
+  /** Free at the provider itself, by the provider's own signal. */
+  free?: boolean;
+  /** Verified operational model (direct Gemini/Claude, OpenAI flagship, local loaded endpoint) */
+  verified?: boolean;
+  /** Model picker section: 'ready' (Ready to Run) or 'extended' (Extended Catalog) */
+  section?: 'ready' | 'extended';
+}
 
 /**
  * Whether a discovered id is a chat/generative model at all.
@@ -22,20 +31,105 @@ export function isChatModel(id: string): boolean {
   return id.trim().length > 0 && id.length <= 300 && !NON_CHAT.test(id);
 }
 
+/**
+ * Differentiates verified operational models (direct Gemini/Claude BYOK providers,
+ * OpenAI flagships, or loaded local endpoints like Ollama) from raw unverified catalog listings.
+ */
+export function isVerifiedOperational(provider?: string, modelId?: string): boolean {
+  if (!modelId || typeof modelId !== 'string') return false;
+  const id = modelId.toLowerCase().trim();
+  const prov = String(provider || '').toLowerCase().trim();
+
+  // Currently loaded local endpoints
+  if (prov === 'ollama') return true;
+
+  // Direct BYOK providers: Gemini, Claude, OpenAI flagships
+  if (prov === 'google') {
+    return /^gemini-(?:2\.5|2\.0|1\.5|3\.)/i.test(id) || id.startsWith('gemini-');
+  }
+  if (prov === 'anthropic') {
+    return /^claude-(?:3|4|sonnet|opus|haiku)/i.test(id) || id.startsWith('claude-');
+  }
+  if (prov === 'openai') {
+    return /^(?:gpt-4o|gpt-4\.1|gpt-5|o1|o3)/i.test(id);
+  }
+
+  // Curated flagship verified models on other direct BYOK providers
+  if (prov === 'groq') {
+    return /^(?:llama-3\.[13]|mixtral|gemma-2)/i.test(id);
+  }
+  if (prov === 'cerebras') {
+    return /^(?:llama-3\.[13]|llama3\.)/i.test(id);
+  }
+  if (prov === 'github') {
+    return /^(?:openai\/gpt-4|meta\/llama-3)/i.test(id);
+  }
+  if (prov === 'cohere') {
+    return /^command-(?:a|r)/i.test(id);
+  }
+  if (prov === 'xai') {
+    return /^grok-(?:2|3|4)/i.test(id);
+  }
+
+  return false;
+}
+
 /** What a human reads for a discovered id: the gateway's own label first, then any catalog label, then the id itself. */
 export function labelFor(id: string, gateway: Pick<GatewayModel, 'id' | 'label'>[]): string {
   return gateway.find(m => m.id === id)?.label ?? findModel(id)?.label ?? id;
 }
 
 /** A discovered entry as /api/models now reports it: the provider's own label and free flag ride along when given. */
-export interface DiscoveredEntry { id: string; label?: string; free?: boolean; }
+export interface DiscoveredEntry {
+  id: string;
+  label?: string;
+  free?: boolean;
+  verified?: boolean;
+  section?: 'ready' | 'extended';
+}
 
 /** A discovered list reduced to offerable chat models with readable labels. Accepts plain ids or labelled entries. */
-export function modelChoices(discovered: (string | DiscoveredEntry)[], gateway: Pick<GatewayModel, 'id' | 'label'>[] = []): ModelChoice[] {
+export function modelChoices(
+  discovered: (string | DiscoveredEntry)[],
+  gateway: Pick<GatewayModel, 'id' | 'label'>[] = [],
+  provider?: string
+): ModelChoice[] {
   return discovered
     .map(entry => typeof entry === 'string' ? { id: entry } : entry)
     .filter(entry => isChatModel(entry.id))
-    .map(entry => ({ id: entry.id, label: entry.label?.trim() || labelFor(entry.id, gateway), ...(entry.free ? { free: true } : {}) }));
+    .map(entry => {
+      const item: ModelChoice = {
+        id: entry.id,
+        label: entry.label?.trim() || labelFor(entry.id, gateway),
+        ...(entry.free ? { free: true } : {}),
+      };
+      if (entry.verified !== undefined) {
+        item.verified = entry.verified;
+      } else if (provider !== undefined) {
+        item.verified = isVerifiedOperational(provider, entry.id);
+      }
+      if (entry.section !== undefined) {
+        item.section = entry.section;
+      } else if (item.verified !== undefined) {
+        item.section = item.verified ? 'ready' : 'extended';
+      }
+      return item;
+    });
+}
+
+/** Partitions a list of model choices into Ready to Run and Extended Catalog sections. */
+export function partitionChoices<T extends ModelChoice>(choices: T[], provider?: string): { ready: T[]; extended: T[] } {
+  const ready: T[] = [];
+  const extended: T[] = [];
+  for (const choice of choices) {
+    const verified = choice.verified ?? (choice.section !== undefined ? choice.section === 'ready' : (provider ? isVerifiedOperational(provider, choice.id) : false));
+    if (verified) {
+      ready.push(choice);
+    } else {
+      extended.push(choice);
+    }
+  }
+  return { ready, extended };
 }
 
 /**

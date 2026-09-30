@@ -88,3 +88,23 @@ test('the sandbox shell reports whether the app actually ran, not just that it c
   for (const state of ['"ready"', '"blank"', '"error"']) assert.ok(shell.includes(state), `reports ${state}`);
   assert.match(shell, /type:"sf-preview"/);
 });
+
+test('the sandbox shell uses a sandboxed srcdoc bridge rather than document.write', () => {
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(shell, /document\.write/);
+  assert.match(shell, /sandbox["']?,\s*["']allow-scripts allow-modals allow-forms["']/);
+  assert.match(shell, /srcdoc/);
+});
+
+test('the preview frame in OutputPanel uses the restricted sandbox attribute without allow-popups', () => {
+  const panel = readFileSync(new URL('../src/ui/OutputPanel.tsx', import.meta.url), 'utf8');
+  assert.match(panel, /sandbox="allow-scripts allow-modals allow-forms"/);
+});
+
+test('the sandbox shell wraps client scripts with DOMContentLoaded / readyState execution guards', () => {
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  assert.match(shell, /wrapClientScripts/);
+  assert.match(shell, /document\.readyState !== ["']loading["']/);
+  assert.match(shell, /DOMContentLoaded/);
+});
+

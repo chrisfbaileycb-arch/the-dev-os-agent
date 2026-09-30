@@ -46,6 +46,8 @@ export interface DockProps {
   busy: boolean; ready: boolean; send: () => void; stop: () => void;
   listening: boolean; voiceSupported: boolean; toggleVoice: () => void;
   tokens: { draft: number; context: number };
+  truncated?: boolean;
+  onContinue?: () => void;
 }
 
 const MAX_HEIGHT = 200;
@@ -78,6 +80,12 @@ export default function Dock(p: DockProps) {
       {attached > 0 && <div className="dock-attachments">
         {p.photos.map(ph => <span key={ph.name} className="chip photo-chip"><img src={ph.thumb} alt="" width={22} height={22} />{ph.name}<small>{ph.width}×{ph.height}</small><button aria-label={`Remove ${ph.name}`} onClick={() => p.removePhoto(ph.name)}><X size={11} /></button></span>)}
         {p.attachments.map(a => <span key={a.name} className="chip"><Paperclip size={11} />{a.name}<small>{Math.ceil(a.content.length / 4).toLocaleString()} tok</small><button aria-label={`Remove ${a.name}`} onClick={() => p.removeAttachment(a.name)}><X size={11} /></button></span>)}
+      </div>}
+      {p.truncated && !p.busy && <div className="dock-continuation" role="status">
+        <span>Response was cut off by token limit.</span>
+        <button type="button" className="button small primary continuation-btn" onClick={p.onContinue}>
+          Continue from where you left off
+        </button>
       </div>}
 
       {/* The input row: attach on the left, the draft in the middle, voice and send on the right —

@@ -142,7 +142,8 @@ const REACT_ENTRY_PRIORITY = ['src/main.tsx', 'src/main.jsx', 'src/index.tsx', '
 
 /** Turn a raw browser script into the single-file document the preview can execute. */
 export function wrapScriptDocument(script: string, css = ''): string {
-  return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script>\n${script}\n</script></body></html>`;
+  const wrapped = `(function() {\n  function __runScript() {\n${script}\n  }\n  if (document.readyState !== 'loading') {\n    __runScript();\n  } else {\n    window.addEventListener('DOMContentLoaded', __runScript);\n  }\n})();`;
+  return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script>\n${wrapped}\n</script></body></html>`;
 }
 
 function wrapHtmlFragment(html: string): string {

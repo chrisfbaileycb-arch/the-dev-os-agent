@@ -1,10 +1,11 @@
 import http from 'node:http';
 import https from 'node:https';
+import { Transform } from 'node:stream';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
-import { modelsUrl, normalizeModelList } from './models.mjs';
+import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeModels, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
+import { isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
 import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog, ensureOpenRouterCatalog, openRouterCatalogStatus } from './discovery.mjs';
@@ -259,11 +260,47 @@ export const MAX_OUTPUT_TOKENS = 65536;
 export const DEFAULT_OUTPUT_TOKENS = 8192;
 
 /**
+ * Resolves the maximum allowable output window for a given provider and model when none is specified.
+ * OpenAI flagship models (gpt-4o, gpt-4.1) support 16,384 tokens; Anthropic and Gemini cap at 8,192.
+ */
+export function defaultMaxTokens(provider, model) {
+  if (provider === 'openai' && typeof model === 'string' && /^(gpt-4o|gpt-4\.1)/i.test(model)) {
+    return 16384;
+  }
+  return DEFAULT_OUTPUT_TOKENS;
+}
+
+/** Active default model per provider for fallback when extended catalog models fail. */
+export const DEFAULT_ACTIVE_MODELS = {
+  google: 'gemini-2.5-flash',
+  anthropic: 'claude-sonnet-4-5',
+  openai: 'gpt-4o',
+  groq: 'llama-3.3-70b-versatile',
+  cerebras: 'llama-3.3-70b',
+  cohere: 'command-a-03-2025',
+  github: 'openai/gpt-4.1-mini',
+  ollama: 'llama3.2',
+  xai: 'grok-2-1212',
+  openrouter: 'google/gemini-2.5-flash',
+};
+
+/** Resolves the active default model for a given provider or the deployment's primary free model. */
+export function activeDefaultModel(provider, env = {}) {
+  const prov = String(provider || '').toLowerCase().trim();
+  if (DEFAULT_ACTIVE_MODELS[prov]) return DEFAULT_ACTIVE_MODELS[prov];
+  try {
+    const free = freeModels(env);
+    if (free && free.length > 0 && free[0]?.id) return free[0].id;
+  } catch { /* ignore */ }
+  return 'gemini-2.5-flash';
+}
+
+/**
  * OpenAI's reasoning models and the GPT-5 line reject `max_tokens` and require
  * `max_completion_tokens` instead; everything else still wants the original name. Sending the
  * wrong one is a hard 400 with an opaque message, so the choice is made here from the model id.
  */
-export function outputLimit(provider, model, max) {
+export function outputLimit(provider, model, max = DEFAULT_OUTPUT_TOKENS) {
   const reasoning = provider === 'openai' && /^(o[134]|gpt-5)/i.test(model);
   return reasoning ? { max_completion_tokens: max } : { max_tokens: max };
 }
@@ -277,6 +314,83 @@ export const usageReportable = (provider, target) =>
   !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xai', 'cerebras', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
 
 /**
+ * Sentinel SSE chunk appended when an upstream stream is cut short by token output limits.
+ * Notifies the client dock so it knows to trigger a seamless continuation prompt.
+ */
+export const SENTINEL_TRUNCATED_SSE = 'data: {"stream_truncated":true,"finish_reason":"length"}\n\n';
+
+/**
+ * Checks whether an SSE event JSON object indicates length-based stream truncation.
+ * Covers OpenAI/Gemini (finish_reason: 'length'), Anthropic (stop_reason: 'max_tokens'),
+ * and Cohere (finish_reason: 'MAX_TOKENS').
+ */
+export function isLengthTruncated(json) {
+  if (!json || typeof json !== 'object') return false;
+  if (json.choices?.some?.(c => c?.finish_reason === 'length')) return true;
+  if (json.stop_reason === 'max_tokens' || json.delta?.stop_reason === 'max_tokens') return true;
+  if (json.delta?.finish_reason === 'MAX_TOKENS' || json.finish_reason === 'MAX_TOKENS') return true;
+  return false;
+}
+
+/**
+ * A pass-through Transform stream that inspects SSE chunks for length truncation.
+ * If an upstream chunk reports finish_reason === 'length' (or Anthropic/Cohere equivalent),
+ * it appends the sentinel event before the stream closes or immediately following the chunk.
+ */
+export function createTruncationInterceptor() {
+  let buffer = '';
+  let truncatedDetected = false;
+  let sentinelEmitted = false;
+
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        const text = chunk.toString('utf8');
+        buffer += text;
+        let index;
+        while ((index = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, index).replace(/\r$/, '');
+          buffer = buffer.slice(index + 1);
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+          let json;
+          try { json = JSON.parse(payload); } catch { continue; }
+          if (isLengthTruncated(json)) {
+            truncatedDetected = true;
+          }
+        }
+        if (buffer.length > 1_000_000) buffer = buffer.slice(-4096);
+
+        if (truncatedDetected && !sentinelEmitted) {
+          sentinelEmitted = true;
+          const doneIdx = text.indexOf('data: [DONE]');
+          if (doneIdx !== -1) {
+            const beforeDone = text.slice(0, doneIdx);
+            const afterDone = text.slice(doneIdx);
+            this.push(Buffer.from(beforeDone + SENTINEL_TRUNCATED_SSE + afterDone, 'utf8'));
+            return callback();
+          }
+          this.push(chunk);
+          this.push(Buffer.from(SENTINEL_TRUNCATED_SSE, 'utf8'));
+          return callback();
+        }
+      } catch { /* stream interception must never throw */ }
+
+      this.push(chunk);
+      callback();
+    },
+    flush(callback) {
+      if (truncatedDetected && !sentinelEmitted) {
+        sentinelEmitted = true;
+        this.push(Buffer.from(SENTINEL_TRUNCATED_SSE, 'utf8'));
+      }
+      callback();
+    }
+  });
+}
+
+/**
  * An OpenAI-shaped chat request as Anthropic's /v1/messages wants it.
  *
  * Two differences matter. The system prompt is a top-level field there rather than a message
@@ -284,7 +398,7 @@ export const usageReportable = (provider, target) =>
  * differently: `image_url` with a data URL becomes a `source` block of base64 plus media type.
  * Everything else is close enough to pass through.
  */
-export function anthropicPayload(model, messages, max) {
+export function anthropicPayload(model, messages, max = DEFAULT_OUTPUT_TOKENS) {
   const system = messages.filter(m => m.role === 'system').map(m => typeof m.content === 'string' ? m.content : '').filter(Boolean).join('\n\n');
   const turns = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: anthropicContent(m.content) }));
   return { model, messages: turns, stream: true, max_tokens: max, ...(system ? { system } : {}) };
@@ -447,7 +561,8 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         // the opposite of what a multi-file build or a plain chat asks for. Removed: what the
         // visitor's agent says is what the model gets.
         const messages = body.messages;
-        const requested = body.max_tokens ?? DEFAULT_OUTPUT_TOKENS;
+        const defaultMax = defaultMaxTokens(provider, body.model);
+        const requested = body.max_tokens ?? body.max_output_tokens ?? body.max_completion_tokens ?? defaultMax;
         if (!Number.isInteger(requested) || requested < 1 || requested > MAX_OUTPUT_TOKENS) throw new HttpError(400, `max_tokens must be a whole number from 1 to ${MAX_OUTPUT_TOKENS}.`);
         // Server-funded output is capped regardless of what the browser asked for.
         const max = funding.mode === 'free' ? Math.min(requested, freeOutputCap) : requested;
@@ -459,7 +574,14 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       } else suffix = '/models';
       if (path === '/api/models' && provider === 'cheaper-inference') {
         const models = await discoverCheaperInference(env);
-        json(res, 200, { data: models.map(model => ({ id: model.id })) });
+        const filter = (req.url.includes('?') ? new URL(req.url, 'http://proxy').searchParams.get('filter') : null) || (typeof body?.filter === 'string' ? body.filter : null);
+        const differentiate = (req.url.includes('?') ? new URL(req.url, 'http://proxy').searchParams.get('differentiate') === 'true' : false) || body?.differentiate === true;
+        const entries = normalizeModelList(provider, { data: models }, 2000, { filter, differentiate }) || models.map(model => ({ id: model.id }));
+        if (differentiate) {
+          json(res, 200, { data: entries, ready: entries.filter(e => e.verified), extended: entries.filter(e => !e.verified) });
+          return true;
+        }
+        json(res, 200, { data: entries });
         return true;
       }
       const upstreamUrl = path === '/api/models' ? modelsUrl(provider, target.base) : target.base + suffix;
@@ -513,6 +635,27 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         // send the visitor hunting for a problem that is not theirs. Report it as a tier that is
         // not answering, and leave the real status for the operator's logs.
         if (funding.mode === 'free') throw new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable');
+
+        // Lightweight fallback in completion proxy: if an extended catalog model returns 503 or 404,
+        // intercept and return a structured warning to the client prompting fallback to the active default model.
+        if (path === '/api/chat' && (status === 503 || status === 404) && !isVerifiedOperational(provider, body?.model)) {
+          const fallbackModel = activeDefaultModel(provider, env);
+          logUpstream(provider, upstreamUrl, `extended catalog model "${body?.model}" returned ${status} -> suggesting fallback to active default "${fallbackModel}"`, log);
+          const warningMessage = `Extended catalog model "${body?.model}" is currently unavailable (HTTP ${status}). Switch to active default model "${fallbackModel}"?`;
+          json(res, status, {
+            error: {
+              message: warningMessage,
+              code: 'model_unavailable',
+              fallback_model: fallbackModel,
+              extended_model: body?.model,
+              provider,
+              status,
+              suggest_fallback: true
+            }
+          });
+          return true;
+        }
+
         throw new HttpError(status >= 300 && status < 400 ? 502 : status, clientMessage(status, detail));
       }
       if (path === '/api/models') {
@@ -521,8 +664,18 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         let data; try { data = JSON.parse(Buffer.concat(chunks).toString()); } catch { throw new HttpError(502, 'Invalid model catalog.'); }
         // Ids, plus a label and a free flag where the provider gave one, so the dropdown can show
         // everything a key reaches by name rather than by id, and mark what costs nothing.
-        const entries = normalizeModelList(provider, data);
+        const filter = (req.url.includes('?') ? new URL(req.url, 'http://proxy').searchParams.get('filter') : null) || (typeof body?.filter === 'string' ? body.filter : null);
+        const differentiate = (req.url.includes('?') ? new URL(req.url, 'http://proxy').searchParams.get('differentiate') === 'true' : false) || body?.differentiate === true;
+        const entries = normalizeModelList(provider, data, 2000, { filter, differentiate });
         if (!entries) throw new HttpError(502, 'Unsupported model catalog format.');
+        if (differentiate) {
+          json(res, 200, {
+            data: entries,
+            ready: entries.filter(e => e.verified),
+            extended: entries.filter(e => !e.verified),
+          });
+          return true;
+        }
         json(res, 200, { data: entries }); return true;
       }
       if (!String(response.headers['content-type']).includes('text/event-stream')) { response.destroy(); throw new HttpError(502, 'The provider did not return an SSE stream.'); }
@@ -532,8 +685,10 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // free-tier stream additionally runs through a read-only meter so its real cost is
       // recorded from the bytes that crossed the wire, never from a client-reported number.
       const meter = funding.mode === 'free' || planWorkspace ? createMeter({ promptChars: payload.length }) : null;
-      if (meter) response.pipe(meter).pipe(res); else response.pipe(res);
-      await new Promise((resolve, reject) => { response.on('end', resolve); response.on('error', reject); res.on('close', resolve); });
+      const interceptor = createTruncationInterceptor();
+      const pipedStream = meter ? response.pipe(interceptor).pipe(meter) : response.pipe(interceptor);
+      pipedStream.pipe(res);
+      await new Promise((resolve, reject) => { pipedStream.on('end', resolve); response.on('error', reject); res.on('close', resolve); });
       // Bill even when the visitor navigated away mid-stream: the tokens were still spent.
       if (meter && db) { try { const tokens = meter.total(); const plan = Boolean(planWorkspace); await db.recordUsage(plan ? planWorkspace : workspace, { model: body.model, tier: plan ? 'plan' : 'free', mode: plan ? 'credits' : 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
       return true;

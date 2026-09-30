@@ -140,6 +140,15 @@ describe('streaming provider client', () => {
   it('normalizes native Cohere streaming events', async () => { const events = 'event: content-delta\ndata: {"type":"content-delta","delta":{"message":{"content":{"text":"Cohere text"}}}}\n\nevent: message-end\ndata: {"type":"message-end","delta":{"usage":{"tokens":{"input_tokens":4,"output_tokens":3}}}}\n\n'; vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(events,{headers:{'Content-Type':'text/event-stream'}}))); try { expect(await complete({...message().connection,provider:'cohere'},'s','p',new AbortController().signal)).toEqual({text:'Cohere text',tokens:7,inputTokens:4,outputTokens:3}); } finally { vi.unstubAllGlobals(); } });
   it.each([401,429])('handles HTTP %s without crashing',async status=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('{}',{status})));try{await expect(complete(message().connection,'s','p',new AbortController().signal)).rejects.toBeInstanceOf(ProviderError);}finally{vi.unstubAllGlobals();}});
   it('rejects truncated streams',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',{headers:{'Content-Type':'text/event-stream'}})));try{await expect(complete(message().connection,'s','p',new AbortController().signal)).rejects.toThrow('ended before completion');}finally{vi.unstubAllGlobals();}});
+  it('detects stream_truncated sentinel and sets truncated: true', async () => {
+    const events = 'data: {"choices":[{"delta":{"content":"Hello world"}}]}\n\ndata: {"stream_truncated":true,"finish_reason":"length"}\n\ndata: [DONE]\n\n';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(events, { headers: { 'Content-Type': 'text/event-stream' } })));
+    try {
+      const result = await complete(message().connection, 'system', 'goal', new AbortController().signal);
+      expect(result.text).toBe('Hello world');
+      expect(result.truncated).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('loads models through the same-origin proxy', async () => { const mock=vi.fn().mockResolvedValue(new Response(JSON.stringify({data:[{id:'test-model'},{id:2},{id:'named',label:'Named',free:true}]}))); vi.stubGlobal('fetch',mock); try { expect(await listModels(message().connection,new AbortController().signal)).toEqual([{id:'test-model'},{id:'named',label:'Named',free:true}]);expect(mock.mock.calls[0][0]).toBe('/api/models'); } finally { vi.unstubAllGlobals(); } });
 });
 

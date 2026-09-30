@@ -118,3 +118,89 @@ test('listing repositories needs the visitor’s own token, never the deployment
   const github = createGithub({ env: { GITHUB_TOKEN: 'operator-token' }, fetchImpl: async () => { throw new Error('should not fetch'); } });
   await assert.rejects(github.repos('', 'ws'), /Add a GitHub token/);
 });
+
+test('pullRepo fetches project files from tree and decodes text', async () => {
+  const json = (status, data) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+  const github = createGithub({ env: {}, fetchImpl: async (url, init) => {
+    const path = url.replace('https://api.github.com', '');
+    if (path === '/repos/acme/project') return json(200, { default_branch: 'main' });
+    if (path === '/repos/acme/project/git/trees/main?recursive=1') {
+      return json(200, {
+        truncated: false,
+        tree: [
+          { path: 'index.html', type: 'blob', size: 25 },
+          { path: 'src/App.tsx', type: 'blob', size: 35 },
+          { path: 'logo.png', type: 'blob', size: 5000 },
+        ],
+      });
+    }
+    if (path === '/repos/acme/project/contents/index.html?ref=main') {
+      return json(200, { path: 'index.html', size: 25, encoding: 'base64', content: Buffer.from('<!DOCTYPE html>').toString('base64') });
+    }
+    if (path === '/repos/acme/project/contents/src/App.tsx?ref=main') {
+      return json(200, { path: 'src/App.tsx', size: 35, encoding: 'base64', content: Buffer.from('export default function App(){}').toString('base64') });
+    }
+    return json(404, { message: `unhandled: ${path}` });
+  } });
+
+  const result = await github.pullRepo({ owner: 'acme', repo: 'project' }, 'tok', 'ws');
+  assert.equal(result.owner, 'acme');
+  assert.equal(result.repo, 'project');
+  assert.equal(result.branch, 'main');
+  assert.equal(result.files.length, 2);
+  assert.equal(result.files[0].path, 'index.html');
+  assert.equal(result.files[0].content, '<!DOCTYPE html>');
+  assert.equal(result.files[1].path, 'src/App.tsx');
+  assert.equal(result.files[1].content, 'export default function App(){}');
+});
+
+test('handler extracts token from X-GitHub-Token and Authorization headers', async () => {
+  let seenToken = '';
+  const json = (status, data) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+  const github = createGithub({ env: { APP_ORIGIN: 'http://localhost:5173' }, fetchImpl: async (url, init) => {
+    seenToken = init?.headers?.Authorization?.replace('Bearer ', '') ?? '';
+    return json(200, [{ full_name: 'acme/repo', default_branch: 'main', permissions: { push: true } }]);
+  } });
+
+  // Test X-GitHub-Token header
+  let resData = null;
+  let resStatus = 0;
+  const mockRes = {
+    writeHead: (s) => { resStatus = s; },
+    end: (d) => { resData = JSON.parse(d); },
+  };
+
+  const req1 = (async function* () {
+    yield Buffer.from(JSON.stringify({ operation: 'repos' }));
+  })();
+  req1.url = '/api/github';
+  req1.method = 'POST';
+  req1.headers = {
+    'content-type': 'application/json',
+    'origin': 'http://localhost:5173',
+    'x-github-token': 'header-pat-123',
+  };
+  req1.socket = { remoteAddress: '127.0.0.1' };
+
+  await github(req1, mockRes);
+  assert.equal(resStatus, 200);
+  assert.equal(seenToken, 'header-pat-123');
+
+  // Test Authorization: Bearer header
+  const req2 = (async function* () {
+    yield Buffer.from(JSON.stringify({ operation: 'repos' }));
+  })();
+  req2.url = '/api/github';
+  req2.method = 'POST';
+  req2.headers = {
+    'content-type': 'application/json',
+    'origin': 'http://localhost:5173',
+    'authorization': 'Bearer bearer-pat-456',
+  };
+  req2.socket = { remoteAddress: '127.0.0.1' };
+
+  await github(req2, mockRes);
+  assert.equal(resStatus, 200);
+  assert.equal(seenToken, 'bearer-pat-456');
+});
+

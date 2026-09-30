@@ -65,35 +65,89 @@ export function parseRepo(value: string): { owner: string; repo: string } | null
   return owner && repo && /^[A-Za-z0-9._-]+$/.test(owner) && /^[A-Za-z0-9._-]+$/.test(repo) ? { owner, repo } : null;
 }
 
-async function post<T>(path: string, body: unknown, signal: AbortSignal, timeoutMs = 30_000): Promise<T> {
+export class GithubConnectorError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'GithubConnectorError';
+    this.status = status;
+  }
+}
+
+/** Format actionable error messages for GitHub operations based on status. */
+export function formatGithubError(status: number, fallbackMessage = ''): string {
+  if (status === 401) {
+    return 'GitHub rejected this token (HTTP 401). Check if your token is expired or revoked, and ensure it has the repo scope.';
+  }
+  if (status === 403) {
+    return fallbackMessage.toLowerCase().includes('rate limit')
+      ? 'GitHub rate limit exceeded (HTTP 403). Add a Personal Access Token in Connectors → GitHub to raise the limit from 60 to 5,000 requests/hour.'
+      : 'GitHub refused the request (HTTP 403). The token lacks write access or required repository scopes.';
+  }
+  if (status === 404) {
+    return 'Repository, branch, or file not found on GitHub (HTTP 404). Check the repository name, branch, and privacy settings.';
+  }
+  if (status === 409) {
+    return 'Conflict (HTTP 409): The remote branch has moved or has conflicting changes. Pull latest changes before pushing.';
+  }
+  if (status === 413) {
+    return 'Payload too large (HTTP 413): The files exceed the maximum allowable bundle size (2 MB or 200 KB per file).';
+  }
+  if (status === 429) {
+    return 'GitHub rate limit exceeded (HTTP 429). Please wait before trying again or configure a Personal Access Token.';
+  }
+  return fallbackMessage || `GitHub request failed (HTTP ${status}).`;
+}
+
+async function post<T>(path: string, body: unknown, signal: AbortSignal, timeoutMs = 30_000, token?: string): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Workspace-Id': workspaceId(),
+  };
+  const cleanToken = token?.trim();
+  if (cleanToken) {
+    headers['X-GitHub-Token'] = cleanToken;
+    headers['Authorization'] = `Bearer ${cleanToken}`;
+  }
   const response = await fetch(path, {
     method: 'POST', credentials: 'same-origin',
     signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
-    headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId() },
+    headers,
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof (data as { error?: { message?: string } })?.error?.message === 'string' ? (data as { error: { message: string } }).error.message : `Request failed (HTTP ${response.status}).`);
+  if (!response.ok) {
+    const rawMsg = typeof (data as { error?: { message?: string } })?.error?.message === 'string'
+      ? (data as { error: { message: string } }).error.message
+      : `Request failed (HTTP ${response.status}).`;
+    throw new GithubConnectorError(response.status, rawMsg);
+  }
   return data as T;
 }
 
 export interface GithubResult { result: Record<string, unknown>; }
 export const callGithub = (operation: string, params: Record<string, unknown>, token: string, signal: AbortSignal) =>
-  post<GithubResult>('/api/github', { operation, params, ...(token ? { token } : {}) }, signal).then(r => r.result);
+  post<GithubResult>('/api/github', { operation, params, ...(token ? { token } : {}) }, signal, 30_000, token).then(r => r.result);
 
 export interface PushResult { commitSha: string; branch: string; url: string; filesPushed: number; /** True when the repository was empty and this commit started its history. */ createdRepoHistory?: boolean; }
 export interface PushParams { owner: string; repo: string; branch?: string; createBranch?: boolean; message: string; files: { path: string; content: string }[]; }
 /** Push a generated project as one commit. Requires the visitor's own token — there is no other kind for a write. */
 export const pushProject = (params: PushParams, token: string, signal: AbortSignal) =>
-  post<{ result: PushResult }>('/api/github', { operation: 'push', params, token }, signal, 60_000).then(r => r.result);
+  post<{ result: PushResult }>('/api/github', { operation: 'push', params, token }, signal, 60_000, token).then(r => r.result);
 
 export interface GithubRepo { fullName: string; defaultBranch: string; private: boolean; canPush: boolean; empty: boolean; }
 /** The visitor's own repositories, most recently pushed first. Needs their token; there is no anonymous listing. */
 export const listRepos = (token: string, signal: AbortSignal) =>
-  post<{ result: { repos: GithubRepo[] } }>('/api/github', { operation: 'repos', token }, signal).then(r => r.result.repos);
+  post<{ result: { repos: GithubRepo[] } }>('/api/github', { operation: 'repos', token }, signal, 30_000, token).then(r => r.result.repos);
 /** A repository's default branch, to prefill the push dialog. */
 export const repoDefaultBranch = (owner: string, repo: string, token: string, signal: AbortSignal) =>
-  post<{ result: { defaultBranch: string } }>('/api/github', { operation: 'repo_info', params: { owner, repo }, ...(token ? { token } : {}) }, signal).then(r => r.result.defaultBranch);
+  post<{ result: { defaultBranch: string } }>('/api/github', { operation: 'repo_info', params: { owner, repo }, ...(token ? { token } : {}) }, signal, 20_000, token).then(r => r.result.defaultBranch);
+
+export interface PullRepoResult { owner: string; repo: string; branch: string; files: { path: string; content: string }[]; truncated?: boolean; }
+export interface PullRepoParams { owner: string; repo: string; branch?: string; }
+/** Pull an entire repository branch into a project bundle. */
+export const pullRepo = (params: PullRepoParams, token: string, signal: AbortSignal) =>
+  post<{ result: PullRepoResult }>('/api/github', { operation: 'pull_repo', params, ...(token ? { token } : {}) }, signal, 60_000, token).then(r => r.result);
 
 /**
  * A commit message written from what is being committed: a subject naming the request (or the

@@ -2,7 +2,17 @@ import { workspaceId } from './store';
 import { providers } from './providers';
 import { localEndpointError, normalizeLocalEndpoint } from './pipes';
 import type { Completion, Connection } from './types';
-export class ProviderError extends Error { constructor(message: string, public retryable = false, public status?: number, public code?: string) { super(message); } }
+export class ProviderError extends Error {
+  constructor(
+    message: string,
+    public retryable = false,
+    public status?: number,
+    public code?: string,
+    public fallbackModel?: string
+  ) {
+    super(message);
+  }
+}
 export function validateEndpoint(value: string): string {
   let url: URL; try { url = new URL(value); } catch { throw new Error('Enter a valid API base URL.'); }
   if (url.username || url.password || url.search || url.hash) throw new Error('Use a URL without credentials, queries, or fragments.');
@@ -47,12 +57,14 @@ async function checkResponse(response: Response): Promise<void> {
   if (response.ok) return;
   let message = response.status === 401 || response.status === 403 ? 'Invalid API key or insufficient permissions.' : response.status === 429 ? 'Rate limit reached. Wait and retry.' : `Provider request failed (HTTP ${response.status}).`;
   let code: string | undefined;
+  let fallbackModel: string | undefined;
   try {
     const data = await response.json();
     if (typeof data?.error?.message === 'string') message = data.error.message.slice(0, 400);
     if (typeof data?.error?.code === 'string') code = data.error.code;
+    if (typeof data?.error?.fallback_model === 'string') fallbackModel = data.error.fallback_model;
   } catch { /* no JSON error body */ }
-  throw new ProviderError(message, response.status === 429 || response.status >= 500, response.status, code);
+  throw new ProviderError(message, response.status === 429 || response.status >= 500, response.status, code, fallbackModel);
 }
 export async function complete(c: Connection, system: string, prompt: string, signal: AbortSignal, onDelta?: (text: string) => void, images: string[] = []): Promise<Completion> {
   const userContent = images.length ? [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))] : prompt;
@@ -66,12 +78,16 @@ export async function complete(c: Connection, system: string, prompt: string, si
       : await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), model: c.model, messages, max_tokens: c.maxTokens }) });
     await checkResponse(response);
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new ProviderError('Expected a streaming SSE response from /api/chat.');
-    let text = ''; let tokens = 0; let inputTokens = 0; let outputTokens = 0; let split = false; let finished = false;
+    let text = ''; let tokens = 0; let inputTokens = 0; let outputTokens = 0; let split = false; let finished = false; let truncated = false;
     for await (const event of sseEvents(response.body)) {
       signal.throwIfAborted();
       if (event.data === '[DONE]') { finished = true; break; }
       let data; try { data = JSON.parse(event.data); } catch { throw new ProviderError('Malformed provider stream.'); }
       if (event.event === 'error' || data.error) throw new ProviderError('Provider reported a streaming error. Check your model, key, and quota.');
+      if (data.stream_truncated === true || data.choices?.[0]?.finish_reason === 'length') {
+        truncated = true;
+        finished = true;
+      }
       // Three stream shapes reach here, and they are normalized in this one place rather than
       // rewritten by the proxy mid-flight: OpenAI-compatible (OpenRouter, Groq, OpenAI, Gemini,
       // xKiro, custom), native Cohere v2, and native Anthropic. Anthropic also never sends
@@ -92,7 +108,7 @@ export async function complete(c: Connection, system: string, prompt: string, si
     }
     if (!finished) throw new ProviderError('Provider stream ended before completion. Retry the run.');
     if (!text.trim()) throw new ProviderError('The model returned no text. Try a different model or increase the output limit.');
-    return { text, tokens: Math.max(0, tokens), ...(split ? { inputTokens: Math.max(0, inputTokens), outputTokens: Math.max(0, outputTokens) } : {}) };
+    return { text, tokens: Math.max(0, tokens), ...(split ? { inputTokens: Math.max(0, inputTokens), outputTokens: Math.max(0, outputTokens) } : {}), ...(truncated ? { truncated: true } : {}) };
   } catch (e) {
     if (signal.aborted) throw signal.reason;
     if (timeout.aborted) throw new ProviderError('Provider request timed out.', true);
@@ -100,17 +116,29 @@ export async function complete(c: Connection, system: string, prompt: string, si
     throw new ProviderError('Cannot reach /api/chat. Deploy the included server, then check the provider connection.');
   }
 }
-/** One model as the provider lists it: the id to send, a label where the provider gave one, and whether it calls the model free. */
-export interface DiscoveredModel { id: string; label?: string; free?: boolean; }
+/** One model as the provider lists it: the id to send, a label where the provider gave one, whether it calls the model free, and its verification section. */
+export interface DiscoveredModel {
+  id: string;
+  label?: string;
+  free?: boolean;
+  verified?: boolean;
+  section?: 'ready' | 'extended';
+}
 export async function listModels(c: Connection, signal: AbortSignal): Promise<DiscoveredModel[]> {
   if (isDirect(c)) { const problem = localEndpointError(c.endpoint); if (problem) throw new ProviderError(problem); }
   const response = isDirect(c)
     ? await fetch(`${directBase(c)}/models`, { method: 'GET', signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) }).catch(e => { if (signal.aborted) throw e; throw directUnreachable(c); })
-    : await fetch('/api/models', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: apiHeaders(), body: JSON.stringify(requestBody(c)) });
+    : await fetch('/api/models', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), differentiate: true }) });
   await checkResponse(response); const body = await response.json();
   if (!Array.isArray(body.data)) throw new ProviderError('Unsupported model catalog. You can still type a model ID.');
   return (body.data as unknown[])
-    .filter((m): m is { id: string; label?: unknown; free?: unknown } => Boolean(m) && typeof (m as { id?: unknown }).id === 'string' && (m as { id: string }).id.length <= 200)
-    .map(m => ({ id: m.id, ...(typeof m.label === 'string' && m.label.trim() ? { label: m.label.slice(0, 80) } : {}), ...(m.free === true ? { free: true } : {}) }))
+    .filter((m): m is { id: string; label?: unknown; free?: unknown; verified?: unknown; section?: 'ready' | 'extended' } => Boolean(m) && typeof (m as { id?: unknown }).id === 'string' && (m as { id: string }).id.length <= 200)
+    .map(m => ({
+      id: m.id,
+      ...(typeof m.label === 'string' && m.label.trim() ? { label: m.label.slice(0, 80) } : {}),
+      ...(m.free === true ? { free: true } : {}),
+      ...(typeof m.verified === 'boolean' ? { verified: m.verified } : {}),
+      ...(m.section === 'ready' || m.section === 'extended' ? { section: m.section } : {}),
+    }))
     .slice(0, 2000);
 }

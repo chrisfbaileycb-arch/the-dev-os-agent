@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { Download, FileText, LoaderCircle, Plug, Search, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
-import { callGithub, parseRepo, repoDefaultBranch, type GithubSettings } from '../lib/connectors';
+import { callGithub, formatGithubError, GithubConnectorError, parseRepo, pullRepo, repoDefaultBranch, type GithubSettings } from '../lib/connectors';
 import { loadSyncSettings } from '../lib/githubSync';
 import { useDismiss } from './useDismiss';
+import type { SyncToast } from './GithubSyncDrawer';
 
 // "Pull from GitHub", opened from the folder button in the prompt dock.
 //
@@ -23,6 +24,8 @@ export interface GithubPullDialogProps {
   addFiles: (files: File[]) => void;
   openConnectors: () => void;
   notify: (message: string) => void;
+  notifyToast?: (toast: SyncToast) => void;
+  onImportProject?: (project: { owner: string; repo: string; branch: string; files: { path: string; content: string }[] }) => void;
 }
 
 const MAX_LISTED = 200;
@@ -54,7 +57,13 @@ export default function GithubPullDialog(p: GithubPullDialogProps) {
       if (!branch.trim()) setBranch(ref);
       const tree = await callGithub('tree', { owner: target.owner, repo: target.repo, ref }, token, AbortSignal.timeout(30_000)) as { truncated: boolean; files: { path: string; size: number }[] };
       setFiles(tree.files); setTruncated(tree.truncated);
-    } catch (e) { setFiles(null); setError(e instanceof Error ? e.message : 'Could not list that repository.'); }
+    } catch (e) {
+      setFiles(null);
+      const status = e instanceof GithubConnectorError ? e.status : undefined;
+      const msg = status ? formatGithubError(status, e instanceof Error ? e.message : '') : (e instanceof Error ? e.message : 'Could not list that repository.');
+      setError(msg);
+      if (p.notifyToast) p.notifyToast({ tone: 'error', title: status ? `${status} · ` : 'GitHub · ', message: msg });
+    }
     finally { setBusy(null); }
   }
 
@@ -64,10 +73,55 @@ export default function GithubPullDialog(p: GithubPullDialogProps) {
     try {
       const file = await callGithub('file', { owner: target.owner, repo: target.repo, path, ref: branch.trim() || undefined }, token, AbortSignal.timeout(30_000)) as { path: string; text: string };
       p.addFiles([new File([file.text], file.path.replace(/^.*\//, ''), { type: 'text/plain' })]);
-      p.notify(`Pulled ${file.path} from ${target.owner}/${target.repo} into your message.`);
+      const msg = `Pulled ${file.path} from ${target.owner}/${target.repo} into your message.`;
+      p.notify(msg);
+      if (p.notifyToast) p.notifyToast({ tone: 'success', title: 'File Pulled · ', message: msg });
       p.close();
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not read that file.'); }
+    } catch (e) {
+      const status = e instanceof GithubConnectorError ? e.status : undefined;
+      const msg = status ? formatGithubError(status, e instanceof Error ? e.message : '') : (e instanceof Error ? e.message : 'Could not read that file.');
+      setError(msg);
+      if (p.notifyToast) p.notifyToast({ tone: 'error', title: status ? `${status} · ` : 'Pull failed · ', message: msg });
+    }
     finally { setBusy(null); }
+  }
+
+  async function importToWorkspace() {
+    if (!target) { setError('Name the repository as owner/name, for example octocat/hello-world.'); return; }
+    setBusy('import'); setError('');
+    try {
+      const ref = branch.trim() || undefined;
+      const result = await pullRepo({ owner: target.owner, repo: target.repo, branch: ref }, token, AbortSignal.timeout(60_000));
+      if (!result.files.length) {
+        throw new Error(`No readable text or code files found in ${target.owner}/${target.repo}.`);
+      }
+      if (p.onImportProject) {
+        p.onImportProject(result);
+      }
+      const msg = `Imported ${target.owner}/${target.repo} (${result.files.length} file${result.files.length === 1 ? '' : 's'}) on branch ${result.branch}.`;
+      p.notify(msg);
+      if (p.notifyToast) {
+        p.notifyToast({
+          tone: 'success',
+          title: 'Imported to Workspace · ',
+          message: msg,
+        });
+      }
+      p.close();
+    } catch (e) {
+      const status = e instanceof GithubConnectorError ? e.status : undefined;
+      const msg = status ? formatGithubError(status, e instanceof Error ? e.message : '') : (e instanceof Error ? e.message : 'Could not import that repository.');
+      setError(msg);
+      if (p.notifyToast) {
+        p.notifyToast({
+          tone: 'error',
+          title: status ? `${status} Error · ` : 'Import failed · ',
+          message: msg,
+        });
+      }
+    } finally {
+      setBusy(null);
+    }
   }
 
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) p.close(); }}>
@@ -84,6 +138,7 @@ export default function GithubPullDialog(p: GithubPullDialogProps) {
       </div>
       <div className="row gap">
         <button className="button primary small" disabled={!repo.trim() || busy !== null} onClick={() => void list()}>{busy === 'list' ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Browse files</button>
+        <button className="button small" disabled={!repo.trim() || busy !== null} onClick={() => void importToWorkspace()} title="Pull this repository and open it as an active project in the canvas">{busy === 'import' ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />}Import to Workspace</button>
         {!token && <button className="text-button" onClick={() => { p.close(); p.openConnectors(); }}><Plug size={11} /> Add a token for private repos</button>}
       </div>
       {error && <p className="msg-error" role="alert">{error}</p>}

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CircleAlert, ExternalLink, GitBranch, LoaderCircle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
-import { commitMessageFor, listRepos, parseRepo, pushProject, repoDefaultBranch, type GithubRepo, type GithubSettings } from '../lib/connectors';
+import { commitMessageFor, formatGithubError, GithubConnectorError, listRepos, parseRepo, pushProject, repoDefaultBranch, type GithubRepo, type GithubSettings } from '../lib/connectors';
 import { sanitizeFiles } from '../lib/secrets';
 import type { ProjectFile } from '../lib/project';
 import { useDismiss } from './useDismiss';
+import type { SyncToast } from './GithubSyncDrawer';
 
 // Push to GitHub: every generated file, one commit, straight from the workspace.
 //
@@ -32,6 +33,8 @@ export interface PushToGithubProps {
   secrets: string[];
   /** The request that produced these files, for the commit subject. */
   request?: string;
+  /** Structured toast feedback. */
+  notifyToast?: (toast: SyncToast) => void;
 }
 
 type Status = { kind: 'idle' } | { kind: 'busy' } | { kind: 'error'; message: string } | { kind: 'done'; url: string; branch: string; filesPushed: number; firstCommit: boolean };
@@ -86,8 +89,12 @@ export default function PushToGithub(p: PushToGithubProps) {
       const list = await listRepos(token.trim(), AbortSignal.timeout(30_000));
       setRepos(list);
       if (!repo && list[0]) setRepo(list[0].fullName);
-    } catch (e) { setStatus({ kind: 'error', message: e instanceof Error ? e.message : 'Could not list your repositories.' }); }
-    finally { setLoadingRepos(false); }
+    } catch (e) {
+      const status = e instanceof GithubConnectorError ? e.status : undefined;
+      const msg = status ? formatGithubError(status, e instanceof Error ? e.message : '') : (e instanceof Error ? e.message : 'Could not list your repositories.');
+      setStatus({ kind: 'error', message: msg });
+      if (p.notifyToast) p.notifyToast({ tone: 'error', title: status ? `${status} · ` : 'GitHub · ', message: msg });
+    } finally { setLoadingRepos(false); }
   }
 
   async function push() {
@@ -101,7 +108,25 @@ export default function PushToGithub(p: PushToGithubProps) {
       const full = `${target.owner}/${target.repo}`;
       p.updateGithub({ token: token.trim(), saveToken: rememberToken, repos: [full, ...p.github.repos.filter(r => r.toLowerCase() !== full.toLowerCase())].slice(0, 10) });
       setStatus({ kind: 'done', url: result.url, branch: result.branch, filesPushed: result.filesPushed, firstCommit: Boolean(result.createdRepoHistory) });
-    } catch (e) { setStatus({ kind: 'error', message: e instanceof Error ? e.message : 'The push failed.' }); }
+      if (p.notifyToast) {
+        p.notifyToast({
+          tone: 'success',
+          title: 'Export to GitHub · ',
+          message: `Committed ${result.filesPushed} file${result.filesPushed === 1 ? '' : 's'} to ${result.branch}${result.createdRepoHistory ? ' (first commit)' : ''}.`,
+        });
+      }
+    } catch (e) {
+      const status = e instanceof GithubConnectorError ? e.status : undefined;
+      const msg = status ? formatGithubError(status, e instanceof Error ? e.message : '') : (e instanceof Error ? e.message : 'The push failed.');
+      setStatus({ kind: 'error', message: msg });
+      if (p.notifyToast) {
+        p.notifyToast({
+          tone: 'error',
+          title: status ? `${status} Error · ` : 'Export failed · ',
+          message: msg,
+        });
+      }
+    }
   }
 
   const toggle = (path: string) => setExcluded(current => { const next = new Set(current); if (next.has(path)) next.delete(path); else next.add(path); return next; });

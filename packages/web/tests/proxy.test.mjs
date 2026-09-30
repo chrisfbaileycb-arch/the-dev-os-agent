@@ -490,3 +490,137 @@ test('free-key providers route to their own fixed homes on the visitor key', asy
   assert.equal(seen.url, 'https://models.github.ai/inference/chat/completions');
   assert.equal(seen.auth, 'Bearer github_pat_visitor');
 });
+
+test('outgoing payloads default to maximum allowable output window (16,384 for gpt-4o, 8,192 for gemini) and honor max_output_tokens', async () => {
+  const { defaultMaxTokens } = await import('../server/proxy.mjs');
+  assert.equal(defaultMaxTokens('openai', 'gpt-4o'), 16384);
+  assert.equal(defaultMaxTokens('openai', 'gpt-4.1-mini'), 16384);
+  assert.equal(defaultMaxTokens('google', 'gemini-2.5-pro'), 8192);
+  assert.equal(defaultMaxTokens('anthropic', 'claude-sonnet-4-5'), 8192);
+
+  let capturedGpt;
+  await withProxy({ env: {}, transport: async (url, options) => { capturedGpt = JSON.parse(options.body); return stream('data: [DONE]\n\n'); } }, async url => {
+    const res = await post(url, { ...base, provider: 'openai', model: 'gpt-4o' });
+    assert.equal(res.status, 200);
+  });
+  assert.equal(capturedGpt.max_tokens, 16384, 'gpt-4o gets 16,384 tokens default');
+
+  let capturedGemini;
+  await withProxy({ env: {}, transport: async (url, options) => { capturedGemini = JSON.parse(options.body); return stream('data: [DONE]\n\n'); } }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-pro' });
+    assert.equal(res.status, 200);
+  });
+  assert.equal(capturedGemini.max_tokens, 8192, 'gemini gets 8,192 tokens default');
+
+  let capturedCustom;
+  await withProxy({ env: {}, transport: async (url, options) => { capturedCustom = JSON.parse(options.body); return stream('data: [DONE]\n\n'); } }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-flash', max_output_tokens: 3000 });
+    assert.equal(res.status, 200);
+  });
+  assert.equal(capturedCustom.max_tokens, 3000, 'max_output_tokens parameter is respected');
+});
+
+test('SSE stream handler appends stream_truncated sentinel event on finish_reason: length', async () => {
+  const truncatedStream = 'data: {"id":"chat-1","choices":[{"delta":{"content":"part"},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n';
+  await withProxy({ env: {}, transport: async () => stream(truncatedStream) }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-pro' });
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.match(body, /"stream_truncated":true/);
+    assert.match(body, /"finish_reason":"length"/);
+    const sentinelIdx = body.indexOf('stream_truncated');
+    const doneIdx = body.indexOf('[DONE]');
+    assert.ok(sentinelIdx !== -1 && sentinelIdx < doneIdx, 'sentinel appears before [DONE]');
+  });
+
+  const anthropicTruncated = 'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
+  await withProxy({ env: {}, transport: async () => stream(anthropicTruncated) }, async url => {
+    const res = await post(url, { ...base, provider: 'anthropic', model: 'claude-sonnet-4-5' });
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.match(body, /"stream_truncated":true/);
+  });
+
+  const normalStream = 'data: {"id":"chat-2","choices":[{"delta":{"content":"complete"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+  await withProxy({ env: {}, transport: async () => stream(normalStream) }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-pro' });
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.ok(!body.includes('stream_truncated'), 'normal stream does not have stream_truncated');
+  });
+});
+
+test('model catalog endpoint differentiates ready vs extended models and supports filtering', async () => {
+  const catalogPayload = JSON.stringify({
+    data: [
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+      { id: 'experimental-unverified-preview-123', name: 'Preview 123' },
+    ]
+  });
+
+  // differentiate: true
+  await withProxy({ env: {}, transport: async () => stream(catalogPayload, 200, 'application/json') }, async url => {
+    const res = await post(url, { ...base, provider: 'google', differentiate: true }, '/api/models');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(Array.isArray(body.ready), 'ready array present');
+    assert.ok(Array.isArray(body.extended), 'extended array present');
+    assert.deepEqual(body.ready.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash']);
+    assert.deepEqual(body.extended.map(m => m.id), ['experimental-unverified-preview-123']);
+    assert.equal(body.ready[0].verified, true);
+    assert.equal(body.ready[0].section, 'ready');
+    assert.equal(body.extended[0].verified, false);
+    assert.equal(body.extended[0].section, 'extended');
+  });
+
+  // filter: 'ready'
+  await withProxy({ env: {}, transport: async () => stream(catalogPayload, 200, 'application/json') }, async url => {
+    const res = await post(url, { ...base, provider: 'google', filter: 'ready' }, '/api/models');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.data.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash']);
+  });
+
+  // filter: 'extended'
+  await withProxy({ env: {}, transport: async () => stream(catalogPayload, 200, 'application/json') }, async url => {
+    const res = await post(url, { ...base, provider: 'google', filter: 'extended' }, '/api/models');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.data.map(m => m.id), ['experimental-unverified-preview-123']);
+  });
+});
+
+test('completion proxy intercepts 503 and 404 for extended catalog models and prompts fallback', async () => {
+  // 503 on extended catalog model triggers structured fallback warning
+  await withProxy({ env: {}, transport: async () => stream('Service Unavailable', 503) }, async url => {
+    const res = await post(url, { ...base, provider: 'openrouter', model: 'community/unverified-model-xyz' });
+    assert.equal(res.status, 503);
+    const data = await res.json();
+    assert.equal(data.error.code, 'model_unavailable');
+    assert.equal(data.error.suggest_fallback, true);
+    assert.equal(data.error.extended_model, 'community/unverified-model-xyz');
+    assert.ok(data.error.fallback_model, 'fallback_model specified');
+    assert.match(data.error.message, /Switch to active default model/);
+  });
+
+  // 404 on extended catalog model triggers structured fallback warning
+  await withProxy({ env: {}, transport: async () => stream('Model Not Found', 404) }, async url => {
+    const res = await post(url, { ...base, provider: 'openrouter', model: 'random/nonexistent-model' });
+    assert.equal(res.status, 404);
+    const data = await res.json();
+    assert.equal(data.error.code, 'model_unavailable');
+    assert.equal(data.error.suggest_fallback, true);
+    assert.equal(data.error.extended_model, 'random/nonexistent-model');
+  });
+
+  // 503 on verified model does NOT intercept as model_unavailable; passes standard error
+  await withProxy({ env: {}, transport: async () => stream('Overloaded', 503) }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-flash' });
+    assert.equal(res.status, 503);
+    const data = await res.json();
+    assert.equal(data.error.code, undefined);
+    assert.equal(data.error.suggest_fallback, undefined);
+    assert.match(data.error.message, /Provider is temporarily unavailable/);
+  });
+});

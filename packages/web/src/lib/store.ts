@@ -8,7 +8,7 @@ import { creditsFor, creditsForUsage, DEFAULT_FREE_POOL, DEFAULT_MONTHLY_POOL, t
 
 export interface Attachment { name: string; chars: number; }
 export interface ToolTrace { tool: string; args: Record<string, unknown>; summary: string; ok: boolean; }
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; at: string; persona?: string; model?: string; tokens?: number; latencyMs?: number; tokensPerSecond?: number; tools?: ToolTrace[]; runId?: string; attachments?: Attachment[]; photos?: { name: string; thumb: string }[]; error?: string; }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; at: string; persona?: string; model?: string; tokens?: number; latencyMs?: number; tokensPerSecond?: number; tools?: ToolTrace[]; runId?: string; attachments?: Attachment[]; photos?: { name: string; thumb: string }[]; error?: string; truncated?: boolean; }
 /** `mode` and `plan` remember how the person was working in this session (see WORK_MODES in lib/roster.ts). */
 export interface Session { id: string; title: string; persona: string; createdAt: string; updatedAt: string; messages: ChatMessage[]; mode?: WorkMode; plan?: Workflow; }
 export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode; tokens: number; credits: number; }

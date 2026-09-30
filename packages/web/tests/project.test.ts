@@ -171,6 +171,12 @@ describe('parseProject', () => {
       expect(result).toMatch(/^<!DOCTYPE html>[\s\S]*<html[\s\S]*<body>[\s\S]*<script>/);
       expect(result).toContain('canvas { display: block; }');
     });
+
+    it('wraps script execution with a DOMContentLoaded and readyState check', () => {
+      const result = wrapScriptDocument('document.getElementById("btn").addEventListener("click", () => {});');
+      expect(result).toContain("document.readyState !== 'loading'");
+      expect(result).toContain("window.addEventListener('DOMContentLoaded'");
+    });
   });
 
   describe('highlightCode', () => {

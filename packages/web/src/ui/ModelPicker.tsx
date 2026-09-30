@@ -3,7 +3,7 @@ import { Check, ChevronDown, CreditCard, KeyRound, LoaderCircle, RefreshCw, Sear
 import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
 import { providers, type Provider } from '../lib/providers';
 import { badgeFor, canPayFor, emptyReason, hasAnyKey, type Reach } from '../lib/availability';
-import { capabilityTier, filterChoices, rankChoices, TIER_LABELS, type ModelChoice } from '../lib/modelChoices';
+import { capabilityTier, filterChoices, isVerifiedOperational, modelChoices, rankChoices, TIER_LABELS, type ModelChoice } from '../lib/modelChoices';
 import { pipeEnabled, type PipeSettings } from '../lib/pipes';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
@@ -86,6 +86,8 @@ export default function ModelPicker(p: ModelPickerProps) {
   const payable = (m: CatalogModel) => canPayFor(m.provider, p.reach);
   const nothingOffered = !p.free.enabled && !hasAnyKey(p.reach) && p.inference !== 'credits' && !p.paid.enabled;
 
+  const [sectionTab, setSectionTab] = useState<'all' | 'ready' | 'extended'>('all');
+
   // Keyed vendors first, in a fixed order, then the rest as previews of what a key would unlock.
   const vendors = useMemo(() => {
     const shownPipe = (id: Provider) => pipeEnabled(id, p.pipes);
@@ -96,12 +98,25 @@ export default function ModelPicker(p: ModelPickerProps) {
       const seeds: ModelChoice[] = catalog.some(m => m.provider === provider)
         ? catalog.filter(m => m.provider === provider).map(m => ({ id: m.id, label: m.label, ...(m.tier === 'byok' ? { free: true } : {}) }))
         : providers[provider].models.map(id => ({ id, label: findModel(id)?.label ?? id }));
-      const models: ModelChoice[] = rankChoices(p.keyed.has(provider) && live && live.models.length ? live.models : seeds);
-      return { provider, models, live: Boolean(p.keyed.has(provider) && live && live.models.length), error: p.keyed.has(provider) ? live?.error : undefined };
+      const rawList = p.keyed.has(provider) && live && live.models.length ? live.models : seeds;
+      const choices = modelChoices(rawList, [], provider);
+      const models: ModelChoice[] = rankChoices(choices);
+      const readyModels = models.filter(m => m.section === 'ready' || m.verified);
+      const extendedModels = models.filter(m => m.section === 'extended' || !m.verified);
+      return {
+        provider,
+        models,
+        readyModels,
+        extendedModels,
+        live: Boolean(p.keyed.has(provider) && live && live.models.length),
+        error: p.keyed.has(provider) ? live?.error : undefined
+      };
     });
   }, [p.keyed, p.discovered, p.pipes]);
 
   const total = freeModels.length + paidModels.length + vendors.reduce((n, v) => n + v.models.length, 0);
+  const readyTotal = freeModels.length + paidModels.length + vendors.reduce((n, v) => n + v.readyModels.length, 0);
+  const extendedTotal = vendors.reduce((n, v) => n + v.extendedModels.length, 0);
   const shown = <T extends ModelChoice>(list: T[]) => filterChoices(list, query);
 
   function chooseVendor(provider: Provider, m: ModelChoice) {
@@ -124,6 +139,29 @@ export default function ModelPicker(p: ModelPickerProps) {
       <small>{tierOf(m)} · {sub}</small>
     </button>;
 
+  function renderVendorGroup(provider: Provider, list: ModelChoice[], live: boolean, error?: string, sectionType: 'ready' | 'extended' = 'ready') {
+    const providerName = providers[provider].name;
+    const unlocked = canPayFor(provider, p.reach);
+    const busy = p.discovering.has(provider);
+    return <div key={`${provider}-${sectionType}`} className="model-group">
+      <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {providers[provider].keyless ? (live ? `· ${list.length.toLocaleString()} installed` : '· local') : unlocked ? (live ? `· ${list.length.toLocaleString()} on your key` : '· key active') : '· bring your key'}
+        {unlocked && <button type="button" className="model-refresh" title={busy ? 'Reading the live list…' : 'Re-read the live model list'} aria-label={`Refresh ${providerName} models`} disabled={busy} onClick={e => { e.stopPropagation(); p.onDiscover(provider); }}>{busy ? <LoaderCircle size={11} className="spin" /> : <RefreshCw size={11} />}</button>}
+      </span>
+      {!unlocked && <small className="model-group-note">Add your {providerName} API key in Settings — the dropdown then lists every model that key reaches.</small>}
+      {unlocked && !live && busy && <small className="model-group-note">{providers[provider].keyless ? 'Reading the models installed on this machine…' : 'Reading what your key reaches…'}</small>}
+      {providers[provider].keyless && !live && !busy && !error && <small className="model-group-note">No local models found yet. Load one in LM Studio (with its server running) or run <code>ollama pull</code>, then refresh.</small>}
+      {unlocked && !live && !busy && error && <small className="model-group-note">Could not read the live list ({error}). Showing a starter set; type any model ID in Settings.</small>}
+      {list.slice(0, VISIBLE_CAP).map(m => {
+        const seed = findModel(m.id);
+        const included = seed && seed.provider === provider ? badgeFor(seed, p.reach) === 'included' : false;
+        const local = Boolean(providers[provider].keyless);
+        const badgeText = local ? 'Local' : included ? 'Included / Free' : m.free ? 'Free on your key' : 'BYOK';
+        return row(m, () => chooseVendor(provider, m), badgeText, local || included || Boolean(m.free), local ? 'runs on this machine' : unlocked ? (p.inference === 'credits' ? 'on your plan' : 'on your key') : `${seed?.weight ?? 3} cr/1K on credits`);
+      })}
+      {list.length > VISIBLE_CAP && <small className="model-group-note">{(list.length - VISIBLE_CAP).toLocaleString()} more — type to narrow the list.</small>}
+    </div>;
+  }
+
   return <div className="model-picker" ref={root}>
     <button type="button" className={open ? 'chip-button model-trigger open' : 'chip-button model-trigger'} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title="Choose a model">
       {p.inference === 'free' ? <Sparkles size={13} strokeWidth={1.75} /> : p.inference === 'credits' ? <Wallet size={13} strokeWidth={1.75} /> : <KeyRound size={13} strokeWidth={1.75} />}
@@ -134,44 +172,58 @@ export default function ModelPicker(p: ModelPickerProps) {
     {open && <div className="model-menu" role="listbox" aria-label="Model">
       {total > 8 && <label className="model-search"><Search size={12} /><input ref={search} type="search" value={query} placeholder={`Filter ${total.toLocaleString()} models…`} aria-label="Filter models" onChange={e => setQuery(e.target.value)} /></label>}
 
-      <div className="model-group">
-        <span className="model-group-label"><Sparkles size={11} strokeWidth={2} />Free · no key needed</span>
-        {p.free.enabled
-          ? <small className="model-group-note">{freeModels.length} model{freeModels.length === 1 ? '' : 's'} this deployment funds · {p.free.monthlyCredits.toLocaleString()} credits a month, then bring your own key.</small>
-          : <small className="model-group-note">{emptyReason(p.reach)}</small>}
-        {shown(freeModels).map(m => row(m, () => { setOpen(false); p.onPick(m.id, 'free', p.free.providers[m.id] as Provider | undefined); }, 'Included / Free', true, `${p.free.providers[m.id] ?? 'this deployment'} · runs with nothing entered`))}
-      </div>
-
-      {(p.paid.enabled || p.paid.configured) && paidModels.length > 0 && <div className="model-group">
-        <span className="model-group-label"><CreditCard size={11} strokeWidth={2} />Paid plan {p.reach.credits ? '· plan active' : p.paid.enabled ? '· needs your plan token' : '· opening soon'}</span>
-        <small className="model-group-note">{p.reach.credits ? 'Runs on this deployment’s keys and draws from your plan allowance.' : p.paid.enabled ? 'Subscribers run these on this deployment’s keys. Paste your plan access token in Settings.' : 'The operator has listed these for the paid plan; checkout is not open yet.'}</small>
-        {shown(paidModels).map(m => row(m, () => choosePlan(m), 'Plan', p.reach.credits, p.reach.credits ? 'on your plan' : 'needs a plan'))}
+      {total > 12 && <div className="model-tabs" role="tablist" aria-label="Catalog Sections">
+        <button type="button" role="tab" aria-selected={sectionTab === 'all'} className={sectionTab === 'all' ? 'model-tab active' : 'model-tab'} onClick={() => setSectionTab('all')}>All ({total.toLocaleString()})</button>
+        <button type="button" role="tab" aria-selected={sectionTab === 'ready'} className={sectionTab === 'ready' ? 'model-tab active' : 'model-tab'} onClick={() => setSectionTab('ready')}>Ready to Run ({readyTotal.toLocaleString()})</button>
+        <button type="button" role="tab" aria-selected={sectionTab === 'extended'} className={sectionTab === 'extended' ? 'model-tab active' : 'model-tab'} onClick={() => setSectionTab('extended')}>Extended Catalog ({extendedTotal.toLocaleString()})</button>
       </div>}
 
-      {vendors.map(({ provider, models, live, error }) => {
-        const providerName = providers[provider].name;
-        const unlocked = canPayFor(provider, p.reach);
-        const busy = p.discovering.has(provider);
-        const list = shown(models);
-        if (query && !list.length) return null;
-        return <div key={provider} className="model-group">
-          <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {providers[provider].keyless ? (live ? `· ${models.length.toLocaleString()} installed` : '· local') : unlocked ? (live ? `· ${models.length.toLocaleString()} on your key` : '· key active') : '· bring your key'}
-            {unlocked && <button type="button" className="model-refresh" title={busy ? 'Reading the live list…' : 'Re-read the live model list'} aria-label={`Refresh ${providerName} models`} disabled={busy} onClick={e => { e.stopPropagation(); p.onDiscover(provider); }}>{busy ? <LoaderCircle size={11} className="spin" /> : <RefreshCw size={11} />}</button>}
-          </span>
-          {!unlocked && <small className="model-group-note">Add your {providerName} API key in Settings — the dropdown then lists every model that key reaches.</small>}
-          {unlocked && !live && busy && <small className="model-group-note">{providers[provider].keyless ? 'Reading the models installed on this machine…' : 'Reading what your key reaches…'}</small>}
-          {providers[provider].keyless && !live && !busy && !error && <small className="model-group-note">No local models found yet. Load one in LM Studio (with its server running) or run <code>ollama pull</code>, then refresh.</small>}
-          {unlocked && !live && !busy && error && <small className="model-group-note">Could not read the live list ({error}). Showing a starter set; type any model ID in Settings.</small>}
-          {list.slice(0, VISIBLE_CAP).map(m => {
-            const seed = findModel(m.id);
-            const included = seed && seed.provider === provider ? badgeFor(seed, p.reach) === 'included' : false;
-            const local = Boolean(providers[provider].keyless);
-            const badgeText = local ? 'Local' : included ? 'Included / Free' : m.free ? 'Free on your key' : 'BYOK';
-            return row(m, () => chooseVendor(provider, m), badgeText, local || included || Boolean(m.free), local ? 'runs on this machine' : unlocked ? (p.inference === 'credits' ? 'on your plan' : 'on your key') : `${seed?.weight ?? 3} cr/1K on credits`);
+      {(sectionTab === 'all' || sectionTab === 'ready') && (
+        <div className="model-section ready-section">
+          <div className="model-section-header">
+            <span className="model-section-title"><Sparkles size={11} strokeWidth={2} /> Ready to Run</span>
+            <em className="section-badge ready">Verified Active</em>
+          </div>
+
+          <div className="model-group">
+            <span className="model-group-label"><Sparkles size={11} strokeWidth={2} />Free · no key needed</span>
+            {p.free.enabled
+              ? <small className="model-group-note">{freeModels.length} model{freeModels.length === 1 ? '' : 's'} this deployment funds · {p.free.monthlyCredits.toLocaleString()} credits a month, then bring your own key.</small>
+              : <small className="model-group-note">{emptyReason(p.reach)}</small>}
+            {shown(freeModels).map(m => row(m, () => { setOpen(false); p.onPick(m.id, 'free', p.free.providers[m.id] as Provider | undefined); }, 'Included / Free', true, `${p.free.providers[m.id] ?? 'this deployment'} · runs with nothing entered`))}
+          </div>
+
+          {(p.paid.enabled || p.paid.configured) && paidModels.length > 0 && <div className="model-group">
+            <span className="model-group-label"><CreditCard size={11} strokeWidth={2} />Paid plan {p.reach.credits ? '· plan active' : p.paid.enabled ? '· needs your plan token' : '· opening soon'}</span>
+            <small className="model-group-note">{p.reach.credits ? 'Runs on this deployment’s keys and draws from your plan allowance.' : p.paid.enabled ? 'Subscribers run these on this deployment’s keys. Paste your plan access token in Settings.' : 'The operator has listed these for the paid plan; checkout is not open yet.'}</small>
+            {shown(paidModels).map(m => row(m, () => choosePlan(m), 'Plan', p.reach.credits, p.reach.credits ? 'on your plan' : 'needs a plan'))}
+          </div>}
+
+          {vendors.map(({ provider, readyModels, live, error }) => {
+            if (!readyModels.length) return null;
+            const list = shown(readyModels);
+            if (query && !list.length) return null;
+            return renderVendorGroup(provider, list, live, error, 'ready');
           })}
-          {list.length > VISIBLE_CAP && <small className="model-group-note">{(list.length - VISIBLE_CAP).toLocaleString()} more — type to narrow the list.</small>}
-        </div>;
-      })}
+        </div>
+      )}
+
+      {(sectionTab === 'all' || sectionTab === 'extended') && extendedTotal > 0 && (
+        <div className="model-section extended-section">
+          <div className="model-section-header">
+            <span className="model-section-title"><KeyRound size={11} strokeWidth={2} /> Extended Catalog</span>
+            <em className="section-badge extended">Extended Listings</em>
+          </div>
+
+          {vendors.map(({ provider, extendedModels, live, error }) => {
+            if (!extendedModels.length) return null;
+            const list = shown(extendedModels);
+            if (query && !list.length) return null;
+            return renderVendorGroup(provider, list, live, error, 'extended');
+          })}
+        </div>
+      )}
+
       {query && total > 0 && !shown(freeModels).length && !shown(paidModels).length && vendors.every(v => !shown(v.models).length) && <small className="model-group-note">Nothing matches “{query}”. You can still type any model ID in Settings.</small>}
       {nothingOffered && <small className="model-group-note">No managed route is available yet. Add a provider key in Settings to continue.</small>}
     </div>}

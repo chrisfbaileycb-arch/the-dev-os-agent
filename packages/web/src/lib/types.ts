@@ -36,4 +36,4 @@ export interface StageModels { plan: string; build: string; verify: string; }
 export type WorkerMessage = StartMessage | { type: 'cancel' } | { type: 'approve' };
 export type WorkerEvent = { type: 'update'; run: Run } | { type: 'done'; run: Run } | { type: 'error'; message: string };
 /** `inputTokens` and `outputTokens` are present only when the provider reported them separately. */
-export interface Completion { text: string; tokens: number; inputTokens?: number; outputTokens?: number; }
+export interface Completion { text: string; tokens: number; inputTokens?: number; outputTokens?: number; truncated?: boolean; }

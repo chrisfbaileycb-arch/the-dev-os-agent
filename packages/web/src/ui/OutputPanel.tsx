@@ -77,7 +77,7 @@ function SandboxFrame({ html, refresh, onRuntime }: { html: string; refresh: num
     ref={frameRef}
     title="Live generated app preview"
     className="output-frame"
-    sandbox="allow-scripts allow-modals allow-forms allow-popups"
+    sandbox="allow-scripts allow-modals allow-forms"
     src="/sandbox.html"
     onLoad={() => frameRef.current?.contentWindow?.postMessage({ html }, '*')}
   />;
@@ -336,7 +336,7 @@ export default function OutputPanel(p: OutputPanelProps) {
           {exportOpen && <div className="toolbar-menu" role="menu">
             <button role="menuitem" onClick={downloadZip}><FileArchive size={13} /><span><strong>Download ZIP</strong><small>{project?.files.length ?? 0} file{project?.files.length === 1 ? '' : 's'}</small></span></button>
             <button role="menuitem" disabled={!selectedFile} onClick={downloadFile}><FileDown size={13} /><span><strong>Download current file</strong><small>{selectedFile}</small></span></button>
-            <button role="menuitem" onClick={() => { setExportOpen(false); setPushOpen(true); }}><GithubMark size={13} /><span><strong>Commit all files to GitHub…</strong><small>Uses Connectors → GitHub</small></span></button>
+            <button role="menuitem" onClick={() => { setExportOpen(false); setPushOpen(true); }}><GithubMark size={13} /><span><strong>Export all files to GitHub…</strong><small>Uses Connectors → GitHub</small></span></button>
           </div>}
         </div>
         <button className="toolbar-button" onClick={() => setSyncOpen(true)} title="Pull or push one file against a GitHub branch"><GithubMark size={12} />GitHub: Sync</button>
@@ -374,6 +374,6 @@ export default function OutputPanel(p: OutputPanelProps) {
       activePath={selectedFile} activeContent={activeCode} applyPulled={applyPulled}
       files={project?.files ?? []} notify={notify} secrets={p.secrets}
     />
-    <PushToGithub open={pushOpen} close={() => setPushOpen(false)} files={project?.files ?? []} github={p.github} updateGithub={p.updateGithub} openConnectors={p.openConnectors} secrets={p.secrets} request={p.request} />
+    <PushToGithub open={pushOpen} close={() => setPushOpen(false)} files={project?.files ?? []} github={p.github} updateGithub={p.updateGithub} openConnectors={p.openConnectors} secrets={p.secrets} request={p.request} notifyToast={notify} />
   </aside>;
 }
