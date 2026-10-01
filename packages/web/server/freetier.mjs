@@ -340,7 +340,25 @@ const STATIC_FREE = [
  * price, which is a stronger claim than any pattern — so they are taken as discovered, and
  * FREE_TIER_ALLOW_FRONTIER no longer has anything to unlock among them.
  */
+/**
+ * Providers headquartered in the United States, for a deployment that must fund only US companies.
+ * Gateways and relays (OpenRouter, Hugging Face, xKiro, CheaperInference, OmniRoute, AIHubMix) are
+ * deliberately absent: they pass other companies' models through, so "US-based" would not hold.
+ * Judged by who hosts and bills the request, not by which lab trained the model.
+ */
+export const US_FREE_PROVIDERS = ['groq', 'cerebras', 'github', 'google'];
+
+/** Whether FREE_TIER_US_ONLY is on. Off by default: turning it on narrows the free pool, so it is a launch-time choice. */
+export const usOnly = (env = process.env) => String(env.FREE_TIER_US_ONLY ?? '').trim().toLowerCase() === 'true';
+
 export function freeModels(env = process.env, discovered = discoveredXkiro, tiers = adminTiers) {
+  const all = allFreeModels(env, discovered, tiers);
+  // Applied to the operator's own entries too: this is a policy for the whole tier, so a dashboard
+  // entry from a non-US provider is dropped rather than quietly funded.
+  return usOnly(env) ? all.filter(m => US_FREE_PROVIDERS.includes(m.provider)) : all;
+}
+
+function allFreeModels(env, discovered, tiers) {
   // The operator's own free list, first: an entry they wrote is theirs to fund, so it carries no
   // FRONTIER guard — the dashboard warns about the cost instead of refusing. In manual mode it is
   // the whole pool.
