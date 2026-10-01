@@ -86,7 +86,7 @@ export default function ModelPicker(p: ModelPickerProps) {
   const payable = (m: CatalogModel) => canPayFor(m.provider, p.reach);
   const nothingOffered = !p.free.enabled && !hasAnyKey(p.reach) && p.inference !== 'credits' && !p.paid.enabled;
 
-  const [sectionTab, setSectionTab] = useState<'all' | 'ready' | 'extended'>('all');
+  const [sectionTab, setSectionTab] = useState<'ready' | 'extended'>('ready');
 
   // Keyed vendors first, in a fixed order, then the rest as previews of what a key would unlock.
   const vendors = useMemo(() => {
@@ -114,9 +114,13 @@ export default function ModelPicker(p: ModelPickerProps) {
     });
   }, [p.keyed, p.discovered, p.pipes]);
 
-  const total = freeModels.length + paidModels.length + vendors.reduce((n, v) => n + v.models.length, 0);
-  const readyTotal = freeModels.length + paidModels.length + vendors.reduce((n, v) => n + v.readyModels.length, 0);
-  const extendedTotal = vendors.reduce((n, v) => n + v.extendedModels.length, 0);
+  // A vendor with no key behind it cannot answer, so it is not offered as a choice: it is named in
+  // one line instead ("add a key to unlock"), rather than listing models that fail on send.
+  const usable = vendors.filter(v => canPayFor(v.provider, p.reach));
+  const locked = vendors.filter(v => !canPayFor(v.provider, p.reach));
+  const total = freeModels.length + paidModels.length + usable.reduce((n, v) => n + v.models.length, 0);
+  const readyTotal = freeModels.length + paidModels.length + usable.reduce((n, v) => n + v.readyModels.length, 0);
+  const extendedTotal = usable.reduce((n, v) => n + v.extendedModels.length, 0);
   const shown = <T extends ModelChoice>(list: T[]) => filterChoices(list, query);
 
   function chooseVendor(provider: Provider, m: ModelChoice) {
@@ -172,13 +176,12 @@ export default function ModelPicker(p: ModelPickerProps) {
     {open && <div className="model-menu" role="listbox" aria-label="Model">
       {total > 8 && <label className="model-search"><Search size={12} /><input ref={search} type="search" value={query} placeholder={`Filter ${total.toLocaleString()} models…`} aria-label="Filter models" onChange={e => setQuery(e.target.value)} /></label>}
 
-      {total > 12 && <div className="model-tabs" role="tablist" aria-label="Catalog Sections">
-        <button type="button" role="tab" aria-selected={sectionTab === 'all'} className={sectionTab === 'all' ? 'model-tab active' : 'model-tab'} onClick={() => setSectionTab('all')}>All ({total.toLocaleString()})</button>
-        <button type="button" role="tab" aria-selected={sectionTab === 'ready'} className={sectionTab === 'ready' ? 'model-tab active' : 'model-tab'} onClick={() => setSectionTab('ready')}>Ready to Run ({readyTotal.toLocaleString()})</button>
-        <button type="button" role="tab" aria-selected={sectionTab === 'extended'} className={sectionTab === 'extended' ? 'model-tab active' : 'model-tab'} onClick={() => setSectionTab('extended')}>Extended Catalog ({extendedTotal.toLocaleString()})</button>
+      {extendedTotal > 0 && <div className="model-tabs" role="tablist" aria-label="Catalog Sections">
+        <button type="button" role="tab" aria-selected={sectionTab === 'ready'} className={sectionTab === 'ready' ? 'model-tab active' : 'model-tab'} onClick={() => setSectionTab('ready')}>Ready to run ({readyTotal.toLocaleString()})</button>
+        <button type="button" role="tab" aria-selected={sectionTab === 'extended'} className={sectionTab === 'extended' ? 'model-tab active' : 'model-tab'} onClick={() => setSectionTab('extended')}>More, untested ({extendedTotal.toLocaleString()})</button>
       </div>}
 
-      {(sectionTab === 'all' || sectionTab === 'ready') && (
+      {sectionTab === 'ready' && (
         <div className="model-section ready-section">
           <div className="model-section-header">
             <span className="model-section-title"><Sparkles size={11} strokeWidth={2} /> Ready to Run</span>
@@ -199,23 +202,24 @@ export default function ModelPicker(p: ModelPickerProps) {
             {shown(paidModels).map(m => row(m, () => choosePlan(m), 'Plan', p.reach.credits, p.reach.credits ? 'on your plan' : 'needs a plan'))}
           </div>}
 
-          {vendors.map(({ provider, readyModels, live, error }) => {
+          {usable.map(({ provider, readyModels, live, error }) => {
             if (!readyModels.length) return null;
             const list = shown(readyModels);
             if (query && !list.length) return null;
             return renderVendorGroup(provider, list, live, error, 'ready');
           })}
+          {!query && locked.length > 0 && <small className="model-group-note">Add a key in Settings to unlock: {locked.map(v => providers[v.provider].name).join(', ')}.</small>}
         </div>
       )}
 
-      {(sectionTab === 'all' || sectionTab === 'extended') && extendedTotal > 0 && (
+      {sectionTab === 'extended' && extendedTotal > 0 && (
         <div className="model-section extended-section">
           <div className="model-section-header">
             <span className="model-section-title"><KeyRound size={11} strokeWidth={2} /> Extended Catalog</span>
             <em className="section-badge extended">Extended Listings</em>
           </div>
 
-          {vendors.map(({ provider, extendedModels, live, error }) => {
+          {usable.map(({ provider, extendedModels, live, error }) => {
             if (!extendedModels.length) return null;
             const list = shown(extendedModels);
             if (query && !list.length) return null;
@@ -224,7 +228,7 @@ export default function ModelPicker(p: ModelPickerProps) {
         </div>
       )}
 
-      {query && total > 0 && !shown(freeModels).length && !shown(paidModels).length && vendors.every(v => !shown(v.models).length) && <small className="model-group-note">Nothing matches “{query}”. You can still type any model ID in Settings.</small>}
+      {query && total > 0 && !shown(freeModels).length && !shown(paidModels).length && usable.every(v => !shown(v.models).length) && <small className="model-group-note">Nothing matches “{query}”. You can still type any model ID in Settings.</small>}
       {nothingOffered && <small className="model-group-note">No managed route is available yet. Add a provider key in Settings to continue.</small>}
     </div>}
   </div>;
