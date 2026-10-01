@@ -543,3 +543,18 @@ test('a new X-Workspace-Id header does not buy a fresh month of free credits', a
     });
   } finally { db.close(); }
 });
+
+test('FREE_TIER_US_ONLY funds only US-headquartered providers, and refuses the rest by id too', async () => {
+  const { US_FREE_PROVIDERS, usOnly } = await import('../server/freetier.mjs');
+  const env = { GROQ_API_KEY: 'k', OPENROUTER_API_KEY: 'k', XKIRO_API_KEY: 'k', HF_TOKEN: 'k', FREE_TIER_US_ONLY: 'true' };
+  assert.equal(usOnly(env), true);
+  assert.equal(usOnly({}), false, 'off unless asked for');
+  const pool = freeModels(env, DISCOVERED);
+  assert.ok(pool.length > 0 && pool.every(m => US_FREE_PROVIDERS.includes(m.provider)), JSON.stringify(pool.map(m => m.provider)));
+  // The gate a request passes through refuses a non-US id outright, not just hides it from the list.
+  assert.equal(freeModel('openai/gpt-5.3-codex-spark', env, DISCOVERED), undefined);
+  assert.equal(freeModel('openrouter/auto', env, DISCOVERED), undefined);
+  assert.equal(freeModel('groq/llama-3.3-70b-versatile', env, DISCOVERED)?.provider, 'groq');
+  // Without the switch the mixed pool is unchanged.
+  assert.equal(freeModel('openai/gpt-5.3-codex-spark', { ...env, FREE_TIER_US_ONLY: '' }, DISCOVERED)?.provider, 'xkiro');
+});
