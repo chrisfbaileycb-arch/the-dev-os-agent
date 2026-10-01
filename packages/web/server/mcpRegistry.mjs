@@ -1,6 +1,45 @@
-import { resolve, relative, dirname, extname, join } from 'node:path';
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { publicAddress } from './proxy.mjs';
+
+/**
+ * Every tool below is reachable from `/api/mcp` with no login and no per-workspace ownership
+ * check (see server/mcp.mjs) — the route authenticates the *destination* URL, not the caller.
+ * That is fine for the tools in this file that only return scripted, descriptive text (the
+ * large majority: github, supabase, exa, vercel, render, cloudflare, docker, sentry, stripe,
+ * postman, figma, linear, jira, slack, notion), since nothing real happens. It is not fine for a
+ * tool that touches real state, which is why two kinds of guard live here:
+ *
+ *   - `fs` and `database` are disabled outright. They executed real filesystem and SQL access
+ *     against the server's own process (not a per-workspace sandbox): the database file is the
+ *     one shared sqlite store holding every workspace's sessions, runs and ledger rows, and the
+ *     filesystem root was the server's working directory, i.e. the application's own source.
+ *     Any caller who could reach this endpoint could read another workspace's data or the
+ *     server's files. There is no per-request identity here to scope them to safely, so they are
+ *     refused rather than quietly scoped wrong; wiring them to the signed-in session's own
+ *     workspace is tracked as follow-up work, not done here.
+ *   - `playwright.navigate` and `firecrawl.scrape_url` do a real server-side fetch of a
+ *     caller-supplied URL. Every other outbound path in this codebase resolves the host and
+ *     checks `publicAddress()` before connecting (see proxy.mjs, mcp.mjs's `checkServer`); these
+ *     two did not, which let a caller make the server request its own loopback/internal
+ *     addresses. `assertPublicFetchTarget` below applies the same check here.
+ */
+// Like mcp.mjs's checkServer, this resolves once and checks the result, then lets fetch() resolve
+// again to actually connect — it blocks a URL that already names a private/internal address, but
+// not a DNS-rebinding attack where the name answers differently between the two lookups. Pinning
+// the checked address to the connection (as the custom-provider path in proxy.mjs does, by passing
+// a fixed address through to its transport) would close that gap too; it is not done here so this
+// fix stays the size of the vulnerability it closes, consistent with the rest of this file.
+export async function assertPublicFetchTarget(rawUrl, resolve = dnsLookup) {
+  let url;
+  try { url = new URL(String(rawUrl)); } catch { throw new Error('A valid URL is required.'); }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Only http and https URLs are allowed.');
+  if (url.username || url.password) throw new Error('URLs with credentials are not allowed.');
+  const addresses = await resolve(url.hostname, { all: true }).catch(() => []);
+  if (!addresses.length || addresses.some(a => !publicAddress(a.address))) throw new Error('Private, reserved, or unresolvable destinations are blocked.');
+  return url;
+}
+
+const BUILTIN_DISABLED = 'This built-in tool is disabled: it would run against this deployment\'s own shared storage with no per-workspace ownership check. Connect a real MCP server for this capability instead.';
 
 /**
  * Built-in Registry for the 20 Model Context Protocol (MCP) integrations:
@@ -1018,161 +1057,16 @@ export async function executeBuiltinTool(mcpDef, toolName, args, { authorization
         break;
       }
 
-      case 'fs': {
-        const rootDir = process.cwd();
-        if (toolName === 'read_file') {
-          const filePath = resolve(rootDir, args.path.replace(/^\/+/, ''));
-          if (!filePath.startsWith(rootDir)) throw new Error('Path must stay within workspace.');
-          if (!existsSync(filePath)) throw new Error(`File does not exist: ${args.path}`);
-          const content = readFileSync(filePath, 'utf-8');
-          const lines = content.split('\n');
-          const start = Math.max(1, Number(args.startLine) || 1);
-          const end = args.endLine ? Math.min(lines.length, Number(args.endLine)) : lines.length;
-          const slice = lines.slice(start - 1, end).join('\n');
-          return {
-            content: [{ type: 'text', text: slice }],
-            isError: false
-          };
-        }
-        if (toolName === 'write_file') {
-          const filePath = resolve(rootDir, args.path.replace(/^\/+/, ''));
-          if (!filePath.startsWith(rootDir)) throw new Error('Path must stay within workspace.');
-          if (existsSync(filePath) && !args.overwrite) throw new Error(`File already exists: ${args.path}. Set overwrite=true to replace.`);
-          writeFileSync(filePath, String(args.content), 'utf-8');
-          return {
-            content: [{ type: 'text', text: `Successfully wrote ${args.content.length} characters to ${args.path}` }],
-            isError: false
-          };
-        }
-        if (toolName === 'edit_file') {
-          const filePath = resolve(rootDir, args.path.replace(/^\/+/, ''));
-          if (!filePath.startsWith(rootDir)) throw new Error('Path must stay within workspace.');
-          if (!existsSync(filePath)) throw new Error(`File does not exist: ${args.path}`);
-          const current = readFileSync(filePath, 'utf-8');
-          if (!current.includes(args.target)) throw new Error(`Target substring not found in ${args.path}`);
-          const updated = current.replace(args.target, args.replacement);
-          writeFileSync(filePath, updated, 'utf-8');
-          return {
-            content: [{ type: 'text', text: `Successfully updated ${args.path}` }],
-            isError: false
-          };
-        }
-        if (toolName === 'list_directory') {
-          const targetDir = resolve(rootDir, (args.path || '').replace(/^\/+/, ''));
-          if (!targetDir.startsWith(rootDir)) throw new Error('Path must stay within workspace.');
-          if (!existsSync(targetDir)) throw new Error(`Directory does not exist: ${args.path || '.'}`);
-          const entries = readdirSync(targetDir, { withFileTypes: true });
-          const list = entries.map(e => `${e.isDirectory() ? '[DIR] ' : '      '}${e.name}`).join('\n');
-          return {
-            content: [{ type: 'text', text: list || '(empty directory)' }],
-            isError: false
-          };
-        }
-        if (toolName === 'search_files') {
-          const q = String(args.query).toLowerCase();
-          const results = [];
-          function walk(dir) {
-            if (results.length > 50) return;
-            for (const item of readdirSync(dir, { withFileTypes: true })) {
-              if (item.name === 'node_modules' || item.name === '.git' || item.name === 'dist') continue;
-              const p = join(dir, item.name);
-              if (item.isDirectory()) walk(p);
-              else if (item.isFile() && (item.name.endsWith('.ts') || item.name.endsWith('.tsx') || item.name.endsWith('.mjs') || item.name.endsWith('.json') || item.name.endsWith('.md'))) {
-                try {
-                  const content = readFileSync(p, 'utf-8');
-                  if (content.toLowerCase().includes(q)) {
-                    results.push(relative(rootDir, p));
-                  }
-                } catch { /* skip unreadable */ }
-              }
-            }
-          }
-          walk(rootDir);
-          return {
-            content: [{ type: 'text', text: results.length ? `Found in ${results.length} files:\n${results.join('\n')}` : `No matches found for "${args.query}"` }],
-            isError: false
-          };
-        }
-        break;
-      }
+      case 'fs':
+        throw new Error(BUILTIN_DISABLED);
 
-      case 'database': {
-        const dbPath = process.env.DATA_FILE || resolve(process.cwd(), 'data', 'heybuddy.sqlite');
-        const sqlite = new DatabaseSync(existsSync(dbPath) ? dbPath : ':memory:');
-        if (toolName === 'execute_query') {
-          const q = String(args.query).trim();
-          // Fail-Safe Principle check
-          if (/^drop\s+table/i.test(q) || /^truncate/i.test(q)) {
-            return {
-              content: [{ type: 'text', text: `[Fail-Safe Gate] Destructive query blocked: "${q}". Please review and confirm specific target schema before executing DDL removal.` }],
-              isError: true
-            };
-          }
-          try {
-            if (/^select/i.test(q) || /^explain/i.test(q) || /^pragma/i.test(q)) {
-              const stmt = sqlite.prepare(q);
-              const rows = stmt.all(...(args.params || []));
-              return {
-                content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }],
-                isError: false
-              };
-            } else {
-              const stmt = sqlite.prepare(q);
-              const res = stmt.run(...(args.params || []));
-              return {
-                content: [{ type: 'text', text: `Query executed successfully. Changes: ${res.changes}` }],
-                isError: false
-              };
-            }
-          } finally {
-            if (dbPath !== ':memory:') sqlite.close();
-          }
-        }
-        if (toolName === 'introspect_schema') {
-          try {
-            const tables = sqlite.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-            const schemaReport = tables.map(t => `-- Table: ${t.name}\n${t.sql}`).join('\n\n');
-            return {
-              content: [{ type: 'text', text: schemaReport || 'Database has no user tables yet.' }],
-              isError: false
-            };
-          } finally {
-            if (dbPath !== ':memory:') sqlite.close();
-          }
-        }
-        if (toolName === 'analyze_query_plan') {
-          try {
-            const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${args.query}`).all();
-            return {
-              content: [{ type: 'text', text: `Query Plan Analysis:\n${JSON.stringify(plan, null, 2)}` }],
-              isError: false
-            };
-          } finally {
-            if (dbPath !== ':memory:') sqlite.close();
-          }
-        }
-        if (toolName === 'run_migration') {
-          try {
-            sqlite.exec('BEGIN TRANSACTION');
-            sqlite.exec(args.migrationSql);
-            sqlite.exec('COMMIT');
-            return {
-              content: [{ type: 'text', text: `Migration "${args.name || 'unnamed'}" applied successfully.` }],
-              isError: false
-            };
-          } catch (err) {
-            try { sqlite.exec('ROLLBACK'); } catch { /* ignore */ }
-            throw new Error(`Migration failed and was rolled back: ${err.message}`);
-          } finally {
-            if (dbPath !== ':memory:') sqlite.close();
-          }
-        }
-        break;
-      }
+      case 'database':
+        throw new Error(BUILTIN_DISABLED);
 
       case 'playwright': {
         if (toolName === 'navigate') {
-          const res = await fetch(args.url, { headers: { 'User-Agent': 'SignalForge-Playwright/1.0' }, signal: AbortSignal.timeout(15_000) });
+          const target = await assertPublicFetchTarget(args.url);
+          const res = await fetch(target, { headers: { 'User-Agent': 'SignalForge-Playwright/1.0' }, redirect: 'error', signal: AbortSignal.timeout(15_000) });
           const text = await res.text();
           const title = (text.match(/<title[^>]*>(.*?)<\/title>/i) || [])[1] || '';
           return {
@@ -1272,7 +1166,8 @@ export async function executeBuiltinTool(mcpDef, toolName, args, { authorization
 
       case 'firecrawl': {
         if (toolName === 'scrape_url') {
-          const res = await fetch(args.url, { signal: AbortSignal.timeout(15_000) });
+          const target = await assertPublicFetchTarget(args.url);
+          const res = await fetch(target, { redirect: 'error', signal: AbortSignal.timeout(15_000) });
           const html = await res.text();
           // Clean text extraction
           const title = (html.match(/<title[^>]*>(.*?)<\/title>/i) || [])[1] || args.url;
