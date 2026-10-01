@@ -113,10 +113,11 @@ services:
         value: "40"
       - key: FREE_MAX_OUTPUT_TOKENS
         value: "1024"
-      # "true" limits the free tier to US-headquartered providers (today: Groq; Cerebras, GitHub
-      # Models and Google are accepted but not yet funded from server keys). xKiro, OpenRouter,
-      # Hugging Face and the other relays leave the free pool and stop being fundable. Flip it on
-      # before the site goes public.
+      # "true" limits the free tier to Shield-eligible providers: US companies serving their own
+      # models, US clouds and US inference hosts (see server/providerRegistry.mjs for the list and
+      # why). Relays and gateways (xKiro, OpenRouter, Hugging Face, ...) leave the free pool and
+      # stop being fundable. Today only Groq is funded from a server key. Flip it on before the
+      # site goes public.
       - key: FREE_TIER_US_ONLY
         value: "false"
       # "true" switches the tier off without removing the provider keys.

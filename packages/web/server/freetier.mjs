@@ -12,6 +12,7 @@
 // browser is told the resulting list by /api/providers and renders exactly that, so there is one
 // source of truth and nothing for a UI catalogue to drift away from.
 
+import { shieldProviders } from './providerRegistry.mjs';
 /** Credits per 1,000 tokens. Mirrors CREDIT_WEIGHTS.fast in src/lib/catalog.ts. */
 export const FREE_WEIGHT = 0.5;
 
@@ -341,12 +342,12 @@ const STATIC_FREE = [
  * FREE_TIER_ALLOW_FRONTIER no longer has anything to unlock among them.
  */
 /**
- * Providers headquartered in the United States, for a deployment that must fund only US companies.
- * Gateways and relays (OpenRouter, Hugging Face, xKiro, CheaperInference, OmniRoute, AIHubMix) are
- * deliberately absent: they pass other companies' models through, so "US-based" would not hold.
- * Judged by who hosts and bills the request, not by which lab trained the model.
+ * Providers a US-only deployment may fund: the Shield-eligible ones in the provider registry
+ * (US company serving its own models, a US cloud, or a US inference host). Gateways and relays
+ * are never eligible, since they pass other companies' models through. See providerRegistry.mjs
+ * for the reasoning and the evidence each entry carries.
  */
-export const US_FREE_PROVIDERS = ['groq', 'cerebras', 'github', 'google'];
+export const US_FREE_PROVIDERS = shieldProviders();
 
 /** Whether FREE_TIER_US_ONLY is on. Off by default: turning it on narrows the free pool, so it is a launch-time choice. */
 export const usOnly = (env = process.env) => String(env.FREE_TIER_US_ONLY ?? '').trim().toLowerCase() === 'true';
