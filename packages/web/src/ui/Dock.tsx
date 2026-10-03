@@ -40,7 +40,9 @@ export interface DockProps {
   attachments: Attached[]; photos: Photo[];
   addFiles: (files: File[]) => void; removeAttachment: (name: string) => void; removePhoto: (name: string) => void;
   openConnectors: () => void; connectorCount: number; openGithubPull: () => void;
-  model: string; inference: InferenceMode; free: FreeTier; paid: PaidTier; labels: Record<string, string>; reach: Reach; keyed: Set<Provider>;
+  model: string; provider?: Provider; inference: InferenceMode; free: FreeTier; paid: PaidTier; labels: Record<string, string>; reach: Reach; keyed: Set<Provider>;
+  /** Save (or, with '', forget) a provider key typed into a model dropdown. Browser storage only. */
+  saveProviderKey: (provider: Provider, key: string) => void;
   discovered: Discovered; discovering: Set<Provider>; pipes: PipeSettings;
   pickModel: (id: string, mode?: InferenceMode, provider?: Provider) => void; modelNeedsKey: (model: CatalogModel) => void; modelNeedsPlan: (model: ModelChoice) => void; discover: (provider: Provider) => void;
   busy: boolean; ready: boolean; send: () => void; stop: () => void;
@@ -120,7 +122,8 @@ export default function Dock(p: DockProps) {
           {(Object.keys(workflows) as Workflow[]).map(w => <option key={w} value={w}>{workflows[w].label}</option>)}
         </select><ChevronDown size={12} /></label>}
         {p.workMode !== 'build' && <button className="chip-button" onClick={p.openRoster} title={p.workMode === 'plan' ? 'Choose the agent that leads the plan' : 'Choose an agent'} disabled={p.busy}><PersonaIcon size={13} strokeWidth={1.75} /><span className="chip-label">{p.persona.name}</span><ChevronDown size={12} /></button>}
-        <ModelPicker model={p.model} inference={p.inference} free={p.free} paid={p.paid} labels={p.labels} reach={p.reach} keyed={p.keyed} discovered={p.discovered} discovering={p.discovering} pipes={p.pipes} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} onNeedsPlan={p.modelNeedsPlan} onDiscover={p.discover} />
+        {/* Two dropdowns, one per lane (lib/modelLanes.ts): US models, and everything else on your own key. */}
+        {(['us', 'own'] as const).map(lane => <ModelPicker key={lane} lane={lane} provider={p.provider} onSaveKey={p.saveProviderKey} model={p.model} inference={p.inference} free={p.free} paid={p.paid} labels={p.labels} reach={p.reach} keyed={p.keyed} discovered={p.discovered} discovering={p.discovering} pipes={p.pipes} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} onNeedsPlan={p.modelNeedsPlan} onDiscover={p.discover} />)}
         <button className={p.connectorCount ? 'chip-button live' : 'chip-button'} title="Connectors: GitHub, web, documents, MCP, model providers" onClick={p.openConnectors} disabled={p.busy}><Plug size={13} strokeWidth={1.75} /><span className="chip-label">Connectors</span>{p.connectorCount ? <em>{p.connectorCount}</em> : null}</button>
         <span className="dock-counters" title="Estimated tokens in your message and in the attached context"><em>{p.tokens.draft.toLocaleString()}</em> draft · <em>{p.tokens.context.toLocaleString()}</em> context</span>
       </div>

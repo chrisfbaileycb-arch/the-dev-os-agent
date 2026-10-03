@@ -8,6 +8,9 @@ import { createProxy } from '../server/proxy.mjs';
 import { decrypt, encrypt, decryptAny } from '../server/secrets.mjs';
 import { freeModels, paidTierStatus, setAdminTiers, freeTierStatus } from '../server/freetier.mjs';
 import { normalizeModelList } from '../server/models.mjs';
+import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
+// These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
+setBackendLaneEnforcedForTests(false);
 
 const TOKEN = 'a-long-admin-token-for-tests';
 

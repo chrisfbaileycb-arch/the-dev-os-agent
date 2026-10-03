@@ -268,6 +268,14 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .model-group + .model-group { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px; }
 .model-group-label { display: flex; align-items: center; gap: 5px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 4px 8px 0; }
 .model-group-note { color: var(--muted); font-size: 11px; padding: 0 8px 4px; }
+/* Two dropdowns, one per lane. The one that does not hold the current model is dimmed, not hidden. */
+.model-trigger.idle { color: var(--muted); } .model-trigger.idle:hover { color: var(--ink); }
+.model-lane-head { display: flex; flex-direction: column; gap: 1px; padding: 4px 8px 6px; border-bottom: 1px solid var(--line); margin-bottom: 2px; }
+.model-lane-head strong { font-size: 12px; } .model-lane-head small { color: var(--muted); font-size: 11px; }
+.model-keyrow { display: flex; align-items: center; gap: 6px; padding: 2px 8px; }
+.model-keyrow-name { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 96px; font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-keyrow input { flex: 1; min-width: 0; padding: 4px 7px; font-size: 12px; }
+.model-forget { margin-left: 2px; }
 .model-option { display: flex; flex-direction: column; gap: 1px; align-items: flex-start; text-align: left; padding: 6px 8px; border-radius: var(--radius); color: var(--ink); width: 100%; }
 .model-option:hover { background: var(--panel-2); } .model-option.active { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .model-option strong { display: flex; align-items: center; gap: 5px; font-weight: 600; font-size: 12.5px; }

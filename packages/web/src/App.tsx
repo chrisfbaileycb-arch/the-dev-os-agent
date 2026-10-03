@@ -381,6 +381,19 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     });
     setNotice('');
   }
+  /**
+   * A key typed into a model dropdown. It goes into the keyring and straight into this browser's
+   * storage, for that one provider only, so it is there on the next visit without a trip through
+   * Settings. Saving sends nothing: the key rides only on requests to that provider (listing or
+   * running its models), through the relay. An empty key forgets it. Newly keyed providers have their live model list read by the
+   * effect that watches `keyed`.
+   */
+  function saveProviderKey(provider: Provider, key: string) {
+    const value = key.trim();
+    setKeys(k => ({ ...k, [provider]: value }));
+    saveKeyring({ [provider]: value });
+    setNotice(value ? `${providers[provider].name} key saved in this browser.` : `${providers[provider].name} key removed from this browser.`);
+  }
   function modelNeedsKey(m: CatalogModel) {
     // The ask is made where the visitor is standing. Bouncing them to Settings mid-thought loses
     // the model they just chose; one modal names it, and the button onward carries it with them.
@@ -748,7 +761,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
               openConnectors={() => openConnectors()} connectorCount={connectorCount} openGithubPull={() => setGithubPullOpen(true)}
-              model={connection.model} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
+              model={connection.model} provider={connection.provider} saveProviderKey={saveProviderKey} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
               discovered={discovered} discovering={discovering} pipes={pipes}
               pickModel={pickModel} modelNeedsKey={modelNeedsKey} modelNeedsPlan={setPlanPrompt} discover={id => void discover(id)}
               busy={busy} ready={ready} send={send} stop={stop}

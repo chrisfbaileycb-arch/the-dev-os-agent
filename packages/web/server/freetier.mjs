@@ -12,7 +12,7 @@
 // browser is told the resulting list by /api/providers and renders exactly that, so there is one
 // source of truth and nothing for a UI catalogue to drift away from.
 
-import { shieldProviders } from './providerRegistry.mjs';
+import { isBackendProvider } from './providerRegistry.mjs';
 /** Credits per 1,000 tokens. Mirrors CREDIT_WEIGHTS.fast in src/lib/catalog.ts. */
 export const FREE_WEIGHT = 0.5;
 
@@ -267,7 +267,9 @@ export const PROVIDER_KEY_VARS = {
  * `discoveredXkiro` is: the funding decision is synchronous. server/settings.mjs writes here.
  */
 let adminTiers = { mode: 'auto', free: [], paid: [] };
-const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider) && m.provider !== 'custom'
+// An entry from a provider outside the backend lane is dropped here, so a stored tier list that
+// predates the lane split (or a hand-built request) cannot put a non-US provider back on the card.
+const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider) && isBackendProvider(m.provider)
   ? { id: m.id.trim(), provider: m.provider, envKey: PROVIDER_KEY_VARS[m.provider], ...(typeof m.label === 'string' && m.label.trim() ? { label: m.label.trim().slice(0, 80) } : {}) }
   : null;
 export function setAdminTiers(tiers) {
@@ -342,21 +344,15 @@ const STATIC_FREE = [
  * FREE_TIER_ALLOW_FRONTIER no longer has anything to unlock among them.
  */
 /**
- * Providers a US-only deployment may fund: the Shield-eligible ones in the provider registry
- * (US company serving its own models, a US cloud, or a US inference host). Gateways and relays
- * are never eligible, since they pass other companies' models through. See providerRegistry.mjs
- * for the reasoning and the evidence each entry carries.
+ * What this deployment may fund on its own account is the backend lane in the provider registry
+ * (Anthropic, OpenAI, Google, xAI, plus Meta, Azure and Bedrock once integrated). Everything else —
+ * gateways, relays, other countries, even other US hosts — is reachable only with a key the visitor
+ * brings, in the browser's own-key dropdown. See providerRegistry.mjs.
  */
-export const US_FREE_PROVIDERS = shieldProviders();
-
-/** Whether FREE_TIER_US_ONLY is on. Off by default: turning it on narrows the free pool, so it is a launch-time choice. */
-export const usOnly = (env = process.env) => String(env.FREE_TIER_US_ONLY ?? '').trim().toLowerCase() === 'true';
-
 export function freeModels(env = process.env, discovered = discoveredXkiro, tiers = adminTiers) {
-  const all = allFreeModels(env, discovered, tiers);
-  // Applied to the operator's own entries too: this is a policy for the whole tier, so a dashboard
-  // entry from a non-US provider is dropped rather than quietly funded.
-  return usOnly(env) ? all.filter(m => US_FREE_PROVIDERS.includes(m.provider)) : all;
+  // Not an option: the backend lane is the architecture, not a launch setting. It applies to the
+  // operator's own dashboard entries too, so a non-lane entry is dropped rather than quietly funded.
+  return allFreeModels(env, discovered, tiers).filter(m => isBackendProvider(m.provider));
 }
 
 function allFreeModels(env, discovered, tiers) {
@@ -432,7 +428,7 @@ export function openRouterPool(env = process.env, discovered = discoveredOpenRou
  * would be a locked door with nothing behind it.
  */
 export function paidModels(env = process.env, tiers = adminTiers) {
-  return tiers.paid.filter(m => Boolean(freeKey(m, env).key));
+  return tiers.paid.filter(m => isBackendProvider(m.provider) && Boolean(freeKey(m, env).key));
 }
 export function paidModel(id, env = process.env, tiers = adminTiers) {
   if (typeof id !== 'string') return undefined;

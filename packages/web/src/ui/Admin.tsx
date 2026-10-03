@@ -11,12 +11,14 @@ import { filterChoices, isChatModel, type ModelChoice } from '../lib/modelChoice
 // have taken effect without opening a second tab.
 
 type Source = 'dashboard' | 'environment' | 'none';
-interface ProviderRow { provider: string; name: string; env: string; console: string | null; source: Source; hint: string; count: number; unreadable: boolean; }
+interface ProviderRow { provider: string; name: string; env: string; console: string | null; source: Source; hint: string; count: number; unreadable: boolean; backend?: boolean; }
+/** A US backend provider the registry has decided on but the proxy cannot route to yet. */
+interface PlannedProvider { provider: string; name: string; note: string; }
 interface Tunable { name: string; kind: 'number' | 'boolean' | 'secret'; label: string; source: Source; value: string; unreadable: boolean; }
 interface TierEntry { id: string; provider: string; label?: string; }
 interface Tiers { mode: 'auto' | 'manual'; free: TierEntry[]; paid: TierEntry[]; warnings: string[]; }
 interface Published { free: { enabled: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; monthlyCredits: number; perHour: number }; paid: { enabled: boolean; configured: boolean; models: string[] }; }
-interface Config { persistent: boolean; providers: ProviderRow[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
+interface Config { persistent: boolean; providers: ProviderRow[]; retired: ProviderRow[]; planned: PlannedProvider[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
 interface Status { configured: boolean; authenticated: boolean; persistent: boolean; setup: boolean; source: Source; storage: boolean; }
 
 export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; }
@@ -137,7 +139,7 @@ export default function Admin(p: AdminProps) {
 
     <section className="panel">
       <div className="panel-head"><h2><KeyRound size={15} strokeWidth={1.75} /> Provider keys</h2><span className="pill">{config.providers.filter(r => r.source !== 'none').length} of {config.providers.length} connected</span></div>
-      <p className="help">A key entered here is encrypted before it is stored and is never returned to any browser, this one included. It wins over the same variable in the hosting environment; remove it and the environment value applies again. <strong>Stack several keys</strong> by putting one per line: the free tier rotates across them, so a rate-limited account rolls over to the next instead of failing the visitor, and the count shown beside the key is how many are in the rotation. Keys stack across providers too: every connected provider can fund models in the tiers below.</p>
+      <p className="help"><strong>This dashboard manages the US backend only</strong> — the labs this deployment pays for itself. Visitors reach every other provider (Groq, OpenRouter, Cerebras, GitHub Models, Cohere, Venice and the rest) from the second model dropdown, with a key they type in; that key stays in their own browser and never reaches this page or this server's storage. A key entered here is encrypted before it is stored and is never returned to any browser, this one included. It wins over the same variable in the hosting environment; remove it and the environment value applies again. <strong>Stack several keys</strong> by putting one per line: the free tier rotates across them, so a rate-limited account rolls over to the next instead of failing the visitor, and the count shown beside the key is how many are in the rotation. Keys stack across providers too: every connected provider can fund models in the tiers below.</p>
       <div className="ledger-wrap"><table className="ledger admin-keys"><thead><tr><th>Provider</th><th>Status</th><th>Key</th><th></th></tr></thead><tbody>
         {config.providers.map(r => <tr key={r.provider}>
           <td><strong>{r.name}</strong><br /><small className="mono">{r.env}</small>{r.console && <> · <a href={r.console} target="_blank" rel="noreferrer" className="text-button">get a key <ExternalLink size={10} /></a></>}</td>
@@ -146,13 +148,18 @@ export default function Admin(p: AdminProps) {
           <td className="row gap"><button className="button primary small" disabled={busy || !(drafts[r.provider] ?? '').trim()} onClick={() => saveKey(r.provider)}><Check size={12} />Save</button>{r.source === 'dashboard' && <button className="button small" title="Remove the stored key" aria-label={`Remove ${r.name} key`} disabled={busy} onClick={() => removeKey(r.provider)}><Trash2 size={12} /></button>}</td>
         </tr>)}
       </tbody></table></div>
+      {config.planned.length > 0 && <p className="help"><CircleAlert size={12} /> Decided for the US backend but not routable yet, so there is no key field: {config.planned.map(r => r.name).join('; ')}.</p>}
+      {config.retired.length > 0 && <div className="notice"><TriangleAlert size={13} /><span>
+        Keys stored here before the split, for providers outside the US backend. Nothing is funded from them any more; remove them.
+        {config.retired.map(r => <span key={r.provider} className="row gap"><strong>{r.name}</strong><small className="mono">{r.env}</small><button className="button small" disabled={busy} aria-label={`Remove ${r.name} key`} onClick={() => removeKey(r.provider)}><Trash2 size={12} />Remove</button></span>)}
+      </span></div>}
     </section>
 
     <section className="panel">
       <div className="panel-head"><h2><Sparkles size={15} strokeWidth={1.75} /> Model tiers</h2><span className="row gap">{dirty && <span className="pill warn">Unsaved changes</span>}<button className="button primary small" disabled={busy || !dirty} onClick={saveTiers}><Check size={12} />Save tiers</button></span></div>
       <p className="help"><strong>Free</strong> models run for any visitor with no key, on this deployment's keys, metered against the free allowance. <strong>Paid plan</strong> models run for subscribers who hold the plan access token, on this deployment's keys, against the plan allowance. Everything else stays bring-your-own-key. Load a provider's live list and sort it.</p>
       <div className="mode-picker two">
-        <button className={tiers.mode === 'auto' ? 'mode selected' : 'mode'} aria-pressed={tiers.mode === 'auto'} onClick={() => { setTiers({ ...tiers, mode: 'auto' }); setDirty(true); }}><strong>Automatic + your picks</strong><small>The built-in free pool (gateway free models, Groq and OpenRouter free ids) plus whatever you mark free here.</small></button>
+        <button className={tiers.mode === 'auto' ? 'mode selected' : 'mode'} aria-pressed={tiers.mode === 'auto'} onClick={() => { setTiers({ ...tiers, mode: 'auto' }); setDirty(true); }}><strong>Automatic + your picks</strong><small>Anything a US backend provider reports as free, plus whatever you mark free here. The old gateway and Groq/OpenRouter free pool is gone: those providers are not part of the US backend.</small></button>
         <button className={tiers.mode === 'manual' ? 'mode selected' : 'mode'} aria-pressed={tiers.mode === 'manual'} onClick={() => { setTiers({ ...tiers, mode: 'manual' }); setDirty(true); }}><strong>Only your picks</strong><small>The free tier is exactly the models you mark free. Nothing is added automatically.</small></button>
       </div>
       <div className="tier-summary">

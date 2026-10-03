@@ -8,6 +8,9 @@ import { openDatabase } from '../server/db.mjs';
 import { FREE_MODELS, OMNIROUTE_DEFAULT_BASE, XKIRO_DEFAULT_BASE, createBurstLimiter, creditsForTokens, freeKey, freeKeyPool, freeModel, freeModels, freeTierStatus, fundedModels, isFrontier, omnirouteBase, omniRoutePool, ownerKey, ownerKeyName, resetKeyRotation, rotateFreeKey, routeFreeRequest, setXkiroCatalog, xkiroBase, xkiroCatalog, xkiroPool } from '../server/freetier.mjs';
 import { openSettings } from '../server/settings.mjs';
 import { createMeter, deltaLength, usageFrom } from '../server/meter.mjs';
+import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
+// These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
+setBackendLaneEnforcedForTests(false);
 
 // The free quota is charged to the network address (or a signed-in account), never to a header
 // the browser can change. These tests run over loopback, so that address is the workspace.
@@ -61,7 +64,7 @@ test('the deployment never funds a frontier model from its own key', () => {
     // that variable now intersects with what the gateway reported rather than replacing it.
     assert.equal(freeModel(id, { XKIRO_FREE_MODELS: id, XKIRO_API_KEY: 'k' }, DISCOVERED), undefined, `${id} must not be fundable`);
   }
-  for (const m of FREE_MODELS) assert.equal(isFrontier(m.id), false, `${m.id} is shipped as free`);
+  for (const m of freeModels({ GROQ_API_KEY: 'k', OPENROUTER_API_KEY: 'k', HF_TOKEN: 'k' }, [])) assert.equal(isFrontier(m.id), false, `${m.id} is shipped as free`);
 });
 
 test('a discovered gateway model is funded on its price, not on its name', () => {
@@ -542,19 +545,4 @@ test('a new X-Workspace-Id header does not buy a fresh month of free credits', a
       }
     });
   } finally { db.close(); }
-});
-
-test('FREE_TIER_US_ONLY funds only US-headquartered providers, and refuses the rest by id too', async () => {
-  const { US_FREE_PROVIDERS, usOnly } = await import('../server/freetier.mjs');
-  const env = { GROQ_API_KEY: 'k', OPENROUTER_API_KEY: 'k', XKIRO_API_KEY: 'k', HF_TOKEN: 'k', FREE_TIER_US_ONLY: 'true' };
-  assert.equal(usOnly(env), true);
-  assert.equal(usOnly({}), false, 'off unless asked for');
-  const pool = freeModels(env, DISCOVERED);
-  assert.ok(pool.length > 0 && pool.every(m => US_FREE_PROVIDERS.includes(m.provider)), JSON.stringify(pool.map(m => m.provider)));
-  // The gate a request passes through refuses a non-US id outright, not just hides it from the list.
-  assert.equal(freeModel('openai/gpt-5.3-codex-spark', env, DISCOVERED), undefined);
-  assert.equal(freeModel('openrouter/auto', env, DISCOVERED), undefined);
-  assert.equal(freeModel('groq/llama-3.3-70b-versatile', env, DISCOVERED)?.provider, 'groq');
-  // Without the switch the mixed pool is unchanged.
-  assert.equal(freeModel('openai/gpt-5.3-codex-spark', { ...env, FREE_TIER_US_ONLY: '' }, DISCOVERED)?.provider, 'xkiro');
 });

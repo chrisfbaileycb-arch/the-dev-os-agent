@@ -1,6 +1,7 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { decryptAny, encrypt, isSealed } from './secrets.mjs';
 import { PROVIDER_KEY_VARS, setAdminTiers } from './freetier.mjs';
+import { isBackendProvider } from './providerRegistry.mjs';
 
 // Dashboard-managed deployment settings: provider keys, free-tier knobs, and the model tiers.
 //
@@ -102,7 +103,8 @@ function cleanTierEntry(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
   const provider = typeof raw.provider === 'string' ? raw.provider.trim() : '';
-  if (!id || id.length > 200 || !Object.hasOwn(PROVIDER_KEY_VARS, provider)) return null;
+  // Only the backend lane can hold a tier entry; a non-US provider here is dropped on save and on load.
+  if (!id || id.length > 200 || !Object.hasOwn(PROVIDER_KEY_VARS, provider) || !isBackendProvider(provider)) return null;
   const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim().slice(0, 80) : undefined;
   return label ? { id, provider, label } : { id, provider };
 }
@@ -259,6 +261,7 @@ export async function openSettings({ db, env = process.env, log = console.error 
     unreadable: () => [...unreadable],
     async setKey(provider, value) {
       if (!Object.hasOwn(PROVIDER_KEY_VARS, provider)) throw new Error('Unknown provider.');
+      if (!isBackendProvider(provider)) throw new Error('The dashboard only holds keys for the US backend providers. Other providers are used with a key typed in the browser.');
       // A field may hold a pool (see keyPool), so the header-safe rule is applied per key rather
       // than to the whole block: one pasted key with a stray newline should name itself, not
       // reject the other four alongside it.
@@ -316,7 +319,7 @@ export async function openSettings({ db, env = process.env, log = console.error 
         // the rotation depth they configured without the values ever leaving the server.
         const count = pool.length || (value ? 1 : 0);
         const shape = count > 1 ? `${count} keys` : value ? hint(value) : '';
-        return { provider, name: PROVIDER_META[provider]?.name ?? provider, env: name, console: PROVIDER_META[provider]?.console ?? null, source, hint: shape, count, unreadable: unreadable.has(name) };
+        return { provider, name: PROVIDER_META[provider]?.name ?? provider, env: name, console: PROVIDER_META[provider]?.console ?? null, source, hint: shape, count, unreadable: unreadable.has(name), backend: isBackendProvider(provider) };
       });
     },
     tunableStatus(base = env) {
