@@ -112,7 +112,7 @@ services:
       - key: FREE_MAX_PER_HOUR
         value: "40"
       - key: FREE_MAX_OUTPUT_TOKENS
-        value: "1024"
+        value: "4096"
       # There is no longer a switch for US-only funding: the server funds only the backend lane
       # (Anthropic, OpenAI, Google, xAI, Groq, Cerebras; see server/providerRegistry.mjs). Add those keys, and pick
       # which of their models are free or paid, in the admin dashboard. Every other provider is

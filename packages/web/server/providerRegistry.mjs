@@ -107,6 +107,9 @@ let laneEnforced = true;
  */
 export function setBackendLaneEnforcedForTests(on) { laneEnforced = Boolean(on); }
 
+/** Whether the lane is being enforced (always, outside the funding-mechanics tests). */
+export const isBackendLaneEnforced = () => laneEnforced;
+
 /** Whether the operator's backend may hold a key for, and fund requests to, this provider. */
 export const isBackendProvider = id => !laneEnforced || (BACKEND_IDS.includes(String(id ?? '').toLowerCase()) && isShieldEligible(providerRecord(id)));
 

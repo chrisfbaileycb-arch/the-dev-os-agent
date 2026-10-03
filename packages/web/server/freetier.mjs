@@ -12,7 +12,7 @@
 // browser is told the resulting list by /api/providers and renders exactly that, so there is one
 // source of truth and nothing for a UI catalogue to drift away from.
 
-import { isBackendProvider } from './providerRegistry.mjs';
+import { isBackendLaneEnforced, isBackendProvider } from './providerRegistry.mjs';
 /** Credits per 1,000 tokens. Mirrors CREDIT_WEIGHTS.fast in src/lib/catalog.ts. */
 export const FREE_WEIGHT = 0.5;
 
@@ -367,7 +367,13 @@ function allFreeModels(env, discovered, tiers) {
   // through the rest of the list, so a momentarily rate-limited free model degrades to another
   // free model rather than to a paid one. Its pool is the *live* one, so the fan-out covers every
   // free id discovery found instead of the three this file was born with.
-  const guarded = (env.FREE_TIER_ALLOW_FRONTIER === 'true' ? STATIC_FREE : STATIC_FREE.filter(m => !isFrontier(m.id)))
+  // The built-in Groq and OpenRouter ids are names written into this file, and provider catalogues
+  // outgrow them: Groq now answers 404 for both built-in ids on a live key, which the visitor saw as
+  // "free tier warming up". With the backend lane enforced the operator's dashboard picks, which are
+  // chosen from the provider's own live list, are the only funded models. The built-in pool survives
+  // only for the funding-mechanics tests, which run with the lane off.
+  const builtin = isBackendLaneEnforced() ? [] : STATIC_FREE;
+  const guarded = (env.FREE_TIER_ALLOW_FRONTIER === 'true' ? builtin : builtin.filter(m => !isFrontier(m.id)))
     .map(m => m.pool ? { ...m, pool: liveOpenRouter } : m);
   // HF serverless joins only when the deployment holds a token: without one these ids would
   // advertise as free and answer 503, which is the exact "warming up" lie the status message

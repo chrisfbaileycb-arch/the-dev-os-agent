@@ -36,7 +36,7 @@ export const providers: Record<Provider, ProviderInfo> = {
   // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.
   'cheaper-inference': { name: 'Managed inference', tier: 'Orator managed', endpoint: '', models: [] },
 
-  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', flagship: 'groq/llama-3.3-70b-versatile', models: ['groq/llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'groq/llama-3.1-8b-instant'] },
+  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', flagship: 'openai/gpt-oss-120b', models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'] },
   openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', flagship: 'gpt-4o', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy
   // translates in both directions; from here it is just another provider with a key.

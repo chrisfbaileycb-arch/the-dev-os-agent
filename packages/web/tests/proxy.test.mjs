@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { FREE_TIER_UNAVAILABLE, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, freeOutputCapFor, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
 import { setXkiroCatalog } from '../server/freetier.mjs';
 import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
 // These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
@@ -626,4 +626,17 @@ test('completion proxy intercepts 503 and 404 for extended catalog models and pr
     assert.equal(data.error.suggest_fallback, undefined);
     assert.match(data.error.message, /Provider is temporarily unavailable/);
   });
+});
+
+test('the free-reply cap is the operator\'s number up to the ceiling, with a 4,096 default', () => {
+  assert.equal(freeOutputCapFor({}), 4096, 'unset');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '10000' }), 10000, 'a 10,000 setting is no longer clamped to 4,096');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '999999' }), 65536, 'capped at the ceiling every request is allowed');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '10' }), 64, 'and never below a useful floor');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: 'banana' }), 4096, 'a bad value falls back to the default');
+});
+
+test('a photo sent to a text-only model is explained, not reported as a schema error', () => {
+  assert.match(clientMessage(400, 'messages[1].content must be a string'), /can only read text.*photo/i);
+  assert.doesNotMatch(clientMessage(400, 'messages[1].content must be a string'), /must be a string/);
 });
