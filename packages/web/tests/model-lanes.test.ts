@@ -17,7 +17,7 @@ describe('model lanes', () => {
     const own = providersInLane(all, 'own');
     expect([...us, ...own].sort()).toEqual([...all].sort());
     expect(us.sort()).toEqual([...US_LANE_PROVIDERS].sort());
-    for (const id of ['github', 'openrouter', 'ollama', 'cohere', 'venice', 'xkiro', 'aihubmix', 'huggingface', 'custom'] as Provider[]) {
+    for (const id of ['github', 'vercel', 'openrouter', 'ollama', 'cohere', 'venice', 'xkiro', 'aihubmix', 'huggingface', 'custom'] as Provider[]) {
       expect(isUsProvider(id), id).toBe(false);
       expect(own).toContain(id);
     }

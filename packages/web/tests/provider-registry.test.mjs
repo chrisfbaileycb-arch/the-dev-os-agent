@@ -35,7 +35,7 @@ test('Shield allows US companies and hosts, and refuses relays, other countries,
 
 test('the integrated Shield list is exactly what the proxy can reach today; unbuilt ones wait', () => {
   const live = shieldProviders();
-  assert.deepEqual([...live].sort(), ['anthropic', 'cerebras', 'github', 'google', 'groq', 'openai', 'xai']);
-  for (const id of ['azure', 'bedrock', 'meta']) { assert.equal(isShieldEligible(providerRecord(id)), true); assert.ok(!live.includes(id), `${id} is not integrated yet`); }
-  assert.ok(shieldProviders({ onlyIntegrated: false }).includes('meta'));
+  assert.deepEqual([...live].sort(), ['anthropic', 'cerebras', 'github', 'google', 'groq', 'meta', 'openai', 'xai']);
+  for (const id of ['azure', 'bedrock']) { assert.equal(isShieldEligible(providerRecord(id)), true); assert.ok(!live.includes(id), `${id} is not integrated yet`); }
+  assert.ok(shieldProviders({ onlyIntegrated: false }).includes('azure'));
 });

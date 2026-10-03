@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Check, Coins, CreditCard, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { Check, Coins, CreditCard, ExternalLink, HardDrive, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
 import { flagshipFor, providers, switchProvider, type Keyring, type Provider, DEFAULT_OUTPUT_TOKENS, OUTPUT_LIMITS } from '../lib/providers';
 import { rankChoices, type ModelChoice } from '../lib/modelChoices';
+import { localEndpointError, normalizeLocalEndpoint, type PipeSettings } from '../lib/pipes';
 import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
 import type { Balance, FreeTier, LedgerEntry } from '../lib/store';
 import type { Connection } from '../lib/types';
@@ -24,12 +25,15 @@ export interface SettingsProps {
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
   /** The visitor's colour palette, and the one place it changes (see lib/theme.ts). */
   theme: ThemeChoice; setTheme: (choice: ThemeChoice) => void;
+  /** The local-model switch and address (lib/pipes.ts), which the Local model box below edits. */
+  pipes: PipeSettings; setPipes: (next: PipeSettings) => void;
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
-const BYOK_PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic', 'google', 'github', 'cerebras', 'xai', 'groq', 'cohere', 'venice', 'aihubmix', 'huggingface', 'xkiro'];
+const BYOK_PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic', 'google', 'github', 'cerebras', 'xai', 'groq', 'cohere', 'venice', 'aihubmix', 'huggingface', 'xkiro', 'vercel'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
   openrouter: 'Your OpenRouter key',
+  vercel: 'Your Vercel AI Gateway key',
   openai: 'Your OpenAI key',
   anthropic: 'Your Anthropic key',
   google: 'Your Google AI Studio key',
@@ -173,6 +177,18 @@ export default function Settings(p: SettingsProps) {
             <p className="help">Keys stay in this browser only when you choose Remember. They are not sent to third-party scripts, placed in the app bundle, or returned by the server.</p>
           </>}
           <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={p.save}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={p.forget}><Trash2 size={13} />Forget saved keys</button></div>
+        </section>
+
+        <section className="panel">
+          <h2><HardDrive size={15} strokeWidth={1.75} /> Local model</h2>
+          <p className="help">Run a model on this computer with LM Studio or Ollama and use it here, with no key and no usage limit. Your browser talks to it directly, so the model never leaves your machine. Start the local server first, then switch this on.</p>
+          <label className="check"><input type="checkbox" checked={p.pipes.ollamaEnabled} onChange={e => { p.setPipes({ ...p.pipes, ollamaEnabled: e.target.checked }); if (e.target.checked) p.discover('ollama'); }} />Connect a model running on this computer</label>
+          {p.pipes.ollamaEnabled && <>
+            <label>Address<input value={p.pipes.ollamaUrl} spellCheck={false} aria-invalid={Boolean(localEndpointError(p.pipes.ollamaUrl))} placeholder="http://localhost:1234/v1 (LM Studio) or http://localhost:11434/v1 (Ollama)" onChange={e => p.setPipes({ ...p.pipes, ollamaUrl: e.target.value })} onBlur={e => { if (!localEndpointError(e.target.value)) p.setPipes({ ...p.pipes, ollamaUrl: normalizeLocalEndpoint(e.target.value) }); }} /></label>
+            {localEndpointError(p.pipes.ollamaUrl) && <p className="msg-error" role="alert">{localEndpointError(p.pipes.ollamaUrl)}</p>}
+            <div className="row gap"><button className="button small" disabled={Boolean(localEndpointError(p.pipes.ollamaUrl)) || p.discovering.has('ollama')} onClick={() => p.discover('ollama')}>{p.discovering.has('ollama') ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Check for models</button></div>
+            {p.discovered.ollama?.models.length ? <p className="help">{p.discovered.ollama.models.length.toLocaleString()} local model{p.discovered.ollama.models.length === 1 ? '' : 's'} found. Pick one from the Other providers menu in the chat window.</p> : p.discovered.ollama?.error ? <p className="help" role="alert">Could not reach it: {p.discovered.ollama.error}. Is the local server running?</p> : <p className="help">Nothing found yet. Load a model in LM Studio (with its server running) or run <code>ollama pull</code>, then check again.</p>}
+          </>}
         </section>
 
         <section className="panel">

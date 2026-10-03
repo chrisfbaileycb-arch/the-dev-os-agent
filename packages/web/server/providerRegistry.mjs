@@ -35,8 +35,8 @@ export const REGISTRY = [
   { id: 'google', name: 'Google (Gemini API / Vertex AI)', hq: 'US', kind: 'direct', integrated: true, ...unchecked,
     note: 'The free AI Studio tier may use prompts for training. Only a paid Gemini API key or Vertex AI should back Shield.' },
   { id: 'xai', name: 'xAI (Grok)', hq: 'US', kind: 'direct', integrated: true, ...unchecked },
-  { id: 'meta', name: 'Meta (Model API)', hq: 'US', kind: 'direct', integrated: false, ...unchecked,
-    note: 'Availability and terms of the first-party API were not confirmed. Do not enable until read from Meta\'s own documentation.' },
+  { id: 'meta', name: 'Meta Muse (Model API)', hq: 'US', kind: 'direct', integrated: true, ...unchecked,
+    note: 'OpenAI-compatible at api.meta.ai/v1, keys from dev.meta.ai. Public preview for US developers at the time of writing; terms and retention not yet read.' },
 
   // --- US cloud platforms ---
   { id: 'azure', name: 'Microsoft Azure OpenAI / AI Foundry', hq: 'US', kind: 'cloud', integrated: false, ...unchecked,
@@ -61,6 +61,8 @@ export const REGISTRY = [
     note: 'Inference Providers routes to third-party hosts.' },
   { id: 'cohere', name: 'Cohere', hq: 'CA', kind: 'direct', integrated: true, ...unchecked },
   { id: 'venice', name: 'Venice', hq: 'unknown', kind: 'direct', integrated: true, ...unchecked },
+  { id: 'vercel', name: 'Vercel AI Gateway', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
+    note: 'US company, but a gateway to many upstream providers, so it can never be Shield or backend.' },
   { id: 'xkiro', name: 'xKiro gateway', hq: 'unknown', kind: 'relay', integrated: true, ...unchecked },
   { id: 'aihubmix', name: 'AIHubMix', hq: 'unknown', kind: 'relay', integrated: true, ...unchecked },
   { id: 'cheaper-inference', name: 'CheaperInference', hq: 'unknown', kind: 'relay', integrated: true, ...unchecked },

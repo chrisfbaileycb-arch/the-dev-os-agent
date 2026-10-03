@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, CreditCard, Globe, KeyRound, LoaderCircle, RefreshCw, Search, Sparkles, Trash2, Wallet } from 'lucide-react';
+import { Check, ChevronDown, CreditCard, Globe, KeyRound, LoaderCircle, RefreshCw, Search, Sparkles, Wallet } from 'lucide-react';
 import { LANE_LABEL, laneOf, providersInLane, type Lane } from '../lib/modelLanes';
 import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
 import { providers, type Provider } from '../lib/providers';
-import { badgeFor, canPayFor, emptyReason, hasAnyKey, type Reach } from '../lib/availability';
+import { badgeFor, canPayFor, emptyReason, type Reach } from '../lib/availability';
 import { capabilityTier, filterChoices, isVerifiedOperational, modelChoices, rankChoices, TIER_LABELS, type ModelChoice } from '../lib/modelChoices';
 import { pipeEnabled, type PipeSettings } from '../lib/pipes';
 import type { Discovered } from '../lib/discovered';
@@ -33,8 +33,8 @@ export interface ModelPickerProps {
   lane: Lane;
   /** The active connection's provider, so the dropdown that owns the current model can show it. */
   provider?: Provider;
-  /** Save (or, with an empty string, forget) a key for a provider, in this browser only. */
-  onSaveKey: (provider: Provider, key: string) => void;
+  /** Where a key is entered. The dropdown lists only models that can run; it never asks for a key itself. */
+  onOpenSettings: () => void;
   model: string;
   inference: InferenceMode;
   free: FreeTier;
@@ -70,23 +70,8 @@ export function payLabel(inference: InferenceMode): string {
 /** How many rows a filtered group shows before asking for a narrower filter. */
 const VISIBLE_CAP = 60;
 /** Vendors in the order their groups appear; gateways after the direct vendors. */
-const ORDER: Provider[] = ['ollama', 'openrouter', 'anthropic', 'openai', 'google', 'github', 'cerebras', 'xai', 'groq', 'cohere', 'venice', 'xkiro', 'aihubmix', 'huggingface'];
+const ORDER: Provider[] = ['ollama', 'openrouter', 'vercel', 'anthropic', 'openai', 'google', 'github', 'cerebras', 'xai', 'groq', 'cohere', 'venice', 'xkiro', 'aihubmix', 'huggingface'];
 const tierOf = (m: ModelChoice) => TIER_LABELS[capabilityTier(m.id, m.label)];
-
-/**
- * One line to paste a provider's key into. The key goes up through `onSave` into this browser's
- * storage and nowhere else; it is attached only to requests to that provider (listing or running its
- * models), which go through this app's relay and are not stored there.
- */
-function KeyRow({ provider, onSave }: { provider: Provider; onSave: (provider: Provider, key: string) => void }) {
-  const [value, setValue] = useState('');
-  const name = providers[provider].name;
-  return <form className="model-keyrow" onSubmit={e => { e.preventDefault(); const key = value.trim(); if (key) { onSave(provider, key); setValue(''); } }}>
-    <span className="model-keyrow-name"><KeyRound size={11} strokeWidth={2} />{name}</span>
-    <input type="password" autoComplete="off" spellCheck={false} value={value} placeholder="Paste API key" aria-label={`${name} API key`} onChange={e => setValue(e.target.value)} />
-    <button type="submit" className="button small" disabled={!value.trim()}>Save</button>
-  </form>;
-}
 
 export default function ModelPicker(p: ModelPickerProps) {
   const [open, setOpen] = useState(false);
@@ -120,7 +105,6 @@ export default function ModelPicker(p: ModelPickerProps) {
   const paidModels = useMemo<ModelChoice[]>(() => rankChoices(managed ? p.paid.models.map(id => ({ id, label: p.paid.labels[id] ?? nameFor(id) })) : []), [managed, p.paid.models, p.paid.labels, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
   const selected = (id: string) => p.model.toLowerCase() === id.toLowerCase();
   const badge = payLabel(p.inference);
-  const nothingOffered = managed && !p.free.enabled && !hasAnyKey(p.reach) && p.inference !== 'credits' && !p.paid.enabled;
 
   const [pickedTab, setPickedTab] = useState<'ready' | 'extended' | null>(null);
 
@@ -156,7 +140,6 @@ export default function ModelPicker(p: ModelPickerProps) {
   // the lane with a real endpoint gets one, including gateways that ship with no model seeds.
   const usable = vendors.filter(v => reachable(v.provider));
   const locked = vendors.filter(v => !reachable(v.provider));
-  const keyRows = providersInLane(ORDER, p.lane).filter(id => !p.keyed.has(id) && pipeEnabled(id, p.pipes) && !providers[id].keyless && Boolean(providers[id].endpoint));
   const total = freeModels.length + paidModels.length + usable.reduce((n, v) => n + v.models.length, 0);
   const readyTotal = freeModels.length + paidModels.length + usable.reduce((n, v) => n + v.readyModels.length, 0);
   const extendedTotal = usable.reduce((n, v) => n + v.extendedModels.length, 0);
@@ -191,12 +174,9 @@ export default function ModelPicker(p: ModelPickerProps) {
     const providerName = providers[provider].name;
     const unlocked = reachable(provider);
     const busy = p.discovering.has(provider);
-    // A key typed into this menu (or Settings) lives in this browser's keyring; offer to forget it here.
-    const forgettable = !managed && !providers[provider].keyless && Boolean(p.reach.keys[provider]?.trim());
     return <div key={`${provider}-${sectionType}`} className="model-group">
       <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {providers[provider].keyless ? (live ? `· ${list.length.toLocaleString()} installed` : '· local') : unlocked ? (live ? `· ${list.length.toLocaleString()} on your key` : '· key active') : '· bring your key'}
         {unlocked && <button type="button" className="model-refresh" title={busy ? 'Reading the live list…' : 'Re-read the live model list'} aria-label={`Refresh ${providerName} models`} disabled={busy} onClick={e => { e.stopPropagation(); p.onDiscover(provider); }}>{busy ? <LoaderCircle size={11} className="spin" /> : <RefreshCw size={11} />}</button>}
-        {forgettable && <button type="button" className="model-refresh model-forget" title="Remove this key from this browser" aria-label={`Remove your ${providerName} key from this browser`} onClick={e => { e.stopPropagation(); p.onSaveKey(provider, ''); }}><Trash2 size={11} /></button>}
       </span>
       {!unlocked && <small className="model-group-note">Add your {providerName} API key in Settings — the dropdown then lists every model that key reaches.</small>}
       {unlocked && !live && busy && <small className="model-group-note">{providers[provider].keyless ? 'Reading the models installed on this machine…' : 'Reading what your key reaches…'}</small>}
@@ -239,7 +219,7 @@ export default function ModelPicker(p: ModelPickerProps) {
             <em className="section-badge ready">Verified Active</em>
           </div>
 
-          {managed && <div className="model-group">
+          {managed && freeModels.length > 0 && <div className="model-group">
             <span className="model-group-label"><Sparkles size={11} strokeWidth={2} />Free · no key needed</span>
             {p.free.enabled
               ? <small className="model-group-note">{freeModels.length} model{freeModels.length === 1 ? '' : 's'} this deployment funds · {p.free.monthlyCredits.toLocaleString()} credits a month, then bring your own key.</small>
@@ -278,15 +258,13 @@ export default function ModelPicker(p: ModelPickerProps) {
         </div>
       )}
 
-      {/* Outside the tabs, so a key can be pasted whichever list is showing. */}
-      {!query && keyRows.length > 0 && <div className="model-group model-keys">
-        <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{managed ? 'Use your own key' : 'Add a key to unlock'}</span>
-        <small className="model-group-note">Saved in this browser only. A key is sent only to its own provider, through this app’s relay, when you list or run that provider’s models.</small>
-        {keyRows.map(id => <KeyRow key={id} provider={id} onSave={p.onSaveKey} />)}
+      {/* Nothing can run yet: say so, and say where a key goes. No model is listed that would fail on send. */}
+      {readyTotal + extendedTotal === 0 && <div className="model-empty">
+        <small className="model-group-note">{managed ? 'No models are available yet. Add an API key in Settings and its models appear here.' : 'No models are available yet. Add a key for one of these providers in Settings and its models appear here.'}</small>
+        <button type="button" className="button small" onClick={() => { setOpen(false); p.onOpenSettings(); }}><KeyRound size={12} />Open Settings</button>
       </div>}
 
       {query && total > 0 && !shown(freeModels).length && !shown(paidModels).length && usable.every(v => !shown(v.models).length) && <small className="model-group-note">Nothing matches “{query}”. You can still type any model ID in Settings.</small>}
-      {nothingOffered && <small className="model-group-note">No managed route is available yet. Add a provider key in Settings to continue.</small>}
     </div>}
   </div>;
 }
