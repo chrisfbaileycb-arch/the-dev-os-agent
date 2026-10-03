@@ -71,10 +71,10 @@ export async function complete(c: Connection, system: string, prompt: string, si
   validateConnection(c); signal.throwIfAborted(); const timeout = AbortSignal.timeout(125_000);
   try {
     const messages = [{ role: 'system', content: system }, { role: 'user', content: userContent }];
-    // A local model is called directly with the OpenAI chat shape and no credential; the stream it
+    // A local model is called directly with the OpenAI chat shape and its optional local token; the stream it
     // returns is the same OpenAI-compatible SSE the proxy passes through, so one parser reads both.
     const response = isDirect(c)
-      ? await fetch(`${directBase(c)}/chat/completions`, { method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: c.model, messages, stream: true, max_tokens: c.maxTokens }) }).catch(e => { if (signal.aborted || timeout.aborted) throw e; throw directUnreachable(c); })
+      ? await fetch(`${directBase(c)}/chat/completions`, { method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: { 'Content-Type': 'application/json', ...(c.token?.trim() ? { Authorization: `Bearer ${c.token.trim()}` } : {}) }, body: JSON.stringify({ model: c.model, messages, stream: true, max_tokens: c.maxTokens }) }).catch(e => { if (signal.aborted || timeout.aborted) throw e; throw directUnreachable(c); })
       : await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), model: c.model, messages, max_tokens: c.maxTokens }) });
     await checkResponse(response);
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new ProviderError('Expected a streaming SSE response from /api/chat.');
@@ -127,7 +127,7 @@ export interface DiscoveredModel {
 export async function listModels(c: Connection, signal: AbortSignal): Promise<DiscoveredModel[]> {
   if (isDirect(c)) { const problem = localEndpointError(c.endpoint); if (problem) throw new ProviderError(problem); }
   const response = isDirect(c)
-    ? await fetch(`${directBase(c)}/models`, { method: 'GET', signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) }).catch(e => { if (signal.aborted) throw e; throw directUnreachable(c); })
+    ? await fetch(`${directBase(c)}/models`, { method: 'GET', headers: c.token?.trim() ? { Authorization: `Bearer ${c.token.trim()}` } : {}, signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) }).catch(e => { if (signal.aborted) throw e; throw directUnreachable(c); })
     : await fetch('/api/models', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), differentiate: true }) });
   await checkResponse(response); const body = await response.json();
   if (!Array.isArray(body.data)) throw new ProviderError('Unsupported model catalog. You can still type a model ID.');

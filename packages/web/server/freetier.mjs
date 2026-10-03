@@ -1,3 +1,4 @@
+import { hasPlanAccess, freeOutputTokens } from './plans.mjs';
 // The zero-config tier: what a visitor with no API key is allowed to run on this deployment's
 // own provider keys. Everything here is a hard server-side boundary. The browser may ask for a
 // free model, but only this module decides whether the request is funded, and at what price.
@@ -448,7 +449,7 @@ export function paidTierStatus(env = process.env, tiers = adminTiers) {
   return {
     // Reachable only when there is a token for a subscriber to hold; without one the tier is
     // configured but not yet open, and the browser says so rather than selling it.
-    enabled: models.length > 0 && Boolean(cleanCredential(env.SERVER_CREDIT_ACCESS_TOKEN)),
+    enabled: models.length > 0 && hasPlanAccess(env),
     configured: tiers.paid.length > 0,
     models: models.map(m => m.id),
     providers: Object.fromEntries(models.map(m => [m.id, m.provider])),
@@ -490,6 +491,7 @@ export function freeTierStatus(env = process.env, discovered = discoveredXkiro) 
     // Labels the operator gave dashboard-chosen entries, so the dropdown can name them.
     labels: Object.fromEntries(funded.filter(m => m.label).map(m => [m.id, m.label])),
     monthlyCredits: monthlyPool(env),
+    maxOutputTokens: freeOutputTokens(env),
     perHour: burstLimit(env),
     weight: FREE_WEIGHT,
   };

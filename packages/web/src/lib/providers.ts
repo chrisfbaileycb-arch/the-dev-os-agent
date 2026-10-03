@@ -75,7 +75,7 @@ export const providers: Record<Provider, ProviderInfo> = {
  * multi-file build; the larger settings are for models that can produce more in one reply.
  * A saved value of 1,024 or less is treated as that old default and replaced.
  */
-export const OUTPUT_LIMITS = [2048, 4096, 8192, 16384, 32000, 64000];
+export const OUTPUT_LIMITS = [2048, 4096, 8192, 16384, 32000, 32768, 64000, 65536];
 export const DEFAULT_OUTPUT_TOKENS = 8192;
 const profiles = new Map<Provider, Connection>();
 const MODES: InferenceMode[] = ['free', 'credits', 'byok'];

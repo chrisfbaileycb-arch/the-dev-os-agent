@@ -14,7 +14,7 @@ type Source = 'dashboard' | 'environment' | 'none';
 interface ProviderRow { provider: string; name: string; env: string; console: string | null; source: Source; hint: string; count: number; unreadable: boolean; backend?: boolean; }
 /** A US backend provider the registry has decided on but the proxy cannot route to yet. */
 interface PlannedProvider { provider: string; name: string; note: string; }
-interface Tunable { name: string; kind: 'number' | 'boolean' | 'secret'; label: string; source: Source; value: string; unreadable: boolean; }
+interface Tunable { name: string; kind: 'number' | 'boolean' | 'secret' | 'url'; label: string; source: Source; value: string; unreadable: boolean; }
 interface TierEntry { id: string; provider: string; label?: string; }
 interface Tiers { mode: 'auto' | 'manual'; free: TierEntry[]; paid: TierEntry[]; warnings: string[]; }
 interface Published { free: { enabled: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; monthlyCredits: number; perHour: number }; paid: { enabled: boolean; configured: boolean; models: string[] }; }
@@ -188,13 +188,14 @@ export default function Admin(p: AdminProps) {
     </section>
 
     <section className="panel">
-      <h2>Free-tier limits and plan settings</h2>
+      <h2>Free-tier limits and $25 / $50 / $100 plans</h2>
+      <p className="help">Each plan includes the same published US provider models, personal keys, connectors, and local models. Give each subscriber a unique token in their tier’s list; remove it to revoke access. Credits are weighted usage units, not dollars. New checkout URLs must charge the displayed prices; old checkout links are not reused.</p>
       <p className="help">Numbers apply on the next request. A blank value removes the dashboard setting and the environment (or the built-in default) applies again.</p>
       <div className="form-grid">
         {config.tunables.map(t => <label key={t.name}>{t.label}<span className="row gap">
           {t.kind === 'boolean'
             ? <select value={tunableDrafts[t.name] ?? t.value ?? ''} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))}><option value="">default (false)</option><option value="true">true</option><option value="false">false</option></select>
-            : <input type={t.kind === 'secret' ? 'password' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}
+            : <input type={t.kind === 'secret' ? 'password' : t.kind === 'url' ? 'url' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}
           <button className="button small" disabled={busy || !(t.name in tunableDrafts)} onClick={() => saveTunable(t.name)}><Check size={12} /></button>
         </span><small className="help">{t.unreadable ? 'Re-enter: sealed under an old secret.' : `${sourceLabel[t.source]} · ${t.name}`}</small></label>)}
       </div>

@@ -72,3 +72,13 @@ test('a delete only touches its own workspace and validates its input', async ()
   assert.equal((await del(url, [{ id: 's1' }])).status, 400);
   assert.equal((await del(url, ['s1'], { Origin: 'https://evil.example' })).status, 403);
 }); });
+
+test('free allowance readback uses the same canonical funding identity as the proxy', async () => {
+  await withState({}, async (url, db) => {
+    db.recordUsage('127.0.0.1', { model: 'm', tokens: 1000, credits: 2 });
+    const reading = await (await fetch(url + '/api/state/usage', { headers: { 'X-Workspace-Id': ws } })).json();
+    assert.equal(reading.freeUsed, 2); assert.equal(reading.entry.credits, 2);
+    const rotated = await (await fetch(url + '/api/state/usage', { headers: { 'X-Workspace-Id': other } })).json();
+    assert.equal(rotated.freeUsed, 2, 'the displayed free meter cannot be reset by a new browser header');
+  });
+});

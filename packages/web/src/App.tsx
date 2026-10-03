@@ -33,7 +33,7 @@ import { firstHealthyFree } from './lib/freeHealth';
 import { clearDiscovered, isFresh, keyFingerprint, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
 import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
-import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
+import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type PlanReading, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
@@ -101,6 +101,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const [discovered, setDiscovered] = useState<Discovered>(loadDiscovered);
   const [discovering, setDiscovering] = useState<Set<Provider>>(() => new Set());
   /** A paid-plan model the visitor picked without a plan token. */
+  const [verifiedPlan, setVerifiedPlan] = useState<{ token: string; reading: PlanReading } | null>(null);
+  const [planChecking, setPlanChecking] = useState(false);
+  const [planError, setPlanError] = useState('');
   const [planPrompt, setPlanPrompt] = useState<ModelChoice | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]); const sessionsRef = useRef<Session[]>([]);
   const [runs, setRuns] = useState<Run[]>([]); const runsRef = useRef<Run[]>([]);
@@ -180,9 +183,13 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   // Build binds the Coder / Builder agent; Chat and Plan use the agent the person chose.
   const persona = workMode === 'build' ? personaById(BUILDER_PERSONA_ID) : personaById(active?.persona ?? personaId);
   const mode: RunMode = workMode === 'plan' ? plan : 'chat';
-  const setPipes = (next: PipeSettings) => { savePipes(next); setPipesState(next); };
+  const setPipes = (next: PipeSettings) => { savePipes(next); setPipesState(next); if (next.ollamaUrl !== pipes.ollamaUrl) setConnection(c => c.provider === 'ollama' ? { ...c, endpoint: next.ollamaUrl } : c); };
   const commitMemories = (next: MemoryEntry[]) => { memoriesRef.current = next; setMemories(next); };
   const inference = connection.inference ?? 'byok';
+  const planToken = connection.serverAccessToken?.trim() ?? '';
+  const subscription = verifiedPlan?.token === planToken ? verifiedPlan.reading : null;
+  const outputCap = inference === 'free' ? deployment.free.maxOutputTokens ?? 8192 : inference === 'credits' ? subscription?.plan.maxOutputTokens ?? 8192 : 65536;
+  const effectiveOutput = Math.min(connection.maxTokens, outputCap);
   // Gateway labels, so a discovered id reads as a model name everywhere it is shown.
   const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, ...Object.values(discovered).map(d => Object.fromEntries((d?.models ?? []).map(m => [m.id, m.label])))), [deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, discovered]);
   const label = modelLabel(connection.model, labels);
@@ -190,7 +197,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   // What can be paid for right now, from the keyring rather than from the active connection alone.
   // A plan token in hand opens the plan tier whatever mode is current: picking a plan model is
   // what switches the mode, so the token cannot wait on a mode it is the only route into.
-  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: Boolean(connection.serverAccessToken?.trim()), keyless: pipes.ollamaEnabled ? ['ollama' as Provider] : [] }), [deployment.free, keys, connection.token, connection.provider, connection.serverAccessToken, pipes.ollamaEnabled]);
+  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: Boolean(subscription), keyless: pipes.ollamaEnabled ? ['ollama' as Provider] : [] }), [deployment.free, keys, connection.token, connection.provider, subscription, pipes.ollamaEnabled]);
   /**
    * Every credential this visitor holds, matched exactly by the secret scanner: nothing on this
    * list is ever written to memory, and it is redacted from any ZIP or commit.
@@ -261,13 +268,28 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     loadWorkspace(controller.signal).then(ws => {
       if (controller.signal.aborted) return;
       commitSessions(ws.sessions); runsRef.current = ws.runs; setRuns(ws.runs); ledgerRef.current = ws.ledger; setLedger(ws.ledger);
-      setKnowledge(ws.knowledge); setBalance(ws.balance); setFreeBalance(ws.freeBalance); setServerReachable(ws.serverReachable);
+      setKnowledge(ws.knowledge); if (!connection.serverAccessToken?.trim()) setBalance(ws.balance); setFreeBalance(ws.freeBalance); setServerReachable(ws.serverReachable);
       setActiveId(ws.sessions[0]?.id ?? null); if (ws.sessions[0]) { setPersonaId(ws.sessions[0].persona); setWorkModeState(ws.sessions[0].mode ?? 'chat'); setPlanState(ws.sessions[0].plan ?? 'build'); }
     })
       .catch(e => { if (!controller.signal.aborted) setNotice(errorText(e)); })
       .finally(() => { if (!controller.signal.aborted) setReady(true); });
     return () => { controller.abort(); worker.current?.terminate(); };
   }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    setVerifiedPlan(null); setPlanError('');
+    if (!planToken) { setPlanChecking(false); return; }
+    setPlanChecking(true);
+    const timer = setTimeout(() => {
+      void sync.plan(planToken, controller.signal).then(reading => {
+        if (controller.signal.aborted) return;
+        if (reading) { setVerifiedPlan({ token: planToken, reading }); setBalance(serverBalance(reading.pool, reading.used)); setConnection(c => c.inference === 'credits' ? { ...c, maxTokens: reading.plan.maxOutputTokens } : c); }
+        else { setPlanError('Could not verify this token. Check the token and server connection.'); setBalance(serverBalance(0, 0)); }
+        setPlanChecking(false);
+      });
+    }, 400);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [planToken]);
   useEffect(() => { if (!busy) return; const onLeave = (e: BeforeUnloadEvent) => { e.preventDefault(); }; window.addEventListener('beforeunload', onLeave); return () => window.removeEventListener('beforeunload', onLeave); }, [busy]);
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [active?.messages, runs]);
 
@@ -379,7 +401,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // as one. Without it, inferenceFor decides — and now leaves a deliberate choice alone.
       // A different provider never inherits the previous provider's key.
       const token = provider === c.provider ? c.token : (keys[provider] ?? '');
-      return { ...c, mode: 'remote', model: id, provider, token, endpoint: provider === 'ollama' ? pipes.ollamaUrl : providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models) };
+      return { ...c, mode: 'remote', model: id, provider, token, endpoint: provider === 'ollama' ? pipes.ollamaUrl : providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models), maxTokens: mode === 'credits' && c.inference !== 'credits' ? subscription?.plan.maxOutputTokens ?? 8192 : c.maxTokens };
     });
     setNotice('');
   }
@@ -395,10 +417,11 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
    * its own ledger row locally and syncs it.
    */
   async function charge(sessionId: string, count: number, usage?: { input: number; output: number }) {
-    if (inference === 'free') {
-      const reading = await sync.usage();
+    if (inference === 'free' || inference === 'credits') {
+      const reading = inference === 'credits' ? await sync.plan(planToken) : await sync.usage();
       if (!reading) return;
-      setFreeBalance(serverBalance(reading.freePool, reading.freeUsed));
+      if ('plan' in reading) { setVerifiedPlan({ token: planToken, reading }); setBalance(serverBalance(reading.pool, reading.used)); }
+      else setFreeBalance(serverBalance(reading.freePool, reading.freeUsed));
       if (reading.entry && !ledgerRef.current.some(e => e.id === reading.entry!.id)) {
         const next = [reading.entry, ...ledgerRef.current]; ledgerRef.current = next; setLedger(next);
         void storage.saveLedger(reading.entry).catch(() => { /* display-only; the server holds the record */ });
@@ -423,7 +446,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   }
   function preflight(): string | null {
     try { validateConnection(connection); } catch (e) { return errorText(e); }
-    if (!online) return 'You are offline. Hosted models need a connection.';
+    if (connection.provider === 'ollama' && !pipes.ollamaEnabled) return 'Enable the local model connection in Settings first.';
+    if (!online && connection.provider !== 'ollama') return 'You are offline. Hosted models need a connection.';
     if (inference === 'free') {
       if (!deployment.free.enabled) return FREE_TIER_WARMING;
       if (!deployment.free.models.includes(connection.model)) return `${connection.model || 'No model'} is not on this deployment's free list. Pick a free model from the dropdown.`;
@@ -431,7 +455,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       return null;
     }
     if (inference === 'credits') {
-      if (!connection.serverAccessToken) return 'Platform credits need the deployment access token. Add it in Settings, or switch to your own key.';
+      if (!subscription) return planChecking ? 'Verifying your plan token. Try again in a moment.' : 'Verify your plan access token in Settings, or use your own key or local model.';
       if (balance.remaining <= 0) return `Platform credits for ${balance.month} are used up. Switch to your own key or wait for the monthly reset.`;
       return null;
     }
@@ -621,11 +645,11 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     try {
       const found = await listModels({ ...defaultConnection(provider), ...(provider === 'ollama' ? { endpoint: pipes.ollamaUrl } : {}), token: key ?? '', inference: 'byok' }, new AbortController().signal);
       const models = modelChoices(found);
-      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now(), key: keyFingerprint(key) } }; saveDiscovered(next); return next; });
+      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now(), key: keyFingerprint(provider === 'ollama' ? pipes.ollamaUrl + (key ?? '') : key) } }; saveDiscovered(next); return next; });
       // A key registered without choosing a model lands on the provider's flagship, or the
       // strongest model it reaches — quiet discoveries included, so nobody has to pick one first.
       const ids = models.map(m => m.id);
-      if (ids.length && provider === connection.provider && !ids.includes(connection.model)) setConnection(c => c.provider === provider && !ids.includes(c.model) ? { ...c, model: preferredModel(models, providers[provider].flagship) ?? ids[0] } : c);
+      if (ids.length && connection.inference === 'byok' && provider === connection.provider && !ids.includes(connection.model)) setConnection(c => c.inference === 'byok' && c.provider === provider && !ids.includes(c.model) ? { ...c, model: preferredModel(models, providers[provider].flagship) ?? ids[0] } : c);
       if (!quiet) {
         setNotice(ids.length ? `${providers[provider].name}: ${ids.length.toLocaleString()} model${ids.length === 1 ? '' : 's'} on your key. They are in the dropdown now.` : 'The endpoint returned no models.');
       }
@@ -637,12 +661,12 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   // A key, saved or being typed, lists its models by itself: the dropdown should show what the
   // key reaches without a trip to Settings. Debounced so a key being pasted asks once.
   useEffect(() => {
-    const due = [...keyed].filter(id => !isFresh(discovered[id], Date.now(), keyFingerprint(id === connection.provider && connection.token?.trim() ? connection.token : keys[id])) && !discovering.has(id));
+    const due = [...keyed].filter(id => !isFresh(discovered[id], Date.now(), keyFingerprint(id === 'ollama' ? pipes.ollamaUrl + (keys.ollama ?? '') : id === connection.provider && connection.token?.trim() ? connection.token : keys[id])) && !discovering.has(id));
     if (!due.length) return;
     const timer = setTimeout(() => { for (const id of due) void discover(id, true); }, 700);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyed, connection.token]);
+  }, [keyed, connection.token, pipes.ollamaUrl]);
   // Keep the address bar honest about which view is open.
   useEffect(() => {
     const want = page === 'admin' ? '/admin' : '/';
@@ -781,10 +805,10 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} />}
+        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} />}
         {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
       </div>
-      <StatusBar model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
+      <StatusBar outputLimit={effectiveOutput} planName={subscription?.plan.name} paymentMode={inference} localModel={connection.provider === 'ollama'} model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
     <GithubPullDialog open={githubPullOpen} close={() => setGithubPullOpen(false)} github={settings.github} addFiles={f => void addFiles(f)} openConnectors={() => openConnectors('github')} notify={setNotice} notifyToast={showToast} onImportProject={importProjectToWorkspace} />

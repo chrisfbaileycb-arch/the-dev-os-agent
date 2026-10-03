@@ -167,7 +167,7 @@ test('HF serverless models join the zero-config pool only when the deployment ho
   assert.equal(captured.headers.Authorization, 'Bearer server-hf-token');
   const payload = JSON.parse(captured.body);
   assert.equal(payload.model, 'Qwen/Qwen2.5-7B-Instruct');
-  assert.ok(payload.max_tokens <= 4096, 'free-tier output stays capped');
+  assert.ok(payload.max_tokens <= 8192, 'free-tier output stays capped');
 });
 
 test('Anthropic is translated to /v1/messages, headers and all', async () => {
@@ -231,10 +231,10 @@ test('a checkout URL is published only when it is one', async () => {
   }
   const none = billingStatus({});
   assert.equal(none.enabled, false);
-  assert.deepEqual(none.plans.map(p => p.checkout), [null, null]);
-  assert.deepEqual(none.plans.map(p => p.price), ['$12.90', '$24.90'], 'the price is shown even with no checkout');
+  assert.deepEqual(none.plans.map(p => p.checkout), [null, null, null]);
+  assert.deepEqual(none.plans.map(p => p.price), ['$25', '$50', '$100'], 'the price is shown even with no checkout');
 
-  const one = billingStatus({ STRIPE_STARTER_URL: 'https://buy.stripe.com/starter' });
+  const one = billingStatus({ BILLING_STARTER_URL: 'https://buy.stripe.com/starter' });
   assert.equal(one.enabled, true, 'one configured plan is enough to be selling something');
   assert.equal(one.plans.find(p => p.id === 'starter').checkout, 'https://buy.stripe.com/starter');
   assert.equal(one.plans.find(p => p.id === 'premium').checkout, null);
@@ -242,7 +242,7 @@ test('a checkout URL is published only when it is one', async () => {
 });
 
 test('/api/providers reports billing alongside the free tier', async () => {
-  await withProxy({ env: { STRIPE_PREMIUM_URL: 'https://buy.stripe.com/premium' } }, async url => {
+  await withProxy({ env: { BILLING_PREMIUM_URL: 'https://buy.stripe.com/premium' } }, async url => {
     const body = await (await fetch(url + '/api/providers')).json();
     assert.equal(body.billing.enabled, true);
     assert.equal(body.billing.plans.find(p => p.id === 'premium').checkout, 'https://buy.stripe.com/premium');
@@ -628,12 +628,12 @@ test('completion proxy intercepts 503 and 404 for extended catalog models and pr
   });
 });
 
-test('the free-reply cap is the operator\'s number up to the ceiling, with a 4,096 default', () => {
-  assert.equal(freeOutputCapFor({}), 4096, 'unset');
+test('the free-reply cap is the operator\'s number up to the ceiling, with an 8,192 default', () => {
+  assert.equal(freeOutputCapFor({}), 8192, 'unset');
   assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '10000' }), 10000, 'a 10,000 setting is no longer clamped to 4,096');
   assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '999999' }), 65536, 'capped at the ceiling every request is allowed');
   assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '10' }), 64, 'and never below a useful floor');
-  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: 'banana' }), 4096, 'a bad value falls back to the default');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: 'banana' }), 8192, 'a bad value falls back to the default');
 });
 
 test('a photo sent to a text-only model is explained, not reported as a schema error', () => {

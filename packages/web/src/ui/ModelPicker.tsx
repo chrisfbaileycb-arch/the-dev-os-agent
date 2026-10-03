@@ -3,10 +3,10 @@ import { Check, ChevronDown, CreditCard, Globe, KeyRound, LoaderCircle, RefreshC
 import { LANE_LABEL, laneOf, providersInLane, type Lane } from '../lib/modelLanes';
 import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
 import { providers, type Provider } from '../lib/providers';
-import { badgeFor, canPayFor, emptyReason, type Reach } from '../lib/availability';
+import { emptyReason, type Reach } from '../lib/availability';
 import { capabilityTier, filterChoices, isVerifiedOperational, modelChoices, rankChoices, TIER_LABELS, type ModelChoice } from '../lib/modelChoices';
 import { pipeEnabled, type PipeSettings } from '../lib/pipes';
-import type { Discovered } from '../lib/discovered';
+import { keyFingerprint, isFresh, type Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
 import type { FreeTier } from '../lib/store';
 
@@ -26,7 +26,7 @@ import type { FreeTier } from '../lib/store';
 //
 // The dock renders this component twice, once per lane (lib/modelLanes.ts). The `us` lane holds the
 // deployment's free and plan groups plus the US labs; the `own` lane holds every other provider and
-// is paid for only by a key typed into the menu itself, which App keeps in this browser alone.
+// uses keys entered in Settings, which App keeps in this browser alone.
 
 export interface ModelPickerProps {
   /** Which of the two dropdowns this is. */
@@ -94,15 +94,11 @@ export default function ModelPicker(p: ModelPickerProps) {
   const managed = p.lane === 'us';
   // Only the dropdown that owns the current model shows it; with no model chosen yet, both show their lane name.
   const holdsCurrent = laneOf(p.provider, p.inference) === p.lane && Boolean(p.model);
-  /**
-   * Whether a vendor's models can run from this dropdown. In the US lane a plan token also opens
-   * them, because the server funds those. In the own-key lane only a key does: the server will not
-   * spend the deployment's keys on a provider outside the US lane, plan token or not.
-   */
-  const reachable = (provider: Provider) => managed ? canPayFor(provider, p.reach) : p.keyed.has(provider);
-  const nameFor = (id: string) => p.labels[id] ?? findModel(id)?.label ?? id;
-  const freeModels = useMemo<ModelChoice[]>(() => rankChoices(managed ? p.free.models.map(id => ({ id, label: nameFor(id) })) : []), [managed, p.free.models, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
-  const paidModels = useMemo<ModelChoice[]>(() => rankChoices(managed ? p.paid.models.map(id => ({ id, label: p.paid.labels[id] ?? nameFor(id) })) : []), [managed, p.paid.models, p.paid.labels, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Personal vendor groups require personal keys; managed plan models use a separate group. */
+  const reachable = (provider: Provider) => p.keyed.has(provider);
+  const nameFor = (id: string) => p.labels[id] ?? p.free.labels[id] ?? findModel(id)?.label ?? id;
+  const freeModels = useMemo<ModelChoice[]>(() => rankChoices(managed && p.free.enabled ? p.free.models.map(id => ({ id, label: nameFor(id) })) : []), [managed, p.free.enabled, p.free.models, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
+  const paidModels = useMemo<ModelChoice[]>(() => rankChoices(managed && p.reach.credits ? p.paid.models.map(id => ({ id, label: p.paid.labels[id] ?? nameFor(id) })) : []), [managed, p.reach.credits, p.paid.models, p.paid.labels, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
   const selected = (id: string) => p.model.toLowerCase() === id.toLowerCase();
   const badge = payLabel(p.inference);
 
@@ -115,11 +111,11 @@ export default function ModelPicker(p: ModelPickerProps) {
     const keyed = order.filter(id => p.keyed.has(id) && shownPipe(id));
     const unkeyed = order.filter(id => !p.keyed.has(id) && shownPipe(id) && !providers[id].keyless && (catalog.some(m => m.provider === id) || providers[id].models.length > 0));
     return [...keyed, ...unkeyed].map(provider => {
-      const live = p.discovered[provider];
-      const seeds: ModelChoice[] = catalog.some(m => m.provider === provider)
-        ? catalog.filter(m => m.provider === provider).map(m => ({ id: m.id, label: m.label, ...(m.tier === 'byok' ? { free: true } : {}) }))
-        : providers[provider].models.map(id => ({ id, label: findModel(id)?.label ?? id }));
-      const rawList = p.keyed.has(provider) && live && live.models.length ? live.models : seeds;
+      const credential = provider === p.provider && p.reach.token?.trim() ? p.reach.token : p.reach.keys[provider];
+      const fingerprint = keyFingerprint(provider === 'ollama' ? p.pipes.ollamaUrl + (credential ?? '') : credential);
+      const cached = p.discovered[provider];
+      const live = isFresh(cached, Date.now(), fingerprint) ? cached : undefined;
+      const rawList = p.keyed.has(provider) && live && !live.error ? live.models : [];
       const choices = modelChoices(rawList, [], provider);
       const models: ModelChoice[] = rankChoices(choices);
       const readyModels = models.filter(m => m.section === 'ready' || m.verified);
@@ -133,11 +129,9 @@ export default function ModelPicker(p: ModelPickerProps) {
         error: p.keyed.has(provider) ? live?.error : undefined
       };
     });
-  }, [p.keyed, p.discovered, p.pipes, p.lane]);
+  }, [p.keyed, p.discovered, p.pipes, p.lane, p.provider, p.reach.keys, p.reach.token]);
 
-  // A vendor with no key behind it cannot answer, so it is not offered as a choice: it gets a line
-  // to paste its key into instead, rather than a list of models that fail on send. Every provider in
-  // the lane with a real endpoint gets one, including gateways that ship with no model seeds.
+  // Key entry lives in Settings. The dock selects only connected model catalogues.
   const usable = vendors.filter(v => reachable(v.provider));
   const locked = vendors.filter(v => !reachable(v.provider));
   const total = freeModels.length + paidModels.length + usable.reduce((n, v) => n + v.models.length, 0);
@@ -147,13 +141,13 @@ export default function ModelPicker(p: ModelPickerProps) {
   // Until the visitor picks a tab, the own-key lane opens on the one that has models in it. Most of
   // its providers (OpenRouter, Cerebras, Venice, ...) have nothing on the verified list, so a freshly
   // saved key would otherwise leave the menu on an empty "Ready to run" tab.
-  const sectionTab = pickedTab ?? (!managed && readyTotal === 0 && extendedTotal > 0 ? 'extended' : 'ready');
+  const sectionTab = pickedTab ?? (readyTotal === 0 && extendedTotal > 0 ? 'extended' : 'ready');
   const setSectionTab = setPickedTab;
 
   function chooseVendor(provider: Provider, m: ModelChoice) {
     setOpen(false);
     const seed = findModel(m.id);
-    if (reachable(provider)) p.onPick(m.id, managed && p.inference === 'credits' ? 'credits' : 'byok', provider);
+    if (reachable(provider)) p.onPick(m.id, 'byok', provider);
     // A model nothing can pay for is still selectable: it names the key it needs rather than
     // failing quietly on send.
     else p.onNeedsKey(seed && seed.provider === provider ? seed : { id: m.id, provider, label: m.label, tier: 'pro', weight: 3, note: '' });
@@ -181,13 +175,11 @@ export default function ModelPicker(p: ModelPickerProps) {
       {!unlocked && <small className="model-group-note">Add your {providerName} API key in Settings — the dropdown then lists every model that key reaches.</small>}
       {unlocked && !live && busy && <small className="model-group-note">{providers[provider].keyless ? 'Reading the models installed on this machine…' : 'Reading what your key reaches…'}</small>}
       {providers[provider].keyless && !live && !busy && !error && <small className="model-group-note">No local models found yet. Load one in LM Studio (with its server running) or run <code>ollama pull</code>, then refresh.</small>}
-      {unlocked && !live && !busy && error && <small className="model-group-note">Could not read the live list ({error}). Showing a starter set; type any model ID in Settings.</small>}
+      {unlocked && !live && !busy && error && <small className="model-group-note">Could not read the live list ({error}). Refresh in Settings to list available models.</small>}
       {list.slice(0, VISIBLE_CAP).map(m => {
-        const seed = findModel(m.id);
-        const included = seed && seed.provider === provider ? badgeFor(seed, p.reach) === 'included' : false;
         const local = Boolean(providers[provider].keyless);
-        const badgeText = local ? 'Local' : included ? 'Included / Free' : m.free ? 'Free on your key' : 'BYOK';
-        return row(m, () => chooseVendor(provider, m), badgeText, local || included || Boolean(m.free), local ? 'runs on this machine' : unlocked ? (p.inference === 'credits' ? 'on your plan' : 'on your key') : `${seed?.weight ?? 3} cr/1K on credits`);
+        const badgeText = local ? 'Local' : m.free ? 'Free on your key' : 'Your key';
+        return row(m, () => chooseVendor(provider, m), badgeText, local || Boolean(m.free), local ? 'runs on this machine' : 'on your key');
       })}
       {list.length > VISIBLE_CAP && <small className="model-group-note">{(list.length - VISIBLE_CAP).toLocaleString()} more — type to narrow the list.</small>}
     </div>;
@@ -204,7 +196,7 @@ export default function ModelPicker(p: ModelPickerProps) {
       <ChevronDown size={12} />
     </button>
     {open && <div className="model-menu" role="listbox" aria-label={`Model: ${LANE_LABEL[p.lane]}`}>
-      <div className="model-lane-head"><strong>{LANE_LABEL[p.lane]}</strong><small>{managed ? 'Anthropic, OpenAI, Google, xAI, Groq and Cerebras — free, plan, or your own key.' : 'Runs on your own API key. Saved in this browser only.'}</small></div>
+      <div className="model-lane-head"><strong>{LANE_LABEL[p.lane]}</strong><small>{managed ? 'Connected US providers — managed access or your own key. Keys are configured in Settings or the admin dashboard.' : 'Runs on your own API key. Saved in this browser only.'}</small></div>
       {total > 8 && <label className="model-search"><Search size={12} /><input ref={search} type="search" value={query} placeholder={`Filter ${total.toLocaleString()} models…`} aria-label="Filter models" onChange={e => setQuery(e.target.value)} /></label>}
 
       {extendedTotal > 0 && <div className="model-tabs" role="tablist" aria-label="Catalog Sections">
@@ -216,7 +208,7 @@ export default function ModelPicker(p: ModelPickerProps) {
         <div className="model-section ready-section">
           <div className="model-section-header">
             <span className="model-section-title"><Sparkles size={11} strokeWidth={2} /> Ready to Run</span>
-            <em className="section-badge ready">Verified Active</em>
+            <em className="section-badge ready">Connected models</em>
           </div>
 
           {managed && freeModels.length > 0 && <div className="model-group">
@@ -260,7 +252,7 @@ export default function ModelPicker(p: ModelPickerProps) {
 
       {/* Nothing can run yet: say so, and say where a key goes. No model is listed that would fail on send. */}
       {readyTotal + extendedTotal === 0 && <div className="model-empty">
-        <small className="model-group-note">{managed ? 'No models are available yet. Add an API key in Settings and its models appear here.' : 'No models are available yet. Add a key for one of these providers in Settings and its models appear here.'}</small>
+        <small className="model-group-note">{managed ? 'No models are available yet. Add an API key in Settings and its models appear here.' : 'No connected models are available yet. Connect a personal key or local model in Settings.'}</small>
         <button type="button" className="button small" onClick={() => { setOpen(false); p.onOpenSettings(); }}><KeyRound size={12} />Open Settings</button>
       </div>}
 

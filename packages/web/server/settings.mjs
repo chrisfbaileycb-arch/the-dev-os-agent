@@ -50,11 +50,22 @@ export const PROVIDER_META = {
 export const TUNABLES = {
   FREE_CREDIT_MONTHLY_POOL: { kind: 'number', min: 0, max: 10_000_000, label: 'Free credits per workspace per month' },
   FREE_MAX_PER_HOUR: { kind: 'number', min: 1, max: 100_000, label: 'Free requests per hour from one network' },
-  FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Output cap on a free reply (default 4,096)' },
+  FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Output cap on a free reply (default 8,192; legacy 1,024 is upgraded)' },
   FREE_TIER_DISABLED: { kind: 'boolean', label: 'Free tier switched off' },
   FREE_TIER_ALLOW_FRONTIER: { kind: 'boolean', label: 'Allow frontier ids in the automatic free pool' },
-  CREDIT_MONTHLY_POOL: { kind: 'number', min: 0, max: 100_000_000, label: 'Paid-plan credits per workspace per month' },
-  SERVER_CREDIT_ACCESS_TOKEN: { kind: 'secret', label: 'Paid-plan access token' },
+  PLAN_STARTER_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$25 Starter: monthly credits (default 1,000)' },
+  PLAN_PREMIUM_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$50 Builder: monthly credits (default 2,500)' },
+  PLAN_PRO_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$100 Studio: monthly credits (default 6,000)' },
+  PLAN_STARTER_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Starter: reply token limit (default 8,192)' },
+  PLAN_PREMIUM_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Builder: reply token limit (default 16,384)' },
+  PLAN_PRO_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Studio: reply token limit (default 32,768)' },
+  PLAN_STARTER_ACCESS_TOKENS: { kind: 'secret', label: 'Starter subscriber tokens (comma separated, at least 16 characters each)' },
+  PLAN_PREMIUM_ACCESS_TOKENS: { kind: 'secret', label: 'Builder subscriber tokens (comma separated, at least 16 characters each)' },
+  PLAN_PRO_ACCESS_TOKENS: { kind: 'secret', label: 'Studio subscriber tokens (comma separated, at least 16 characters each)' },
+  BILLING_STARTER_URL: { kind: 'url', label: '$25 Starter checkout URL' },
+  BILLING_PREMIUM_URL: { kind: 'url', label: '$50 Builder checkout URL' },
+  BILLING_PRO_URL: { kind: 'url', label: '$100 Studio checkout URL' },
+  SERVER_CREDIT_ACCESS_TOKEN: { kind: 'secret', label: 'Legacy operator token (Starter limits)' },
   SETTINGS_OWNER_API_KEY: { kind: 'secret', label: 'Owner key (funds the OpenRouter free pool)' },
 };
 
@@ -139,6 +150,13 @@ export function cleanTunable(name, value) {
   }
   const text = String(value).trim();
   if (text.length > 8192 || !HEADER_SAFE.test(text)) throw new Error(`${name} contains a character that cannot go in a request header.`);
+  if (spec.kind === 'url') {
+    let url; try { url = new URL(text); } catch { throw new Error('Enter a valid HTTPS checkout URL.'); }
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('Use HTTPS with no credentials or fragment.');
+    return url.toString();
+  }
+  if (/^PLAN_(STARTER|PREMIUM|PRO)_ACCESS_TOKENS$/.test(name) && text.split(',').some(t => t.trim().length < 16))
+    throw new Error('Each subscriber token must contain at least 16 characters.');
   return text;
 }
 
@@ -328,7 +346,8 @@ export async function openSettings({ db, env = process.env, log = console.error 
       const effective = { ...base, ...overlayCache };
       return Object.entries(TUNABLES).map(([name, spec]) => {
         const stored = rows.has(TUNABLE_PREFIX + name);
-        const value = typeof effective[name] === 'string' ? effective[name] : '';
+        const rawValue = typeof effective[name] === 'string' ? effective[name] : '';
+        const value = name === 'FREE_MAX_OUTPUT_TOKENS' && rawValue === '1024' ? '8192' : rawValue;
         const source = stored && name in overlayCache ? 'dashboard' : value ? 'environment' : 'none';
         return { name, kind: spec.kind, label: spec.label, source, value: spec.kind === 'secret' ? (value ? hint(value) : '') : value, unreadable: unreadable.has(name) };
       });

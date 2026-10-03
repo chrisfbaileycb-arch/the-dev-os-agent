@@ -28,8 +28,11 @@ export function usageFrom(json) {
 
 /** Text length of the assistant delta in one SSE payload, for the estimate path. */
 export function deltaLength(json) {
-  const openai = json?.choices?.[0]?.delta?.content;
-  if (typeof openai === 'string') return openai.length;
+  const delta = json?.choices?.[0]?.delta;
+  const openai = delta?.content;
+  const reasoning = typeof delta?.reasoning_content === 'string' ? delta.reasoning_content.length : 0;
+  if (typeof openai === 'string' || reasoning) return (openai?.length || 0) + reasoning;
+  if (typeof json?.delta?.text === 'string') return json.delta.text.length;
   const cohere = json?.delta?.message?.content?.text;
   return typeof cohere === 'string' ? cohere.length : 0;
 }
@@ -45,6 +48,11 @@ export function createMeter({ promptChars = 0 } = {}) {
   let buffer = '';
   let reported = 0;
   let outputChars = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let splitReported = false;
+  let inputReported = false;
+  let outputFinal = false;
 
   const meter = new Transform({
     transform(chunk, _encoding, callback) {
@@ -60,6 +68,13 @@ export function createMeter({ promptChars = 0 } = {}) {
           let json;
           try { json = JSON.parse(payload); } catch { continue; }
           reported = Math.max(reported, usageFrom(json));
+          const usage = json?.message?.usage ?? json?.usage ?? json?.delta?.usage?.tokens;
+          if (usage) {
+            const input = usage.prompt_tokens ?? usage.input_tokens;
+            const output = usage.completion_tokens ?? usage.output_tokens;
+            if (Number.isFinite(input)) { inputTokens = Math.max(inputTokens, input + (Number(usage.cache_creation_input_tokens) || 0) + (Number(usage.cache_read_input_tokens) || 0)); splitReported = true; inputReported = true; }
+            if (Number.isFinite(output)) { outputTokens = Math.max(outputTokens, output); splitReported = true; outputFinal ||= json.type !== 'message_start'; }
+          }
           outputChars += deltaLength(json);
         }
         // Never let a provider that emits one enormous line grow the scan buffer without bound.
@@ -70,7 +85,9 @@ export function createMeter({ promptChars = 0 } = {}) {
   });
 
   /** Tokens used by this request: the provider's own number, or a floor estimated from the bytes. */
-  meter.total = () => reported || Math.ceil((promptChars + outputChars) / CHARS_PER_TOKEN);
+  meter.usage = () => splitReported ? { input: inputReported ? inputTokens : Math.ceil(promptChars / CHARS_PER_TOKEN), output: outputFinal ? outputTokens : Math.max(outputTokens, Math.ceil(outputChars / CHARS_PER_TOKEN)) }
+    : { input: Math.ceil(promptChars / CHARS_PER_TOKEN), output: Math.max(Math.ceil(outputChars / CHARS_PER_TOKEN), reported - Math.ceil(promptChars / CHARS_PER_TOKEN)) };
+  meter.total = () => splitReported ? meter.usage().input + meter.usage().output : reported || Math.ceil((promptChars + outputChars) / CHARS_PER_TOKEN);
   meter.reportedByProvider = () => reported > 0;
   return meter;
 }

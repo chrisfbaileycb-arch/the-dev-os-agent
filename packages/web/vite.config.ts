@@ -89,7 +89,7 @@ export default defineConfig(async ({ mode, command }) => {
   plugins: [api, shellWorker],
   server: { ...devHosts, ...devPort },
   preview: { ...devHosts, ...devPort },
-  test: { include: ['tests/**/*.test.ts'] },
+  test: { include: ['tests/**/*.test.{ts,tsx}'] },
   build: { target: 'es2022' },
   worker: { format: 'es' as const },
   };

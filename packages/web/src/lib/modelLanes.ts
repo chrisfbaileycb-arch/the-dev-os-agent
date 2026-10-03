@@ -8,7 +8,7 @@ import type { Provider } from './providers';
 //        here, and a visitor's own key for one of these vendors unlocks its group here too.
 //   own  Everything else — OpenRouter, GitHub Models, Cohere, Venice, Hugging Face, xKiro, AIHubMix
 //        and a local model. The deployment never pays for these. They run on a key
-//        the visitor types into the dropdown, which is kept in this browser only.
+//        the visitor enters in Settings, which is kept in this browser only.
 //
 // The US list mirrors `backendProviders()` in server/providerRegistry.mjs, which is what the admin
 // dashboard and the server's funding decisions are limited to. The server cannot be imported here,

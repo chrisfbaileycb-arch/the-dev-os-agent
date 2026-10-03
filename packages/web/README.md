@@ -2,7 +2,7 @@
 
 A browser workspace for one person or a small business: a chat with a business agent, three multi-agent workflows, a connectors hub, a knowledge hub that stays on the device, a model hub, a credit ledger, and a sandboxed browser agent. Runs on a Chromebook or any modern browser, installs as an app, and needs no account.
 
-**Zero-config by default.** On a deployment with server provider keys, a first-time visitor types a prompt and gets a live streaming reply — no sign-up, no API key, nothing to configure. The server funds free and plan models only from the **US backend** — Anthropic, OpenAI, Google, xAI, Groq and Cerebras (Meta, Azure and Bedrock once they are integrated) — using the keys and model picks the operator sets in the admin dashboard, and meters every request against a visible credit quota. The dock has two model dropdowns to match: **US models**, and **Other providers** (OpenRouter, GitHub Models, Cohere, Venice, Hugging Face, xKiro, a local model and the rest), which runs only on a key the visitor types into the dropdown and which is kept in that browser alone. The server never spends its own keys on a provider outside the US backend; the list lives in `server/providerRegistry.mjs`.
+**Zero-config by default.** On a deployment with server provider keys, a first-time visitor types a prompt and gets a live streaming reply — no sign-up, no API key, nothing to configure. The server funds free and plan models only from the **US backend** — Anthropic, OpenAI, Google, xAI, Groq and Cerebras (Meta, Azure and Bedrock once they are integrated) — using the keys and model picks the operator sets in the admin dashboard, and meters every request against a visible credit quota. The dock has two model dropdowns to match: **US models**, and **Other providers** (OpenRouter, GitHub Models, Cohere, Venice, Hugging Face, xKiro, a local model and the rest), which runs only on a personal key the visitor enters in Settings and which is kept in that browser alone. The server never spends its own keys on a provider outside the US backend; the list lives in `server/providerRegistry.mjs`.
 
 Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio. Original code and prompts; the Apache and MIT notices for the FreeToken and Ruflo code carried in this directory are in `THIRD_PARTY_NOTICES.md`.
 
@@ -65,11 +65,11 @@ See `.env.example`.
 | `XKIRO_BASE_URL` | The gateway base, default `https://api.xkiro.com/v1`. HTTPS only; a malformed value falls back to the default rather than failing the tier. |
 | `FREE_CREDIT_MONTHLY_POOL` | Free credits per workspace per month at 0.5 per 1K tokens (default 400 ≈ 800,000 tokens). |
 | `FREE_MAX_PER_HOUR` | Per-IP burst cap on keyless requests (default 40). The workspace id is browser-minted, so this is what bounds total spend. |
-| `FREE_MAX_OUTPUT_TOKENS` | Output ceiling for a server-funded reply (default 1,024), applied whatever the browser asks for. |
+| `FREE_MAX_OUTPUT_TOKENS` | Output ceiling for a server-funded reply (default 8,192; an old 1,024 setting upgrades to 8,192), applied whatever the browser asks for. |
 | `FREE_TIER_DISABLED` | `true` switches the tier off without removing the provider keys. Visitors then see the same warming-up message as an unfunded tier. |
 | `APP_ORIGIN` | Optional. Pins one external origin; leave unset on Render. Also used for OpenRouter attribution. |
 | `DATA_DIR` / `DATA_FILE` | Where the SQLite file lives. Put it on a persistent disk. |
-| `CREDIT_MONTHLY_POOL` | Platform credits per workspace per calendar month (default 100,000). Separate budget from the free tier. |
+| `PLAN_STARTER_CREDITS` / `PLAN_PREMIUM_CREDITS` / `PLAN_PRO_CREDITS` | Server-enforced monthly plan allowances (defaults 1,000 / 2,500 / 6,000). |
 | `FETCH_ALLOWED_HOSTS`, `FETCH_MAX_PER_HOUR` | URL crawler scope (empty means any public host) and budget (default 60). |
 | `GITHUB_TOKEN`, `GITHUB_MAX_PER_HOUR` | Optional server token for the GitHub connector, and its hourly budget (default 120). |
 | `BROWSE_ALLOWED_HOSTS` | Hosts the sandbox browser may open. Empty disables it; `*` allows any public host. |
@@ -130,3 +130,7 @@ npm run build
 ```
 
 The free tier has its own suite (`tests/freetier.test.mjs`). One test reads `src/lib/catalog.ts` and compares its zero-config ids against `FREE_MODELS` literally, so the build fails if the dropdown ever offers a model the server would refuse to fund. Others assert that a keyless request streams only for an allowlisted model, that `openrouter/auto` never reaches the paid router, that the ledger is billed from the streamed bytes, and that an exhausted quota or a tripped burst cap is refused before any upstream call.
+
+## Monthly plans
+
+The $25 Starter, $50 Builder, and $100 Studio plans use separate server-enforced allowances and output ceilings. Configure provider keys in Admin; personal keys and local models in Settings. See [monthly plan setup](../../docs/monthly-plans.md) for prices, credit rates, token issuance, new checkout URLs, and the current manual activation process.

@@ -1,5 +1,7 @@
 import { HttpError } from './proxy.mjs';
 import { freeTierStatus, monthlyPool } from './freetier.mjs';
+import { planAccess } from './plans.mjs';
+import { parseSession } from './auth.mjs';
 
 // /api/state: the server copy of a workspace. The X-Workspace-Id header is the only handle;
 // there are no accounts, so the id is a bearer of its own data. Keep it in the browser.
@@ -32,22 +34,30 @@ export function createState({ env: baseEnv = process.env, db, settings = null })
   const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
   // The zero-config allowance is metered by the proxy, not by the browser, so the balance the
   // client shows for it is read back from the server rather than recomputed from local rows.
-  const budget = async (workspace, env) => ({ pool: Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000), freePool: monthlyPool(env), freeUsed: await db.usedThisMonth(workspace, new Date(), 'free'), free: freeTierStatus(env) });
+  const fundingWorkspace = (req, env) => parseSession(req.headers.cookie, env.SESSION_SECRET)?.workspaceId ?? req.socket.remoteAddress ?? 'unknown';
+  const budget = async (workspace, env, req) => ({ pool: Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000), freePool: monthlyPool(env), freeUsed: await db.usedThisMonth(fundingWorkspace(req, env), new Date(), 'free'), free: freeTierStatus(env) });
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://state').pathname;
-    if (!['/api/state', '/api/state/clear', '/api/state/delete', '/api/state/usage'].includes(path)) return false;
+    if (!['/api/state', '/api/state/clear', '/api/state/delete', '/api/state/usage', '/api/state/plan'].includes(path)) return false;
     const env = currentEnv();
     try {
       checkOrigin(req, env);
       const workspace = req.headers['x-workspace-id'];
       if (typeof workspace !== 'string' || !ID.test(workspace)) throw new HttpError(400, 'A workspace id header is required.');
-      if (path === '/api/state' && req.method === 'GET') { json(res, 200, { ...(await db.state(workspace)), ...(await budget(workspace, env)) }); return true; }
+      if (path === '/api/state' && req.method === 'GET') { json(res, 200, { ...(await db.state(workspace)), ...(await budget(workspace, env, req)) }); return true; }
       // A cheap read the client polls after a zero-config turn, so the credit meter moves in
       // step with the server's own measurement instead of a guess made in the browser.
-      if (path === '/api/state/usage' && req.method === 'GET') { const [b, used, entry] = await Promise.all([budget(workspace, env), db.usedThisMonth(workspace), db.latestEntry(workspace, 'free')]); json(res, 200, { ...b, used, entry }); return true; }
+      if (path === '/api/state/usage' && req.method === 'GET') { const [b, used, entry] = await Promise.all([budget(workspace, env, req), db.usedThisMonth(workspace), db.latestEntry(fundingWorkspace(req, env), 'free')]); json(res, 200, { ...b, used, entry }); return true; }
       if (req.method !== 'POST') throw new HttpError(405, 'Use GET or POST.');
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
       const body = await readBody(req);
+      if (path === '/api/state/plan') {
+        const plan = planAccess(body.token, env);
+        if (!plan) throw new HttpError(401, 'This plan token is invalid or has been revoked.');
+        const [used, entry] = await Promise.all([db.usedThisMonth(plan.workspace, new Date(), 'credits'), db.latestEntry(plan.workspace, 'credits')]);
+        const { workspace: _workspace, ...publicPlan } = plan;
+        json(res, 200, { plan: publicPlan, pool: plan.monthlyCredits, used, entry }); return true;
+      }
       if (path === '/api/state/clear') { await db.clear(workspace); json(res, 200, { ok: true }); return true; }
       // Deleting a session has to reach the server too: the tab merges the server's copy back in
       // on every load, so a session removed only from this browser comes back on the next refresh.
@@ -62,7 +72,7 @@ export function createState({ env: baseEnv = process.env, db, settings = null })
       const counts = await db.counts(workspace);
       if (counts.sessions + sessions.length > MAX_SESSIONS * 2 || counts.runs + runs.length > MAX_RUNS * 2) throw new HttpError(429, 'Workspace storage limit reached. Clear old sessions first.');
       await Promise.all([sessions.length && db.upsertSessions(workspace, sessions), runs.length && db.upsertRuns(workspace, runs), ledger.length && db.addLedger(workspace, ledger)]);
-      const [used, b] = await Promise.all([db.usedThisMonth(workspace), budget(workspace, env)]);
+      const [used, b] = await Promise.all([db.usedThisMonth(workspace), budget(workspace, env, req)]);
       json(res, 200, { ok: true, used, ...b }); return true;
     } catch (error) {
       json(res, error instanceof HttpError ? error.status : 500, { error: { message: error instanceof HttpError ? error.message : 'Workspace storage failed.' } }); return true;

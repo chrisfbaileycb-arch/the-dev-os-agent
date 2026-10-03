@@ -14,7 +14,7 @@ export interface Session { id: string; title: string; persona: string; createdAt
 export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode; tokens: number; credits: number; }
 export interface Balance { pool: number; used: number; remaining: number; month: string; source: 'server' | 'local'; }
 /** What the deployment will fund for a visitor with no key. Read from /api/providers and /api/state. */
-export interface FreeTier { enabled: boolean; models: string[]; providers: Record<string, string>; /** Names the operator gave dashboard-chosen entries. */ labels: Record<string, string>; monthlyCredits: number; perHour: number; }
+export interface FreeTier { enabled: boolean; models: string[]; providers: Record<string, string>; /** Names the operator gave dashboard-chosen entries. */ labels: Record<string, string>; monthlyCredits: number; perHour: number; maxOutputTokens?: number; }
 export interface Workspace { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; knowledge: Knowledge[]; balance: Balance; freeBalance: Balance; serverReachable: boolean; }
 
 // Kept at the original name on purpose: renaming the database would orphan the sessions,
@@ -100,6 +100,7 @@ export function makeEntry(input: { sessionId: string; model: string; mode: Infer
 interface Budget { pool: number; freePool: number; freeUsed: number; free: FreeTier; }
 interface ServerState extends Budget { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; }
 export interface UsageReading extends Budget { used: number; entry: LedgerEntry | null; }
+export interface PlanReading { plan: { id: string; name: string; price: string; monthlyCredits: number; maxOutputTokens: number }; pool: number; used: number; entry: LedgerEntry | null; }
 async function api<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T | null> {
   try {
     const response = await fetch(path, { ...init, credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(15_000)]), headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId(), ...(init.headers ?? {}) } });
@@ -115,6 +116,7 @@ export const sync = {
   pull: (signal?: AbortSignal) => api<ServerState>('/api/state', {}, signal),
   /** Re-read the server's own meter after a zero-config turn; cheap enough to call every message. */
   usage: (signal?: AbortSignal) => api<UsageReading>('/api/state/usage', {}, signal),
+  plan: (token: string, signal?: AbortSignal) => api<PlanReading>('/api/state/plan', { method: 'POST', body: JSON.stringify({ token }) }, signal),
   push: (payload: { sessions?: Session[]; runs?: Run[]; ledger?: LedgerEntry[] }) => api<{ ok: true }>('/api/state', { method: 'POST', body: JSON.stringify(payload) }),
   clear: () => api<{ ok: true }>('/api/state/clear', { method: 'POST', body: '{}' }),
   remove: (ids: string[]) => api<{ ok: true }>('/api/state/delete', { method: 'POST', body: JSON.stringify({ sessions: ids }) }),

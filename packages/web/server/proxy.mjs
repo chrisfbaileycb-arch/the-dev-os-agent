@@ -3,7 +3,8 @@ import https from 'node:https';
 import { Transform } from 'node:stream';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { planAccess, planHolder, planCredits, planRates, freeOutputTokens } from './plans.mjs';
+export { planHolder } from './plans.mjs';
 import { isBackendProvider } from './providerRegistry.mjs';
 import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeModels, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
@@ -100,26 +101,6 @@ export function cleanKey(value) {
 }
 /** Present but unusable — the case worth naming in a log, and the one silence made unfindable. */
 export const malformed = value => typeof value === 'string' && value.trim().length > 0 && !cleanKey(value);
-
-const sameSecret = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length > 0 && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
-
-/**
- * Who a plan token belongs to, or null.
- *
- * There used to be one shared SERVER_CREDIT_ACCESS_TOKEN handed to every subscriber. Anyone it
- * was forwarded to, and anyone who cancelled, kept plan access for good, and nobody's usage could
- * be told apart. Now each subscriber gets their own token in PLAN_ACCESS_TOKENS (comma-separated;
- * remove one to revoke that subscriber alone), and usage is metered per token. The old single
- * token still works as the operator's own token, so nothing breaks on deploy.
- */
-export function planHolder(supplied, env = process.env) {
-  if (typeof supplied !== 'string' || !supplied.trim()) return null;
-  const token = supplied.trim();
-  const issued = String(env.PLAN_ACCESS_TOKENS || '').split(',').map(t => t.trim()).filter(t => t.length >= 16);
-  if (issued.some(t => sameSecret(token, t))) return 'plan:' + createHash('sha256').update(token).digest('hex').slice(0, 24);
-  if (sameSecret(token, env.SERVER_CREDIT_ACCESS_TOKEN)) return 'plan:operator';
-  return null;
-}
 
 export function keyFor(body, env = process.env) {
   if (body.apiKey !== undefined && (typeof body.apiKey !== 'string' || body.apiKey.length > 8192 || /[\r\n]/.test(body.apiKey))) throw new HttpError(400, 'Invalid API key format.');
@@ -275,8 +256,8 @@ export const DEFAULT_OUTPUT_TOKENS = 8192;
  * applies up to MAX_OUTPUT_TOKENS. Note that Groq's free tier counts the requested reply against
  * its tokens-per-minute limit, so a high cap can make Groq refuse requests outright.
  */
-export const FREE_DEFAULT_OUTPUT_TOKENS = 4096;
-export const freeOutputCapFor = (env = process.env) => Math.min(MAX_OUTPUT_TOKENS, Math.max(64, Number(env.FREE_MAX_OUTPUT_TOKENS ?? FREE_DEFAULT_OUTPUT_TOKENS) || FREE_DEFAULT_OUTPUT_TOKENS));
+export const FREE_DEFAULT_OUTPUT_TOKENS = 8192;
+export const freeOutputCapFor = freeOutputTokens;
 
 /**
  * Resolves the maximum allowable output window for a given provider and model when none is specified.
@@ -445,12 +426,14 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
   // entered in the dashboard funds the very next message with no restart.
   const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
   const takeBurst = createBurstLimiter(currentEnv);
+  const activePlans = new Set();
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://proxy').pathname;
     if (!['/api/chat','/api/models','/api/providers'].includes(path)) return false;
     const env = currentEnv();
     const freeOutputCap = freeOutputCapFor(env);
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 120_000);
+    let lockedPlan = null;
     res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
       // Read before the browser sends anything, so the model dropdown knows which entries are
@@ -514,6 +497,16 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         }
       }
       let funding;
+      const personalKey = typeof body.apiKey === 'string' && body.apiKey.trim();
+      const access = planAccess(body.serverAccessToken, env);
+      if (body.serverAccessToken && !personalKey && !access)
+        throw new HttpError(401, 'This plan token is invalid or has been revoked. Check it in Settings.', 'plan_token_invalid');
+      if (access && !personalKey && path === '/api/chat') {
+        const entry = paidModel(body.model, env);
+        if (!entry) throw new HttpError(403, 'That model is not on the connected paid-plan list. Select an available plan model.', 'plan_model_required');
+        // The dashboard is authoritative even if a stale client names a different provider.
+        body.provider = entry.provider;
+      }
       if (body.provider === 'cheaper-inference' && body.apiKey === undefined && env.CHEAPER_INFERENCE_ENABLED === 'true') {
         funding = fundingFor(body, env);
       } else {
@@ -551,7 +544,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // their network address. The browser's x-workspace-id header used to be the key, and a new
       // header value was a fresh month of free credits on every request.
       const workspace = session?.workspaceId ?? ip;
-      const planWorkspace = funding.mode === 'credits' ? planHolder(body.serverAccessToken, env) : null;
+      const subscription = funding.mode === 'credits' ? planAccess(body.serverAccessToken, env) : null;
+      const planWorkspace = subscription?.workspace ?? null;
+      let planRemaining = null;
       if (funding.mode === 'free' && path === '/api/chat') {
         const burst = takeBurst(ip);
         if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`, 'free_tier_busy');
@@ -559,10 +554,14 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         const used = db ? await db.usedThisMonth(workspace, new Date(), 'free') : 0;
         if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own free Google AI Studio, GitHub, Groq or Cerebras key in Settings, or wait for the monthly reset.`, 'free_tier_exhausted');
       }
-      if (planWorkspace && path === '/api/chat' && db) {
-        const planPool = Number(env.PLAN_CREDIT_MONTHLY_POOL ?? 20000) || 0;
+      if (planWorkspace && path === '/api/chat') {
+        if (!db) throw new HttpError(503, 'Paid plans require usage storage before managed requests can run.', 'plan_storage_required');
+        if (activePlans.has(planWorkspace)) throw new HttpError(429, 'This plan already has a reply running. Wait for it to finish.', 'plan_busy');
+        activePlans.add(planWorkspace); lockedPlan = planWorkspace;
+        const planPool = subscription.monthlyCredits;
         const planUsed = await db.usedThisMonth(planWorkspace, new Date(), 'credits');
-        if (planPool > 0 && planUsed >= planPool) throw new HttpError(402, `This plan has used its ${planPool} credits for the month.`, 'plan_exhausted');
+        planRemaining = Math.max(0, planPool - planUsed);
+        if (planRemaining <= 0) throw new HttpError(402, `Your ${subscription.name} plan has used its ${planPool} credits for the month. Use your own key or a local model to continue.`, 'plan_exhausted');
       }
       // Anthropic authenticates with x-api-key and a pinned API version rather than a bearer
       // token; every other provider here takes Authorization.
@@ -584,7 +583,14 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         const requested = body.max_tokens ?? body.max_output_tokens ?? body.max_completion_tokens ?? defaultMax;
         if (!Number.isInteger(requested) || requested < 1 || requested > MAX_OUTPUT_TOKENS) throw new HttpError(400, `max_tokens must be a whole number from 1 to ${MAX_OUTPUT_TOKENS}.`);
         // Server-funded output is capped regardless of what the browser asked for.
-        const max = funding.mode === 'free' ? Math.min(requested, freeOutputCap) : requested;
+        let max = funding.mode === 'free' ? Math.min(requested, freeOutputCap) : subscription ? Math.min(requested, subscription.maxOutputTokens) : requested;
+        if (subscription && planRemaining !== null) {
+          const rate = planRates(body.model);
+          const promptCredits = Math.ceil(JSON.stringify(messages).length / 3) * rate.input / 1000;
+          const affordableOutput = Math.floor((planRemaining - promptCredits) * 1000 / rate.output);
+          if (affordableOutput < 64) throw new HttpError(402, 'Your remaining plan allowance is too small for this conversation. Use your own key, a local model, or start a shorter conversation.', 'plan_exhausted');
+          max = Math.min(max, affordableOutput);
+        }
         const routed = funding.mode === 'free' ? routeFreeRequest(funding.entry) : { model: normalizeModel(provider, body.model) };
         payload = target.nativeAnthropic
           ? JSON.stringify(anthropicPayload(routed.model, messages, max))
@@ -706,16 +712,18 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       const meter = funding.mode === 'free' || planWorkspace ? createMeter({ promptChars: payload.length }) : null;
       const interceptor = createTruncationInterceptor();
       const pipedStream = meter ? response.pipe(interceptor).pipe(meter) : response.pipe(interceptor);
-      pipedStream.pipe(res);
+      // Finish the server ledger before the browser sees EOF and refreshes its allowance.
+      pipedStream.pipe(res, { end: false });
       await new Promise((resolve, reject) => { pipedStream.on('end', resolve); response.on('error', reject); res.on('close', resolve); });
       // Bill even when the visitor navigated away mid-stream: the tokens were still spent.
-      if (meter && db) { try { const tokens = meter.total(); const plan = Boolean(planWorkspace); await db.recordUsage(plan ? planWorkspace : workspace, { model: body.model, tier: plan ? 'plan' : 'free', mode: plan ? 'credits' : 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
+      if (meter && db) { try { const tokens = meter.total(); const plan = Boolean(planWorkspace); await db.recordUsage(plan ? planWorkspace : workspace, { model: body.model, tier: plan ? 'pro' : 'free', mode: plan ? 'credits' : 'free', tokens, credits: plan ? planCredits(body.model, meter.usage()) : creditsForTokens(tokens) }); } catch { log('[proxy] Could not persist managed usage.'); } }
+      if (!res.destroyed) res.end();
       return true;
     } catch (error) {
       if (!(error instanceof HttpError)) console.error('[DEBUG-NONHTTP]', error && error.constructor.name, error && error.message);
       if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) } });
       else if (!res.destroyed) { res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'Provider stream interrupted. Please retry.' } })}\n\n`); res.end(); }
       return true;
-    } finally { clearTimeout(timeout); }
+    } finally { clearTimeout(timeout); if (lockedPlan) activePlans.delete(lockedPlan); }
   };
 }
