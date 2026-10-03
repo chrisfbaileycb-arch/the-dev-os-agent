@@ -4,6 +4,9 @@ import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { FREE_TIER_UNAVAILABLE, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
 import { setXkiroCatalog } from '../server/freetier.mjs';
+import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
+// These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
+setBackendLaneEnforcedForTests(false);
 const NL = String.fromCharCode(10);
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
 // A gateway id that really is free upstream, used wherever a test needs the free tier to cover an

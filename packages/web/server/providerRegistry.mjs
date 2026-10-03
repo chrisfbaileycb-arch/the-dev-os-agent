@@ -83,3 +83,33 @@ export function shieldProviders({ onlyIntegrated = true } = {}) {
 
 /** Whether Shield permits routing to this provider. Unknown ids are refused, never assumed. */
 export const allowedUnderShield = id => isShieldEligible(providerRecord(id));
+
+// The backend lane: what the operator's dashboard can hold a key for, and therefore everything this
+// deployment funds on its own account (the free tier, the paid plan, the plan-token routes).
+//
+// It is a deliberately shorter list than Shield. Shield asks "is this a US company serving from the
+// US"; the backend lane is the operator's own choice of first-party US model makers and the two US
+// hyperscalers that resell them, nothing else. Groq, Cerebras and GitHub Models are US companies and
+// stay Shield-eligible, but they are not on this list, so they live in the visitor's own-key lane
+// (a key typed in the browser, see src/lib/modelLanes.ts) rather than on the operator's card.
+//
+// Adding a provider here is the only way to put it on the dashboard, and the intersection with
+// isShieldEligible means a registry edit that moves a company out of the US takes it off again.
+const BACKEND_IDS = ['anthropic', 'openai', 'google', 'xai', 'meta', 'azure', 'bedrock'];
+
+let laneEnforced = true;
+/**
+ * Test seam, in the spirit of resetKeyRotation(): the funding mechanics (key rotation, metering,
+ * burst caps, the funding order) are provider-agnostic, and their tests use whichever provider made
+ * a convenient fixture. They switch the lane off for their own process; tests/backend-lane.test.mjs
+ * runs with it on. Nothing in the app calls this.
+ */
+export function setBackendLaneEnforcedForTests(on) { laneEnforced = Boolean(on); }
+
+/** Whether the operator's backend may hold a key for, and fund requests to, this provider. */
+export const isBackendProvider = id => !laneEnforced || (BACKEND_IDS.includes(String(id ?? '').toLowerCase()) && isShieldEligible(providerRecord(id)));
+
+/** Backend provider ids. With `onlyIntegrated` (the default) only the ones the proxy can route to today. */
+export function backendProviders({ onlyIntegrated = true } = {}) {
+  return REGISTRY.filter(r => isBackendProvider(r.id) && (!onlyIntegrated || r.integrated)).map(r => r.id);
+}

@@ -4,6 +4,7 @@ import { Transform } from 'node:stream';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { isBackendProvider } from './providerRegistry.mjs';
 import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeModels, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
@@ -121,6 +122,9 @@ export function keyFor(body, env = process.env) {
   if (body.apiKey?.trim()) return cleanKey(body.apiKey);
   // Never expose environment-funded requests to anonymous visitors.
   if (!planHolder(body.serverAccessToken, env)) return '';
+  // The deployment's own keys exist only for the backend lane. A plan token unlocks those, never a
+  // key for a provider outside it, so /api/models and /api/chat cannot be pointed at one.
+  if (!isBackendProvider(body.provider)) return '';
   return cleanKey(env[PROVIDER_KEY_VARS[body.provider]]);
 }
 /**

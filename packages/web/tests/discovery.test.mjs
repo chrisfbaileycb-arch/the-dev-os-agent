@@ -7,6 +7,9 @@ import {
 } from '../server/discovery.mjs';
 import { XKIRO_DEFAULT_BASE, freeTierStatus, xkiroCatalog } from '../server/freetier.mjs';
 import { createProxy } from '../server/proxy.mjs';
+import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
+// These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
+setBackendLaneEnforcedForTests(false);
 
 // Discovery is what replaced the hand-written free-model list, so these tests cover both halves of
 // the reason it exists: that the filter is right about what "free" means, and that the list it
