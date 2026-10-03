@@ -69,9 +69,15 @@ it('settings contains the verified plan allowance, tier reply cap, and local con
   mount(<Settings {...props} />);
   expect(host.textContent).toContain('Studio verified'); expect(host.textContent).toContain('5,988 of 6,000 credits left');
   expect(host.querySelector('select[aria-describedby=reply-length-help]')?.getAttribute('aria-describedby')).toBe('reply-length-help');
-  expect((host.querySelector('select[aria-describedby=reply-length-help]') as HTMLSelectElement).value).toBe('32768');
+  expect((host.querySelector('select[aria-describedby=reply-length-help]') as HTMLSelectElement).value).toBe('16384');
+  expect(host.querySelector('select[aria-describedby=reply-length-help] option[value="32768"]')).toBeNull();
   expect(host.textContent).toContain('Local server API key (optional)');
   expect(host.textContent).toContain('Connect a model running on this computer');
+  act(() => root!.render(<Settings {...props} connection={{ ...defaultConnection('anthropic'), inference: 'free' }} free={{ ...free, maxOutputTokens: 65000 }} />));
+  const replyLimit = host.querySelector('select[aria-describedby=reply-length-help]') as HTMLSelectElement;
+  expect(replyLimit.value).toBe('65000');
+  act(() => { replyLimit.value = '32768'; replyLimit.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(props.setConnection).toHaveBeenCalledWith(expect.objectContaining({ maxTokens: 32768, customOutputLimit: true }));
 });
 
 it('pricing renders three server-reported plan allowances and disables unconfigured checkout', () => {
@@ -80,9 +86,10 @@ it('pricing renders three server-reported plan allowances and disables unconfigu
   for (const price of ['$25', '$50', '$100']) expect(host.textContent).toContain(price);
   expect(host.querySelectorAll('.plan-cta:disabled')).toHaveLength(3);
   expect(host.textContent).toContain('Local model toggle');
+  for (const limit of ['16,384', '32,768', '65,536']) expect(host.textContent).toContain(`${limit} output tokens`);
 });
 
 it('the bottom bar avoids an invented platform balance on personal keys', () => {
-  mount(<StatusBar model="M" tier="pro" mode="your key" paymentMode="byok" localModel={false} outputLimit={8192} stats={null} balance={serverBalance(100000, 0)} freeTier={false} backgroundWorker={false} busy={false} online={true} synced={true} />);
-  expect(host.textContent).toContain('8,192 output max'); expect(host.textContent).toContain('Your key · no plan charge'); expect(host.textContent).not.toContain('100,000');
+  mount(<StatusBar model="M" tier="pro" mode="your key" paymentMode="byok" localModel={false} outputLimit={16384} stats={null} balance={serverBalance(100000, 0)} freeTier={false} backgroundWorker={false} busy={false} online={true} synced={true} />);
+  expect(host.textContent).toContain('16,384 output max'); expect(host.textContent).toContain('Your key · no plan charge'); expect(host.textContent).not.toContain('100,000');
 });

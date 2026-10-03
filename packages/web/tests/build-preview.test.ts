@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BUILD_DELIVERY_RULES, cssDraft, ensureRunnableBuild, expectsRunnablePreview, joinContinuation } from '../src/lib/buildPreview';
+import { BUILD_DELIVERY_RULES, cssDraft, ensureRunnableBuild, expectsRunnablePreview, joinContinuation, needsPreviewRecovery, isContinuationRequest } from '../src/lib/buildPreview';
+import { complete as providerComplete, ProviderError } from '../src/lib/provider';
 import { chatTurn } from '../src/lib/chat';
 import { parseProject } from '../src/lib/project';
 import { defaultConnection } from '../src/lib/providers';
@@ -43,7 +44,7 @@ describe('automatic build preview delivery', () => {
     const html = parseProject(result.text)?.files[0].content;
     expect(html).toContain('<style>\n.hero { color: red; }\n</style>');
     expect(html).toContain('<h1 class="hero">Hello</h1>');
-    expect(complete.mock.calls[0][1]).toContain('under 700 output tokens');
+    expect(complete.mock.calls[0][1]).toContain('under 13926 output tokens');
   });
 
   it('keeps the draft and reports failure if the second response still has no entry', async () => {
@@ -86,13 +87,90 @@ describe('resuming a reply cut off by the output limit', () => {
     expect(parseProject(result.text)?.files[0].content).toContain('padding: 1rem; }</style>');
   });
 
-  it('gives up after three continuations and falls back to the compact pass', async () => {
+  it('preserves progress after three continuations instead of restarting', async () => {
     const complete = vi.fn(async (): Promise<Completion> => ({ text: 'more css', tokens: 10 }));
     const result = await ensureRunnableBuild(request(cut), complete);
     expect(result.repaired).toBe(false);
-    expect(complete).toHaveBeenCalledTimes(4);
-    expect(result.tokens).toBe(40);
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(result.tokens).toBe(30);
+    expect(result.text).toBe(cut + 'more css'.repeat(3));
+    expect(result.truncated).toBe(true);
+    expect(result.issue).toContain('progress is saved');
   });
+
+  it('recovers web code generated in Chat while leaving complete replies and ordinary snippets alone', () => {
+    expect(needsPreviewRecovery(cut)).toBe(true);
+    expect(needsPreviewRecovery(page, false, true)).toBe(true);
+    expect(needsPreviewRecovery(page)).toBe(false);
+    expect(needsPreviewRecovery('```css\nbody { color: red; }\n```')).toBe(false);
+    expect(needsPreviewRecovery('An ordinary answer', false, true)).toBe(false);
+    expect(needsPreviewRecovery('```python\nprint(')).toBe(false);
+    expect(isContinuationRequest('continue from where you left off')).toBe(true);
+    expect(isContinuationRequest('please resume.')).toBe(true);
+    expect(isContinuationRequest('Continue with a different design')).toBe(false);
+  });
+
+  it('joins a real streamed Chat continuation and retains separate usage for every call', async () => {
+    const draft = '```index.html\n<!doctype html><html><body><button id="quest">Begin</button><script>\nlet holes = 0; document.getElementById("quest").addEventLis';
+    const remainder = 'tener("click", () => { holes++; });\n</script></body></html>\n```';
+    const stream = (text: string, finish: string) => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: finish }], usage: { prompt_tokens: 200, completion_tokens: 100, total_tokens: 300 } })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+    const fetchMock = vi.fn().mockResolvedValueOnce(stream(draft, 'length')).mockResolvedValueOnce(stream(remainder, 'stop'));
+    vi.stubGlobal('fetch', fetchMock);
+    const signal = new AbortController().signal; const connection = defaultConnection('anthropic');
+    const first = await chatTurn({ connection, personaId: 'assistant', history: [], input: 'Build Knight Golf', attachments: [], knowledge: [], signal });
+    expect(first.truncated).toBe(true);
+    expect(needsPreviewRecovery(first.text, false, first.truncated)).toBe(true);
+    const deltas: string[] = [];
+    const recovered = await ensureRunnableBuild({ goal: 'Build Knight Golf', draft: first.text, truncated: first.truncated, connection, signal, onDelta: text => deltas.push(text) });
+    expect(recovered.repaired).toBe(true); expect(recovered.truncated).toBeUndefined();
+    expect(recovered.text).toBe(draft + remainder);
+    expect(recovered.usage).toEqual({ input: 200, output: 100 });
+    expect(first.tokens + recovered.tokens).toBe(600);
+    expect(parseProject(recovered.text)?.files[0].content).toContain('addEventListener("click", () => { holes++; });');
+    expect(deltas.at(-1)).toBe(draft + remainder);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).max_tokens).toBe(16384);
+  });
+
+  it('finishes later files even when the first HTML file is already closed', async () => {
+    const draft = '```index.html\n<!doctype html><html><body><button>Begin</button></body></html>\n```\n';
+    const complete = vi.fn(async (): Promise<Completion> => ({ text: '```app.js\ndocument.querySelector("button").onclick = () => alert("Quest begun");\n```', tokens: 50 }));
+    const result = await ensureRunnableBuild({ ...request(draft), truncated: true }, complete);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(parseProject(result.text)?.files.map(f => f.path)).toEqual(['index.html', 'app.js']);
+    expect(result.repaired).toBe(true);
+  });
+
+  it('retains newly streamed code if the provider fails during continuation', async () => {
+    const complete = vi.fn(async (_c: Connection, _s: string, _p: string, _signal: AbortSignal, onDelta?: (text: string) => void): Promise<Completion> => {
+      onDelta?.('ing: 1rem; }'); throw new ProviderError('Plan allowance exhausted', false, 402);
+    });
+    const result = await ensureRunnableBuild(request(cut), complete);
+    expect(result.text).toBe(cut + 'ing: 1rem; }');
+    expect(result.truncated).toBe(true); expect(result.issue).toContain('Plan allowance exhausted');
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries enough source context to retain earlier declarations and stops when cancelled', async () => {
+    const draft = cut + '\nconst golfState = { holes: [] };\n' + '/* styling */'.repeat(1200);
+    const controller = new AbortController();
+    const complete = vi.fn(async (_c: Connection, _s: string, prompt: string): Promise<Completion> => {
+      expect(prompt).toContain('golfState'); controller.abort(new Error('stopped')); throw controller.signal.reason;
+    });
+    await expect(ensureRunnableBuild({ ...request(draft), signal: controller.signal }, complete)).rejects.toThrow('stopped');
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+});
+
+it('drains the stream after DONE before another request, retaining final reported usage', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('data: {"choices":[{"delta":{"content":"Finished"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\ndata: {"usage":{"prompt_tokens":40,"completion_tokens":60,"total_tokens":100}}\n\n', { headers: { 'content-type': 'text/event-stream' } })));
+  const result = await providerComplete(defaultConnection(), 'system', 'prompt', new AbortController().signal);
+  expect(result.tokens).toBe(100); expect(result.outputTokens).toBe(60);
+});
+
+it('detects native Anthropic token cutoffs without relying on the proxy sentinel', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('data: {"type":"content_block_delta","delta":{"text":"partial code"}}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":10}}\n\ndata: {"type":"message_stop"}\n\n', { headers: { 'content-type': 'text/event-stream' } })));
+  expect((await providerComplete(defaultConnection('anthropic'), 'system', 'prompt', new AbortController().signal)).truncated).toBe(true);
 });
 
 describe('joining a continuation to the reply it resumes', () => {

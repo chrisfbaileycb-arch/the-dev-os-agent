@@ -65,7 +65,7 @@ See `.env.example`.
 | `XKIRO_BASE_URL` | The gateway base, default `https://api.xkiro.com/v1`. HTTPS only; a malformed value falls back to the default rather than failing the tier. |
 | `FREE_CREDIT_MONTHLY_POOL` | Free credits per workspace per month at 0.5 per 1K tokens (default 400 ≈ 800,000 tokens). |
 | `FREE_MAX_PER_HOUR` | Per-IP burst cap on keyless requests (default 40). The workspace id is browser-minted, so this is what bounds total spend. |
-| `FREE_MAX_OUTPUT_TOKENS` | Output ceiling for a server-funded reply (default 8,192; an old 1,024 setting upgrades to 8,192), applied whatever the browser asks for. |
+| `FREE_MAX_OUTPUT_TOKENS` | Output ceiling for a server-funded reply (default 16,384; old 1,024 / 8,192 settings upgrade to 16,384), applied whatever the browser asks for. |
 | `FREE_TIER_DISABLED` | `true` switches the tier off without removing the provider keys. Visitors then see the same warming-up message as an unfunded tier. |
 | `APP_ORIGIN` | Optional. Pins one external origin; leave unset on Render. Also used for OpenRouter attribution. |
 | `DATA_DIR` / `DATA_FILE` | Where the SQLite file lives. Put it on a persistent disk. |

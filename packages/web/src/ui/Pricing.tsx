@@ -8,9 +8,9 @@ export interface PricingProps {
 }
 // Offline copy only. Once the server answers, its limits replace these defaults.
 const DEFAULT_PLANS: BillingPlan[] = [
-  { id: 'starter', name: 'Starter', price: '$25', cadence: 'per month', monthlyCredits: 1000, maxOutputTokens: 8192, checkout: null },
-  { id: 'premium', name: 'Builder', price: '$50', cadence: 'per month', monthlyCredits: 2500, maxOutputTokens: 16384, checkout: null },
-  { id: 'pro', name: 'Studio', price: '$100', cadence: 'per month', monthlyCredits: 6000, maxOutputTokens: 32768, checkout: null },
+  { id: 'starter', name: 'Starter', price: '$25', cadence: 'per month', monthlyCredits: 1000, maxOutputTokens: 16384, checkout: null },
+  { id: 'premium', name: 'Builder', price: '$50', cadence: 'per month', monthlyCredits: 2500, maxOutputTokens: 32768, checkout: null },
+  { id: 'pro', name: 'Studio', price: '$100', cadence: 'per month', monthlyCredits: 6000, maxOutputTokens: 65536, checkout: null },
 ];
 export default function Pricing(p: PricingProps) {
   const plans = DEFAULT_PLANS.map(fallback => p.billing.plans.find(x => x.id === fallback.id) ?? fallback);
@@ -25,7 +25,7 @@ export default function Pricing(p: PricingProps) {
         <p className="plan-blurb">{index === 0 ? 'For everyday chat and your first builds.' : index === 1 ? 'More room for regular app builds and longer workflows.' : 'Our largest allowance for sustained builds and development work.'}</p>
         <ul className="plan-features">{[
           `${(plan.monthlyCredits ?? 0).toLocaleString()} credits per month`,
-          `Up to ${(plan.maxOutputTokens ?? 8192).toLocaleString()} output tokens per reply`,
+          `Up to ${(plan.maxOutputTokens ?? 16384).toLocaleString()} output tokens per reply`,
           'All connected, published US provider models',
           'Chat, Build, Plan, agents, and connectors',
           'Personal API keys in Settings',

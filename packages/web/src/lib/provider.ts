@@ -27,12 +27,12 @@ export function validateConnection(c: Connection): void {
   if (!c.model.trim() || c.model.length > 200) throw new Error('Choose a model from your provider.');
   if (!Number.isInteger(c.maxTokens) || c.maxTokens < 64 || c.maxTokens > 65536) throw new Error('Reply length must be between 64 and 65,536 tokens.');
 }
-export async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<{ event: string; data: string }> {
+export async function* sseEvents(body: ReadableStream<Uint8Array>, onActivity?: () => void): AsyncGenerator<{ event: string; data: string }> {
   const reader = body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let event = ''; let lines: string[] = []; let bytes = 0; let ended = false;
   try {
     while (!ended) {
       const { value, done } = await reader.read(); ended = done;
-      if (value) { bytes += value.byteLength; if (bytes > 4_000_000) throw new ProviderError('Provider stream exceeded the safety limit.'); }
+      if (value) { onActivity?.(); bytes += value.byteLength; if (bytes > 16_000_000) throw new ProviderError('Provider stream exceeded the safety limit.'); }
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       let index;
       while ((index = buffer.indexOf('\n')) !== -1) {
@@ -68,23 +68,32 @@ async function checkResponse(response: Response): Promise<void> {
 }
 export async function complete(c: Connection, system: string, prompt: string, signal: AbortSignal, onDelta?: (text: string) => void, images: string[] = []): Promise<Completion> {
   const userContent = images.length ? [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))] : prompt;
-  validateConnection(c); signal.throwIfAborted(); const timeout = AbortSignal.timeout(125_000);
+  validateConnection(c); signal.throwIfAborted();
+  const timeout = new AbortController();
+  let idleTimer = setTimeout(() => timeout.abort(), 125_000);
+  const deadline = setTimeout(() => timeout.abort(), 1_805_000);
+  const refreshTimeout = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => timeout.abort(), 125_000); };
   try {
     const messages = [{ role: 'system', content: system }, { role: 'user', content: userContent }];
     // A local model is called directly with the OpenAI chat shape and its optional local token; the stream it
     // returns is the same OpenAI-compatible SSE the proxy passes through, so one parser reads both.
     const response = isDirect(c)
-      ? await fetch(`${directBase(c)}/chat/completions`, { method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: { 'Content-Type': 'application/json', ...(c.token?.trim() ? { Authorization: `Bearer ${c.token.trim()}` } : {}) }, body: JSON.stringify({ model: c.model, messages, stream: true, max_tokens: c.maxTokens }) }).catch(e => { if (signal.aborted || timeout.aborted) throw e; throw directUnreachable(c); })
-      : await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), model: c.model, messages, max_tokens: c.maxTokens }) });
+      ? await fetch(`${directBase(c)}/chat/completions`, { method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]), headers: { 'Content-Type': 'application/json', ...(c.token?.trim() ? { Authorization: `Bearer ${c.token.trim()}` } : {}) }, body: JSON.stringify({ model: c.model, messages, stream: true, max_tokens: c.maxTokens }) }).catch(e => { if (signal.aborted || timeout.signal.aborted) throw e; throw directUnreachable(c); })
+      : await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]), headers: apiHeaders(), body: JSON.stringify({ ...requestBody(c), model: c.model, messages, max_tokens: c.maxTokens }) });
     await checkResponse(response);
+    refreshTimeout();
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new ProviderError('Expected a streaming SSE response from /api/chat.');
     let text = ''; let tokens = 0; let inputTokens = 0; let outputTokens = 0; let split = false; let finished = false; let truncated = false;
-    for await (const event of sseEvents(response.body)) {
+    for await (const event of sseEvents(response.body, refreshTimeout)) {
       signal.throwIfAborted();
-      if (event.data === '[DONE]') { finished = true; break; }
+      // The proxy persists usage and releases the subscriber lock before EOF. Draining past
+      // [DONE] keeps an immediate continuation from racing that work or missing final usage.
+      if (event.data === '[DONE]') { finished = true; continue; }
       let data; try { data = JSON.parse(event.data); } catch { throw new ProviderError('Malformed provider stream.'); }
       if (event.event === 'error' || data.error) throw new ProviderError('Provider reported a streaming error. Check your model, key, and quota.');
-      if (data.stream_truncated === true || data.choices?.[0]?.finish_reason === 'length') {
+      if (data.stream_truncated === true || data.choices?.[0]?.finish_reason === 'length'
+        || data.stop_reason === 'max_tokens' || data.delta?.stop_reason === 'max_tokens'
+        || data.finish_reason === 'MAX_TOKENS' || data.delta?.finish_reason === 'MAX_TOKENS') {
         truncated = true;
         finished = true;
       }
@@ -111,10 +120,10 @@ export async function complete(c: Connection, system: string, prompt: string, si
     return { text, tokens: Math.max(0, tokens), ...(split ? { inputTokens: Math.max(0, inputTokens), outputTokens: Math.max(0, outputTokens) } : {}), ...(truncated ? { truncated: true } : {}) };
   } catch (e) {
     if (signal.aborted) throw signal.reason;
-    if (timeout.aborted) throw new ProviderError('Provider request timed out.', true);
+    if (timeout.signal.aborted) throw new ProviderError('Provider request timed out. Your generated output is saved; continue to resume it.', true);
     if (e instanceof ProviderError) throw e;
     throw new ProviderError('Cannot reach /api/chat. Deploy the included server, then check the provider connection.');
-  }
+  } finally { clearTimeout(idleTimer); clearTimeout(deadline); }
 }
 /** One model as the provider lists it: the id to send, a label where the provider gave one, whether it calls the model free, and its verification section. */
 export interface DiscoveredModel {

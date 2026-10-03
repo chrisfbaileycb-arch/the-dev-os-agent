@@ -112,7 +112,7 @@ services:
       - key: FREE_MAX_PER_HOUR
         value: "40"
       - key: FREE_MAX_OUTPUT_TOKENS
-        value: "8192"
+        value: "16384"
       # There is no longer a switch for US-only funding: the server funds only the backend lane
       # (Anthropic, OpenAI, Google, xAI, Groq, Cerebras; see server/providerRegistry.mjs). Add those keys, and pick
       # which of their models are free or paid, in the admin dashboard. Every other provider is
@@ -129,11 +129,11 @@ services:
       - key: PLAN_PRO_CREDITS
         value: "6000"
       - key: PLAN_STARTER_MAX_OUTPUT_TOKENS
-        value: "8192"
-      - key: PLAN_PREMIUM_MAX_OUTPUT_TOKENS
         value: "16384"
-      - key: PLAN_PRO_MAX_OUTPUT_TOKENS
+      - key: PLAN_PREMIUM_MAX_OUTPUT_TOKENS
         value: "32768"
+      - key: PLAN_PRO_MAX_OUTPUT_TOKENS
+        value: "65536"
       # Unique subscriber tokens and new-price checkout URLs can be entered in Admin.
       # Old $12.90/$24.90 STRIPE_* links are intentionally not reused.
       - key: PLAN_STARTER_ACCESS_TOKENS

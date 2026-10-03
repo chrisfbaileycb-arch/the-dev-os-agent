@@ -3,14 +3,15 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 // All subscription limits are resolved on the server. Credits are product units, not dollars
 // or a promise of a fixed number of tokens. Expensive model classes consume more of them.
 export const PLANS = [
-  { id: 'starter', name: 'Starter', price: '$25', cadence: 'per month', credits: 1000, maxOutputTokens: 8192 },
-  { id: 'premium', name: 'Builder', price: '$50', cadence: 'per month', credits: 2500, maxOutputTokens: 16384 },
-  { id: 'pro', name: 'Studio', price: '$100', cadence: 'per month', credits: 6000, maxOutputTokens: 32768 },
+  { id: 'starter', name: 'Starter', price: '$25', cadence: 'per month', credits: 1000, maxOutputTokens: 16384 },
+  { id: 'premium', name: 'Builder', price: '$50', cadence: 'per month', credits: 2500, maxOutputTokens: 32768 },
+  { id: 'pro', name: 'Studio', price: '$100', cadence: 'per month', credits: 6000, maxOutputTokens: 65536 },
 ];
+const previousOutputLimits = { starter: 8192, premium: 16384, pro: 32768 };
 const bounded = (value, fallback, min, max) => value === undefined || value === '' || !Number.isFinite(Number(value))
   ? fallback : Math.min(max, Math.max(min, Math.floor(Number(value))));
 export function freeOutputTokens(env = process.env) {
-  return Number(env.FREE_MAX_OUTPUT_TOKENS) === 1024 ? 8192 : bounded(env.FREE_MAX_OUTPUT_TOKENS, 8192, 64, 65536);
+  return [1024, 8192].includes(Number(env.FREE_MAX_OUTPUT_TOKENS)) ? 16384 : bounded(env.FREE_MAX_OUTPUT_TOKENS, 16384, 64, 65536);
 }
 export function planLimits(id, env = process.env) {
   const plan = PLANS.find(p => p.id === id) ?? PLANS[0];
@@ -18,7 +19,8 @@ export function planLimits(id, env = process.env) {
   const { credits: _defaultCredits, ...metadata } = plan;
   return { ...metadata,
     monthlyCredits: bounded(env[`${prefix}_CREDITS`], plan.credits, 0, 100_000_000),
-    maxOutputTokens: bounded(env[`${prefix}_MAX_OUTPUT_TOKENS`], plan.maxOutputTokens, 64, 65536),
+    maxOutputTokens: Number(env[`${prefix}_MAX_OUTPUT_TOKENS`]) === previousOutputLimits[plan.id]
+      ? plan.maxOutputTokens : bounded(env[`${prefix}_MAX_OUTPUT_TOKENS`], plan.maxOutputTokens, 64, 65536),
   };
 }
 const tokens = value => String(value || '').split(',').map(t => t.trim()).filter(t => t.length >= 16 && t.length <= 8192);

@@ -3,7 +3,7 @@ import type { InferenceMode } from './catalog';
 import type { Persona } from './roster';
 export type Mode = 'remote';
 export type Workflow = 'build' | 'research' | 'review';
-export interface Connection { provider?: Provider; saveKey?: boolean; serverAccessToken?: string; mode: Mode; inference?: InferenceMode; endpoint: string; model: string; token: string; maxTokens: number; }
+export interface Connection { provider?: Provider; saveKey?: boolean; serverAccessToken?: string; mode: Mode; inference?: InferenceMode; endpoint: string; model: string; token: string; maxTokens: number; customOutputLimit?: boolean; }
 export interface Knowledge { id: string; title: string; content: string; createdAt: string; }
 /**
  * One persistent memory, held in this browser's IndexedDB and never synced to the server.

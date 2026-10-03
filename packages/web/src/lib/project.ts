@@ -205,6 +205,8 @@ function reactEntry(paths: string[]): string | null {
  * showing the reply as text, exactly as it always has.
  */
 export function parseProject(text: string): Project | null {
+  // A closed first file followed by an unfinished script is still an unfinished project.
+  if ((text.match(/```/g) ?? []).length % 2 === 1) return null;
   const found = fences(text);
   const pathed = found.filter((f): f is { path: string; lang: string; body: string } => f.path !== null && isSafeProjectPath(f.path));
   if (pathed.length > 0) {

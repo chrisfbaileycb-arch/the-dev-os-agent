@@ -167,7 +167,7 @@ test('HF serverless models join the zero-config pool only when the deployment ho
   assert.equal(captured.headers.Authorization, 'Bearer server-hf-token');
   const payload = JSON.parse(captured.body);
   assert.equal(payload.model, 'Qwen/Qwen2.5-7B-Instruct');
-  assert.ok(payload.max_tokens <= 8192, 'free-tier output stays capped');
+  assert.ok(payload.max_tokens <= 16384, 'free-tier output stays capped');
 });
 
 test('Anthropic is translated to /v1/messages, headers and all', async () => {
@@ -185,7 +185,7 @@ test('Anthropic is translated to /v1/messages, headers and all', async () => {
   const payload = JSON.parse(captured.body);
   assert.equal(payload.system, 'be brief');
   assert.deepEqual(payload.messages, [{ role: 'user', content: 'hello' }]);
-  assert.equal(payload.max_tokens, 8192, "a request that names no limit gets the full-app default");
+  assert.equal(payload.max_tokens, 16384, "a request that names no limit gets the full-app default");
   assert.equal(payload.stream_options, undefined, 'an unknown field is a 400 there, not an ignored hint');
 });
 
@@ -494,12 +494,12 @@ test('free-key providers route to their own fixed homes on the visitor key', asy
   assert.equal(seen.auth, 'Bearer github_pat_visitor');
 });
 
-test('outgoing payloads default to maximum allowable output window (16,384 for gpt-4o, 8,192 for gemini) and honor max_output_tokens', async () => {
+test('outgoing payloads default to maximum allowable output window (16,384 for gpt-4o, 16,384 for gemini) and honor max_output_tokens', async () => {
   const { defaultMaxTokens } = await import('../server/proxy.mjs');
   assert.equal(defaultMaxTokens('openai', 'gpt-4o'), 16384);
   assert.equal(defaultMaxTokens('openai', 'gpt-4.1-mini'), 16384);
-  assert.equal(defaultMaxTokens('google', 'gemini-2.5-pro'), 8192);
-  assert.equal(defaultMaxTokens('anthropic', 'claude-sonnet-4-5'), 8192);
+  assert.equal(defaultMaxTokens('google', 'gemini-2.5-pro'), 16384);
+  assert.equal(defaultMaxTokens('anthropic', 'claude-sonnet-4-5'), 16384);
 
   let capturedGpt;
   await withProxy({ env: {}, transport: async (url, options) => { capturedGpt = JSON.parse(options.body); return stream('data: [DONE]\n\n'); } }, async url => {
@@ -513,7 +513,7 @@ test('outgoing payloads default to maximum allowable output window (16,384 for g
     const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-pro' });
     assert.equal(res.status, 200);
   });
-  assert.equal(capturedGemini.max_tokens, 8192, 'gemini gets 8,192 tokens default');
+  assert.equal(capturedGemini.max_tokens, 16384, 'gemini gets 16,384 tokens default');
 
   let capturedCustom;
   await withProxy({ env: {}, transport: async (url, options) => { capturedCustom = JSON.parse(options.body); return stream('data: [DONE]\n\n'); } }, async url => {
@@ -628,12 +628,12 @@ test('completion proxy intercepts 503 and 404 for extended catalog models and pr
   });
 });
 
-test('the free-reply cap is the operator\'s number up to the ceiling, with an 8,192 default', () => {
-  assert.equal(freeOutputCapFor({}), 8192, 'unset');
+test('the free-reply cap is the operator\'s number up to the ceiling, with a 16,384 default', () => {
+  assert.equal(freeOutputCapFor({}), 16384, 'unset');
   assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '10000' }), 10000, 'a 10,000 setting is no longer clamped to 4,096');
   assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '999999' }), 65536, 'capped at the ceiling every request is allowed');
   assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '10' }), 64, 'and never below a useful floor');
-  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: 'banana' }), 8192, 'a bad value falls back to the default');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: 'banana' }), 16384, 'a bad value falls back to the default');
 });
 
 test('a photo sent to a text-only model is explained, not reported as a schema error', () => {

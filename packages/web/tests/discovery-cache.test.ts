@@ -10,7 +10,7 @@ describe('model lists', () => {
     expect(keyFingerprint('sk-account-one')).not.toContain('sk-');
   });
   it('new connections allow a complete app in one reply, and Anthropic seeds are current', () => {
-    expect(defaultConnection('anthropic').maxTokens).toBe(8192);
+    expect(defaultConnection('anthropic').maxTokens).toBe(16384);
     expect(providers.anthropic.models).toContain('claude-sonnet-5-5');
     expect(providers.anthropic.models.some(m => /4-8|3-5|3\.5/.test(m))).toBe(false);
   });

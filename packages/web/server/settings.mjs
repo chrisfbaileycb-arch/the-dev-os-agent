@@ -2,6 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { decryptAny, encrypt, isSealed } from './secrets.mjs';
 import { PROVIDER_KEY_VARS, setAdminTiers } from './freetier.mjs';
 import { isBackendProvider } from './providerRegistry.mjs';
+import { freeOutputTokens, planLimits } from './plans.mjs';
 
 // Dashboard-managed deployment settings: provider keys, free-tier knobs, and the model tiers.
 //
@@ -50,15 +51,15 @@ export const PROVIDER_META = {
 export const TUNABLES = {
   FREE_CREDIT_MONTHLY_POOL: { kind: 'number', min: 0, max: 10_000_000, label: 'Free credits per workspace per month' },
   FREE_MAX_PER_HOUR: { kind: 'number', min: 1, max: 100_000, label: 'Free requests per hour from one network' },
-  FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Output cap on a free reply (default 8,192; legacy 1,024 is upgraded)' },
+  FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Output cap on a free reply (default 16,384; legacy 1,024 / 8,192 are upgraded)' },
   FREE_TIER_DISABLED: { kind: 'boolean', label: 'Free tier switched off' },
   FREE_TIER_ALLOW_FRONTIER: { kind: 'boolean', label: 'Allow frontier ids in the automatic free pool' },
   PLAN_STARTER_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$25 Starter: monthly credits (default 1,000)' },
   PLAN_PREMIUM_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$50 Builder: monthly credits (default 2,500)' },
   PLAN_PRO_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$100 Studio: monthly credits (default 6,000)' },
-  PLAN_STARTER_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Starter: reply token limit (default 8,192)' },
-  PLAN_PREMIUM_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Builder: reply token limit (default 16,384)' },
-  PLAN_PRO_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Studio: reply token limit (default 32,768)' },
+  PLAN_STARTER_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Starter: reply token limit (default 16,384)' },
+  PLAN_PREMIUM_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Builder: reply token limit (default 32,768)' },
+  PLAN_PRO_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Studio: reply token limit (default 65,536)' },
   PLAN_STARTER_ACCESS_TOKENS: { kind: 'secret', label: 'Starter subscriber tokens (comma separated, at least 16 characters each)' },
   PLAN_PREMIUM_ACCESS_TOKENS: { kind: 'secret', label: 'Builder subscriber tokens (comma separated, at least 16 characters each)' },
   PLAN_PRO_ACCESS_TOKENS: { kind: 'secret', label: 'Studio subscriber tokens (comma separated, at least 16 characters each)' },
@@ -347,7 +348,9 @@ export async function openSettings({ db, env = process.env, log = console.error 
       return Object.entries(TUNABLES).map(([name, spec]) => {
         const stored = rows.has(TUNABLE_PREFIX + name);
         const rawValue = typeof effective[name] === 'string' ? effective[name] : '';
-        const value = name === 'FREE_MAX_OUTPUT_TOKENS' && rawValue === '1024' ? '8192' : rawValue;
+        const planOutput = name.match(/^PLAN_(STARTER|PREMIUM|PRO)_MAX_OUTPUT_TOKENS$/);
+        const value = name === 'FREE_MAX_OUTPUT_TOKENS' ? String(freeOutputTokens(effective))
+          : planOutput ? String(planLimits(planOutput[1].toLowerCase(), effective).maxOutputTokens) : rawValue;
         const source = stored && name in overlayCache ? 'dashboard' : value ? 'environment' : 'none';
         return { name, kind: spec.kind, label: spec.label, source, value: spec.kind === 'secret' ? (value ? hint(value) : '') : value, unreadable: unreadable.has(name) };
       });

@@ -58,7 +58,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'HEAD') res.end(); else createReadStream(file).on('error', () => res.destroy()).pipe(res);
   } catch { res.writeHead(404); res.end('Not found'); }
 });
-server.requestTimeout = 135_000;
+server.requestTimeout = 1_815_000;
 // Default to 3000 for AI Studio environment; PORT overrides if set.
 server.listen(Number(process.env.PORT || 3000), '0.0.0.0', () => console.log('Signal Forge OS server is ready.'));
 

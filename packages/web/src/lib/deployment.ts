@@ -211,7 +211,7 @@ async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): 
         providers: providerMap(free.providers),
         labels: providerMap(free.labels),
         monthlyCredits: Number.isFinite(free.monthlyCredits) ? Number(free.monthlyCredits) : DEFAULT_FREE_POOL,
-        maxOutputTokens: Number.isFinite(free.maxOutputTokens) ? Number(free.maxOutputTokens) : 8192,
+        maxOutputTokens: Number.isFinite(free.maxOutputTokens) ? Number(free.maxOutputTokens) : 16384,
         perHour: Number.isFinite(free.perHour) ? Number(free.perHour) : 0,
       },
     };

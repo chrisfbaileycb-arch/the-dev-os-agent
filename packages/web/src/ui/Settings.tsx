@@ -3,7 +3,7 @@ import { Check, Coins, CreditCard, ExternalLink, HardDrive, KeyRound, LoaderCirc
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
-import { flagshipFor, providers, switchProvider, type Keyring, type Provider, DEFAULT_OUTPUT_TOKENS, OUTPUT_LIMITS } from '../lib/providers';
+import { flagshipFor, providers, switchProvider, modelOutputCeiling, effectiveOutputLimit, type Keyring, type Provider, DEFAULT_OUTPUT_TOKENS, OUTPUT_LIMITS } from '../lib/providers';
 import { rankChoices, type ModelChoice } from '../lib/modelChoices';
 import { localEndpointError, normalizeLocalEndpoint, type PipeSettings } from '../lib/pipes';
 import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
@@ -76,8 +76,8 @@ export default function Settings(p: SettingsProps) {
     if (next === 'free' && p.free.models.length && !p.free.models.includes(c.model)) {
       set({ inference: 'free', model: p.free.models[0], provider: p.free.providers[p.free.models[0]] as Provider, token: '' });
     } else if (next === 'credits' && p.paid.models.length && !p.paid.models.includes(c.model)) {
-      set({ inference: 'credits', model: p.paid.models[0], provider: p.paid.providers[p.paid.models[0]] as Provider, token: '', maxTokens: p.subscription?.plan.maxOutputTokens ?? 8192 });
-    } else set({ inference: next, ...(next === 'credits' ? { token: '', maxTokens: p.subscription?.plan.maxOutputTokens ?? 8192, provider: p.paid.providers[c.model] as Provider ?? c.provider } : {}) });
+      set({ inference: 'credits', model: p.paid.models[0], provider: p.paid.providers[p.paid.models[0]] as Provider, token: '', maxTokens: p.subscription?.plan.maxOutputTokens ?? 16384 });
+    } else set({ inference: next, ...(next === 'credits' ? { token: '', maxTokens: p.subscription?.plan.maxOutputTokens ?? 16384, provider: p.paid.providers[c.model] as Provider ?? c.provider } : {}) });
   }
 
   const live = p.discovered[provider];
@@ -93,7 +93,7 @@ export default function Settings(p: SettingsProps) {
   const managed = inference === 'free';
   const plan = inference === 'credits';
   const planOffered = p.paid.configured || p.paid.enabled || hasToken;
-  const outputCap = managed ? p.free.maxOutputTokens ?? 8192 : plan ? p.subscription?.plan.maxOutputTokens ?? 8192 : 65536;
+  const outputCap = Math.min(modelOutputCeiling(c.model), managed ? p.free.maxOutputTokens ?? 16384 : plan ? p.subscription?.plan.maxOutputTokens ?? 16384 : 65536);
   const outputOptions = [...new Set([...OUTPUT_LIMITS.filter(n => n <= outputCap), outputCap])].sort((a, b) => a - b);
 
   return <div className="page">
@@ -175,10 +175,11 @@ export default function Settings(p: SettingsProps) {
             <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember personal keys in this browser</label>
             <p className="help">Keys stay in this browser only when you choose Remember. They are not sent to third-party scripts, placed in the app bundle, or returned by the server.</p>
           </>}
-          <label>Longest reply<select aria-describedby="reply-length-help" value={Math.min(c.maxTokens, outputCap)} disabled={p.busy} onChange={e => set({ maxTokens: Number(e.target.value) })}>
+          <label>Longest reply<select aria-describedby="reply-length-help" value={effectiveOutputLimit(c, outputCap)} disabled={p.busy} onChange={e => set({ maxTokens: Number(e.target.value), customOutputLimit: true })}>
             {outputOptions.map(n => <option key={n} value={n}>{n.toLocaleString()} tokens{n === DEFAULT_OUTPUT_TOKENS ? ' (recommended)' : ''}</option>)}
           </select></label>
-          <p className="help" id="reply-length-help">Space for code and longer replies. Managed replies are also limited by your tier and remaining allowance; model-specific limits can be lower. Personal keys are billed by the provider for actual usage.</p>
+          <p className="help" id="reply-length-help">Managed replies use the backend limit by default. Choose a shorter reply here if you prefer. Remaining allowance and model limits can reduce the reply window. Personal keys are billed by the provider for actual usage.</p>
+          {(managed || plan) && c.customOutputLimit && <button className="button small" disabled={p.busy} onClick={() => set({ maxTokens: outputCap, customOutputLimit: false })}>Use backend reply limit</button>}
           <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={p.save}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={p.forget}><Trash2 size={13} />Forget saved keys</button></div>
         </section>
 

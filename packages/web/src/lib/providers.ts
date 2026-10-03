@@ -71,15 +71,28 @@ export const providers: Record<Provider, ProviderInfo> = {
 };
 /**
  * How long one reply may run, in tokens. The default used to be 1,024 with no control to raise it,
- * which cut a complete app off partway through and made the preview fail. 8,192 fits a full
- * multi-file build; the larger settings are for models that can produce more in one reply.
- * A saved value of 1,024 or less is treated as that old default and replaced.
+ * which cut a complete app off partway through and made the preview fail. The default now gives
+ * builds 16,384 tokens, with continuation available when a project needs more than one reply.
+ * Saved legacy defaults (1,024 or less, and 8,192) are upgraded on load.
  */
 export const OUTPUT_LIMITS = [2048, 4096, 8192, 16384, 32000, 32768, 64000, 65536];
-export const DEFAULT_OUTPUT_TOKENS = 8192;
+export const DEFAULT_OUTPUT_TOKENS = 16384;
+
+/** Keep in step with the backend's modelOutputCeiling; plan capacity can exceed a model's. */
+export function modelOutputCeiling(model: string): number {
+  if (/(?:^|\/)gpt-4o(?:-|$)/i.test(model)) return 16384;
+  if (/(?:^|\/)gpt-4\.1(?:-|$)/i.test(model)) return 32768;
+  return 65536;
+}
+
+/** Managed defaults follow the backend; an explicitly chosen shorter reply stays a preference. */
+export function effectiveOutputLimit(c: Connection, tierCap: number): number {
+  const requested = c.inference && c.inference !== 'byok' && !c.customOutputLimit ? tierCap : c.maxTokens;
+  return Math.min(requested, tierCap, modelOutputCeiling(c.model));
+}
 const profiles = new Map<Provider, Connection>();
 const MODES: InferenceMode[] = ['free', 'credits', 'byok'];
-export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: flagshipFor(provider), token: '', maxTokens: DEFAULT_OUTPUT_TOKENS, saveKey: false }; }
+export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: flagshipFor(provider), token: '', maxTokens: DEFAULT_OUTPUT_TOKENS, customOutputLimit: false, saveKey: false }; }
 /** The model a new key for this provider starts on: its flagship, else its first seed, else nothing. */
 export function flagshipFor(provider: Provider): string { return providers[provider].flagship ?? providers[provider].models[0] ?? ''; }
 
@@ -128,7 +141,11 @@ export function loadConnection(provider: Provider): Connection {
     const model = typeof stored.model === 'string' ? stored.model : base.model;
     const inference = MODES.includes(stored.inference) ? stored.inference as InferenceMode : 'byok';
     // The funded list is unknown here, so the stored mode is kept as saved rather than re-derived.
-    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: OUTPUT_LIMITS.includes(stored.maxTokens) && stored.maxTokens > 1024 ? stored.maxTokens : DEFAULT_OUTPUT_TOKENS, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
+    const validLimit = Number.isInteger(stored.maxTokens) && stored.maxTokens >= 64 && stored.maxTokens <= 65536
+      && (OUTPUT_LIMITS.includes(stored.maxTokens) || stored.customOutputLimit === true);
+    const customOutputLimit = validLimit && (typeof stored.customOutputLimit === 'boolean' ? stored.customOutputLimit : ![1024, 8192, 16384].includes(stored.maxTokens));
+    const maxTokens = validLimit && (customOutputLimit || stored.maxTokens > 1024 && stored.maxTokens !== 8192) ? stored.maxTokens : DEFAULT_OUTPUT_TOKENS;
+    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens, customOutputLimit, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
   } catch { return base; }
 }
 /**
@@ -143,7 +160,7 @@ export function initialProvider(): Connection {
 export function switchProvider(current: Connection, provider: Provider): Connection { profiles.set(current.provider || 'custom', { ...current }); return { ...loadConnection(provider), mode: 'remote' }; }
 export function persistConnection(c: Connection): void {
   const provider = c.provider || 'custom';
-  localStorage.setItem(`ft-provider-${provider}`, JSON.stringify({ endpoint: c.endpoint, model: c.model, maxTokens: c.maxTokens, inference: MODES.includes(c.inference as InferenceMode) ? c.inference : 'byok', saveKey: Boolean(c.saveKey), ...(c.saveKey ? { token: c.token } : {}) }));
+  localStorage.setItem(`ft-provider-${provider}`, JSON.stringify({ endpoint: c.endpoint, model: c.model, maxTokens: c.maxTokens, customOutputLimit: Boolean(c.customOutputLimit), inference: MODES.includes(c.inference as InferenceMode) ? c.inference : 'byok', saveKey: Boolean(c.saveKey), ...(c.saveKey ? { token: c.token } : {}) }));
   localStorage.setItem('ft-active-provider', provider); profiles.set(provider, { ...c });
 }
 export function forgetKeys(): void {

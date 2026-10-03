@@ -11,7 +11,7 @@ and `llama-3.1-8b-instant`. They appear as soon as the deployment holds a key.
 1. Create a key at console.groq.com.
 2. Render > hey-buddy-web > Environment > add `GROQ_API_KEY`. Save; the service restarts.
 3. Optional: Groq's limits are higher than the xKiro gateway's, so `FREE_MAX_OUTPUT_TOKENS`
-   (default 8192, ceiling 65536; legacy 1024 is upgraded) can be raised, for example to 16384, so most generated pages finish
+   (default 16384, ceiling 65536; legacy 1024 / 8192 are upgraded) can be raised, for example to 32768, so most generated pages finish
    in one call instead of needing continuation calls. Every free reply is funded from the
    deployment's own quota, so raise it gradually and watch usage.
 

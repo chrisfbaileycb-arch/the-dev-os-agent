@@ -84,7 +84,7 @@ export default function Dock(p: DockProps) {
         {p.attachments.map(a => <span key={a.name} className="chip"><Paperclip size={11} />{a.name}<small>{Math.ceil(a.content.length / 4).toLocaleString()} tok</small><button aria-label={`Remove ${a.name}`} onClick={() => p.removeAttachment(a.name)}><X size={11} /></button></span>)}
       </div>}
       {p.truncated && !p.busy && <div className="dock-continuation" role="status">
-        <span>Response was cut off by token limit.</span>
+        <span>This reply is incomplete. Continue from the saved output.</span>
         <button type="button" className="button small primary continuation-btn" onClick={p.onContinue}>
           Continue from where you left off
         </button>

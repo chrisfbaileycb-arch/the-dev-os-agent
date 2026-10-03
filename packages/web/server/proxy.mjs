@@ -245,10 +245,10 @@ export function logUpstream(provider, url, detail, log = console.error) {
 /** Pinned so a future Anthropic API revision cannot change the wire format under a live deploy. */
 export const ANTHROPIC_VERSION = '2023-06-01';
 
-/** Output ceiling for any single request. Covers every current model's maximum output. */
+/** Platform output ceiling; models with smaller windows are capped separately below. */
 export const MAX_OUTPUT_TOKENS = 65536;
 /** What a request that names no limit gets: enough for a complete multi-file app. */
-export const DEFAULT_OUTPUT_TOKENS = 8192;
+export const DEFAULT_OUTPUT_TOKENS = 16384;
 /**
  * The cap on a free-tier reply when the operator has not set FREE_MAX_OUTPUT_TOKENS. It used to be
  * 1,024, and the setting itself was silently clamped to 4,096 whatever the dashboard said, so a
@@ -256,18 +256,24 @@ export const DEFAULT_OUTPUT_TOKENS = 8192;
  * applies up to MAX_OUTPUT_TOKENS. Note that Groq's free tier counts the requested reply against
  * its tokens-per-minute limit, so a high cap can make Groq refuse requests outright.
  */
-export const FREE_DEFAULT_OUTPUT_TOKENS = 8192;
+export const FREE_DEFAULT_OUTPUT_TOKENS = 16384;
 export const freeOutputCapFor = freeOutputTokens;
 
 /**
- * Resolves the maximum allowable output window for a given provider and model when none is specified.
- * OpenAI flagship models (gpt-4o, gpt-4.1) support 16,384 tokens; Anthropic and Gemini cap at 8,192.
+ * Default reply budget when none is specified; it does not imply a model's maximum capacity.
  */
 export function defaultMaxTokens(provider, model) {
   if (provider === 'openai' && typeof model === 'string' && /^(gpt-4o|gpt-4\.1)/i.test(model)) {
     return 16384;
   }
   return DEFAULT_OUTPUT_TOKENS;
+}
+
+/** Known smaller windows must not turn a larger plan allowance into an upstream 400. */
+export function modelOutputCeiling(model) {
+  if (/(?:^|\/)gpt-4o(?:-|$)/i.test(model)) return 16384;
+  if (/(?:^|\/)gpt-4\.1(?:-|$)/i.test(model)) return 32768;
+  return MAX_OUTPUT_TOKENS;
 }
 
 /** Active default model per provider for fallback when extended catalog models fail. */
@@ -432,7 +438,10 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
     if (!['/api/chat','/api/models','/api/providers'].includes(path)) return false;
     const env = currentEnv();
     const freeOutputCap = freeOutputCapFor(env);
-    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 120_000);
+    const controller = new AbortController();
+    let timeout = setTimeout(() => controller.abort(), 120_000);
+    const deadline = path === '/api/chat' ? setTimeout(() => controller.abort(), 1_800_000) : null;
+    const refreshTimeout = () => { clearTimeout(timeout); timeout = setTimeout(() => controller.abort(), 120_000); };
     let lockedPlan = null;
     res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
@@ -583,7 +592,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         const requested = body.max_tokens ?? body.max_output_tokens ?? body.max_completion_tokens ?? defaultMax;
         if (!Number.isInteger(requested) || requested < 1 || requested > MAX_OUTPUT_TOKENS) throw new HttpError(400, `max_tokens must be a whole number from 1 to ${MAX_OUTPUT_TOKENS}.`);
         // Server-funded output is capped regardless of what the browser asked for.
-        let max = funding.mode === 'free' ? Math.min(requested, freeOutputCap) : subscription ? Math.min(requested, subscription.maxOutputTokens) : requested;
+        let max = Math.min(modelOutputCeiling(body.model), funding.mode === 'free' ? Math.min(requested, freeOutputCap) : subscription ? Math.min(requested, subscription.maxOutputTokens) : requested);
         if (subscription && planRemaining !== null) {
           const rate = planRates(body.model);
           const promptCredits = Math.ceil(JSON.stringify(messages).length / 3) * rate.input / 1000;
@@ -710,6 +719,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // free-tier stream additionally runs through a read-only meter so its real cost is
       // recorded from the bytes that crossed the wire, never from a client-reported number.
       const meter = funding.mode === 'free' || planWorkspace ? createMeter({ promptChars: payload.length }) : null;
+      // A healthy long build can take more than ten minutes. Time out silence, not elapsed
+      // generation time; the separate deadline bounds a provider that sends endless heartbeats.
+      refreshTimeout(); response.on('data', refreshTimeout);
       const interceptor = createTruncationInterceptor();
       const pipedStream = meter ? response.pipe(interceptor).pipe(meter) : response.pipe(interceptor);
       // Finish the server ledger before the browser sees EOF and refreshes its allowance.
@@ -724,6 +736,6 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) } });
       else if (!res.destroyed) { res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'Provider stream interrupted. Please retry.' } })}\n\n`); res.end(); }
       return true;
-    } finally { clearTimeout(timeout); if (lockedPlan) activePlans.delete(lockedPlan); }
+    } finally { clearTimeout(timeout); if (deadline) clearTimeout(deadline); if (lockedPlan) activePlans.delete(lockedPlan); }
   };
 }

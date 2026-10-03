@@ -24,9 +24,9 @@ import { failureText, MemoryRejected, projectText, rememberRequest, retrieve } f
 import { loadMemories, removeMemory, saveMemory, touchMemories } from './lib/memoryStore';
 import { clearPipes, loadPipes, savePipes, type PipeSettings } from './lib/pipes';
 import { latestPreviewReply, parseProject } from './lib/project';
-import { ensureRunnableBuild, expectsRunnablePreview } from './lib/buildPreview';
+import { ensureRunnableBuild, expectsRunnablePreview, isContinuationRequest, needsPreviewRecovery } from './lib/buildPreview';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, defaultConnection, requestConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
+import { clearProviderStorage, defaultConnection, requestConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, effectiveOutputLimit, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
 import { modelChoices, preferredModel, type ModelChoice } from './lib/modelChoices';
 import { firstHealthyFree } from './lib/freeHealth';
@@ -122,6 +122,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   /** Which provider groups the model picker shows, and where a local Ollama lives. */
   const [pipes, setPipesState] = useState<PipeSettings>(loadPipes);
   const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false); const [notice, setNotice] = useState('');
+  const [writingReplyId, setWritingReplyId] = useState<string | null>(null);
   const [modelFallback, setModelFallback] = useState<{ extended: string; fallback: string } | null>(null);
   const [rosterOpen, setRosterOpen] = useState(false); const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
   /** A premium model the visitor picked that nothing here can pay for, awaiting their own key. */
@@ -177,9 +178,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const lastAssistant = active?.messages.filter(m => m.role === 'assistant' && !m.runId).at(-1);
   const lastTruncated = Boolean(lastAssistant?.truncated && !busy);
   const lastRequest = active?.messages.filter(m => m.role === 'user').at(-1);
-  const previewNeedsFinish = Boolean(active?.mode === 'build' && !busy && lastAssistant?.content && !parseProject(lastAssistant.content)
-    && expectsRunnablePreview(lastRequest?.content ?? '', Boolean(parseProject(previewContent))));
-  const previewIssue = active?.mode === 'build' ? lastAssistant?.error ?? (previewNeedsFinish ? 'This build did not include a runnable entry.' : undefined) : undefined;
+  const previewNeedsFinish = Boolean(!busy && lastAssistant?.content && needsPreviewRecovery(lastAssistant.content,
+    active?.mode === 'build' && expectsRunnablePreview(lastRequest?.content ?? '', Boolean(parseProject(previewContent))), lastAssistant.truncated));
+  const previewIssue = previewNeedsFinish ? lastAssistant?.error ?? 'This build still needs code to finish its preview.' : undefined;
   // Build binds the Coder / Builder agent; Chat and Plan use the agent the person chose.
   const persona = workMode === 'build' ? personaById(BUILDER_PERSONA_ID) : personaById(active?.persona ?? personaId);
   const mode: RunMode = workMode === 'plan' ? plan : 'chat';
@@ -188,8 +189,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const inference = connection.inference ?? 'byok';
   const planToken = connection.serverAccessToken?.trim() ?? '';
   const subscription = verifiedPlan?.token === planToken ? verifiedPlan.reading : null;
-  const outputCap = inference === 'free' ? deployment.free.maxOutputTokens ?? 8192 : inference === 'credits' ? subscription?.plan.maxOutputTokens ?? 8192 : 65536;
-  const effectiveOutput = Math.min(connection.maxTokens, outputCap);
+  const outputCap = inference === 'free' ? deployment.free.maxOutputTokens ?? 16384 : inference === 'credits' ? subscription?.plan.maxOutputTokens ?? 16384 : 65536;
+  const effectiveOutput = effectiveOutputLimit(connection, outputCap);
   // Gateway labels, so a discovered id reads as a model name everywhere it is shown.
   const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, ...Object.values(discovered).map(d => Object.fromEntries((d?.models ?? []).map(m => [m.id, m.label])))), [deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, discovered]);
   const label = modelLabel(connection.model, labels);
@@ -283,7 +284,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     const timer = setTimeout(() => {
       void sync.plan(planToken, controller.signal).then(reading => {
         if (controller.signal.aborted) return;
-        if (reading) { setVerifiedPlan({ token: planToken, reading }); setBalance(serverBalance(reading.pool, reading.used)); setConnection(c => c.inference === 'credits' ? { ...c, maxTokens: reading.plan.maxOutputTokens } : c); }
+        if (reading) { setVerifiedPlan({ token: planToken, reading }); setBalance(serverBalance(reading.pool, reading.used)); setConnection(c => c.inference === 'credits' && !c.customOutputLimit ? { ...c, maxTokens: reading.plan.maxOutputTokens } : c); }
         else { setPlanError('Could not verify this token. Check the token and server connection.'); setBalance(serverBalance(0, 0)); }
         setPlanChecking(false);
       });
@@ -401,7 +402,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // as one. Without it, inferenceFor decides — and now leaves a deliberate choice alone.
       // A different provider never inherits the previous provider's key.
       const token = provider === c.provider ? c.token : (keys[provider] ?? '');
-      return { ...c, mode: 'remote', model: id, provider, token, endpoint: provider === 'ollama' ? pipes.ollamaUrl : providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models), maxTokens: mode === 'credits' && c.inference !== 'credits' ? subscription?.plan.maxOutputTokens ?? 8192 : c.maxTokens };
+      return { ...c, mode: 'remote', model: id, provider, token, endpoint: provider === 'ollama' ? pipes.ollamaUrl : providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models), maxTokens: mode === 'credits' && c.inference !== 'credits' ? subscription?.plan.maxOutputTokens ?? 16384 : c.maxTokens };
     });
     setNotice('');
   }
@@ -499,6 +500,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   function send(overrideText?: string) {
     const text = (typeof overrideText === 'string' ? overrideText : draft).trim(); if (!text || busy || !ready) return;
     const problem = preflight(); if (problem) { setNotice(problem); return; }
+    if (mode === 'chat' && lastAssistant && isContinuationRequest(text) && needsPreviewRecovery(lastAssistant.content, false, lastAssistant.truncated)) {
+      setDraft(''); void finishExistingPreview(); return;
+    }
     // "remember that …" saves a preference as well as going to the agent as usual.
     const preference = rememberRequest(text);
     if (preference) void remember('preference', preference, true);
@@ -515,13 +519,15 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
 
   async function runChat(session: Session, user: ChatMessage, text: string, files: Attached[], shots: Photo[], title: string) {
     const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: persona.name, model: label };
+    setWritingReplyId(reply.id);
     patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
     const controller = new AbortController(); abortRef.current = controller; const traces: ChatMessage['tools'] = [];
     const previous = latestPreviewReply(session.messages);
     const previewExpected = workMode === 'build' && expectsRunnablePreview(text, Boolean(parseProject(previous)));
+    const turnConnection = { ...requestConnection(connection, keys), maxTokens: effectiveOutput };
     try {
       const result = await chatTurn({
-        connection: requestConnection(connection, keys), personaId: persona.id, history: session.messages, input: text,
+        connection: turnConnection, personaId: persona.id, history: session.messages, input: text,
         buildPreview: previewExpected,
         attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })),
         tools: activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools }),
@@ -529,24 +535,27 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         onDelta: t => patchMessage(session.id, reply.id, { content: t }),
         onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); },
       });
-      let content = result.text; let tokens = result.tokens; let previewError: string | undefined;
-      if (previewExpected && !parseProject(content)) {
-        setNotice('Finishing a runnable preview from the generated code…');
-        const completed = await ensureRunnableBuild({ goal: text, draft: content, previous: parseProject(previous) ? previous : undefined, connection: requestConnection(connection, keys), signal: controller.signal });
+      let content = result.text; let tokens = result.tokens; let usage = result.usage; let truncated = result.truncated; let previewError: string | undefined;
+      if (needsPreviewRecovery(content, previewExpected, truncated)) {
+        setNotice('Continuing the generated code to finish the preview…');
+        const completed = await ensureRunnableBuild({ goal: text, draft: content, truncated, previous: parseProject(previous) ? previous : undefined, connection: turnConnection, signal: controller.signal,
+          onDelta: partial => patchMessage(session.id, reply.id, { content: partial }) });
         content = completed.text; tokens += completed.tokens; previewError = completed.issue;
+        usage = usage && completed.usage ? { input: usage.input + completed.usage.input, output: usage.output + completed.usage.output } : undefined;
+        truncated = completed.truncated;
         setNotice(previewError ?? '');
       }
-      patchMessage(session.id, reply.id, { content, tokens, error: previewError, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools, truncated: result.truncated }, true);
+      patchMessage(session.id, reply.id, { content, tokens, error: previewError, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools, truncated }, true);
       setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens });
       if (result.memoriesUsed.length) void touchMemories(result.memoriesUsed, memoriesRef.current).then(commitMemories).catch(() => { /* bookkeeping only */ });
       // A build that produced runnable files leaves one line of project context behind.
       const built = parseProject(content);
       if (built) void remember('project', projectText({ request: text, files: built.files.map(f => f.path) }));
-      await charge(session.id, tokens, result.usage);
+      await charge(session.id, tokens, usage);
     } catch (e) {
       const stopped = controller.signal.aborted;
       const message = freeTierMessage(e);
-      patchMessage(session.id, reply.id, m => stopped ? { content: `${m.content}${m.content ? '\n\n' : ''}(stopped)` } : { error: message }, true);
+      patchMessage(session.id, reply.id, m => stopped ? { error: 'Stopped. Your generated output is saved.', truncated: needsPreviewRecovery(m.content) || undefined } : { error: message, truncated: needsPreviewRecovery(m.content, false, true) || undefined }, true);
       if (!stopped) {
         setNotice(message);
         void remember('failure', failureText({ model: label, error: message, request: text }));
@@ -554,21 +563,23 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
           setModelFallback({ extended: connection.model, fallback: e.fallbackModel });
         }
       }
-    } finally { abortRef.current = null; setBusy(false); }
+    } finally { abortRef.current = null; setWritingReplyId(null); setBusy(false); }
   }
 
   /** Recover a build saved before automatic completion was added, using its original request. */
   async function finishExistingPreview() {
-    if (!active || !lastAssistant || !lastRequest || busy || parseProject(lastAssistant.content)) return;
+    if (!active || !lastAssistant || !lastRequest || busy || !needsPreviewRecovery(lastAssistant.content, true, lastAssistant.truncated)) return;
     const problem = preflight(); if (problem) { setNotice(problem); return; }
-    const controller = new AbortController(); abortRef.current = controller; setBusy(true);
+    const controller = new AbortController(); abortRef.current = controller; setWritingReplyId(lastAssistant.id); setBusy(true);
     setNotice('Finishing the saved build for the live preview…');
     try {
       const earlier = latestPreviewReply(active.messages.filter(m => m.id !== lastAssistant.id));
-      const recovery = await ensureRunnableBuild({ goal: lastRequest.content, draft: lastAssistant.content, previous: parseProject(earlier) ? earlier : undefined, connection: requestConnection(connection, keys), signal: controller.signal });
-      patchMessage(active.id, lastAssistant.id, { content: recovery.text, tokens: (lastAssistant.tokens ?? 0) + recovery.tokens, error: recovery.issue }, true);
+      const goal = active.messages.filter(m => m.role === 'user' && !isContinuationRequest(m.content)).at(-1)?.content ?? lastRequest.content;
+      const recovery = await ensureRunnableBuild({ goal, draft: lastAssistant.content, truncated: lastAssistant.truncated, previous: parseProject(earlier) ? earlier : undefined, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, signal: controller.signal,
+        onDelta: partial => patchMessage(active.id, lastAssistant.id, { content: partial, error: undefined }) });
+      patchMessage(active.id, lastAssistant.id, { content: recovery.text, tokens: (lastAssistant.tokens ?? 0) + recovery.tokens, error: recovery.issue, truncated: recovery.truncated }, true);
       setNotice(recovery.issue ?? '');
-      if (recovery.tokens) await charge(active.id, recovery.tokens);
+      if (recovery.tokens) await charge(active.id, recovery.tokens, recovery.usage);
     } catch (error) {
       if (!controller.signal.aborted) {
         setNotice(errorText(error));
@@ -577,7 +588,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         }
       }
     }
-    finally { abortRef.current = null; setBusy(false); }
+    finally { abortRef.current = null; setWritingReplyId(null); setBusy(false); }
   }
 
   // Older sessions may contain a CSS-only Build reply from before automatic completion existed.
@@ -623,7 +634,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // stage-candidate list is the deployment's funded ids only when the visitor is actually on
       // the free tier — a BYOK run stays on the visitor's own model for every stage.
       const stageCandidates = inference === 'free' ? deployment.free.models : [];
-      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection, keys), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, approvalGates: true });
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, approvalGates: true });
     } catch (e) { fail(errorText(e)); }
   }
 
@@ -760,7 +771,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
                 const run = m.runId ? runs.find(r => r.id === m.runId) : undefined;
                 return <article key={m.id} className="msg agent">
                   <div className="msg-meta"><strong>{m.persona ?? 'Agent'}</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.model && <em>{m.model}</em>}{m.tokens ? <em>{m.tokens.toLocaleString()} tok</em> : null}{m.latencyMs ? <em>{m.latencyMs} ms</em> : null}</div>
-                  {run ? <RunCard run={run} onApprove={run.status === 'awaiting_approval' ? approveRun : undefined} onStop={run.status === 'awaiting_approval' ? stop : undefined} /> : <AssistantReply content={m.content} working={busy && !m.error} />}
+                  {run ? <RunCard run={run} onApprove={run.status === 'awaiting_approval' ? approveRun : undefined} onStop={run.status === 'awaiting_approval' ? stop : undefined} /> : <AssistantReply content={m.content} working={busy && m.id === writingReplyId && !m.error} />}
                   {m.tools?.map((t, i) => { const args = JSON.stringify(t.args); return <div key={i} className={t.ok ? 'tool-trace' : 'tool-trace failed'}><Wrench size={11} /><code>{t.tool} {args.length > 60 ? `${args.slice(0, 57)}...` : args}</code><span>{t.summary}</span></div>; })}
                   {m.error && <p className="msg-error"><CircleAlert size={12} />{m.error}</p>}
                 </article>;
@@ -781,7 +792,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
               listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice}
               tokens={tokens}
               truncated={lastTruncated}
-              onContinue={() => send('continue from where you left off')}
+              onContinue={() => previewNeedsFinish ? void finishExistingPreview() : send('continue from where you left off')}
             />
           </section>
           {previewOpen && <>

@@ -19,9 +19,9 @@ to the application server. Changing the local address invalidates its old catalo
 
 | Plan | Monthly price | Monthly credits | Reply output ceiling |
 | --- | ---: | ---: | ---: |
-| Starter | $25 | 1,000 | 8,192 tokens |
-| Builder | $50 | 2,500 | 16,384 tokens |
-| Studio | $100 | 6,000 | 32,768 tokens |
+| Starter | $25 | 1,000 | 16,384 tokens |
+| Builder | $50 | 2,500 | 32,768 tokens |
+| Studio | $100 | 6,000 | 65,536 tokens |
 
 These are adjustable product allowances, not dollar balances or a profitability estimate.
 All three plans use the same published managed model list. The server applies tier limits
@@ -67,7 +67,31 @@ and account-linked billing are not implemented; activation and cancellation are 
 Legacy `PLAN_ACCESS_TOKENS` and the operator's `SERVER_CREDIT_ACCESS_TOKEN` use Starter
 limits. `CREDIT_MONTHLY_POOL` and `PLAN_CREDIT_MONTHLY_POOL` do not set the new plan budgets.
 
-The free reply default is now 8,192. An existing `FREE_MAX_OUTPUT_TOKENS=1024` setting,
-including a stored dashboard override, upgrades to 8,192. Other explicit caps are respected.
+The managed free reply default is 16,384. Existing `FREE_MAX_OUTPUT_TOKENS=1024` or
+`8192` settings, including stored dashboard overrides, upgrade to 16,384. The previous
+paid-tier defaults (Starter 8,192 / Builder 16,384 / Studio 32,768) likewise upgrade to the
+new defaults. Other explicit caps are respected. Saved browser defaults of 1,024 or 8,192
+also upgrade. Managed requests use the current backend cap by default, including custom
+operator limits such as 65,000. Choosing a shorter reply in Settings marks it as an explicit
+preference that survives refresh; **Use backend reply limit** restores the server default.
 The bottom bar displays the effective reply ceiling and the verified server allowance;
-personal-key and local modes show that they spend no plan credits.
+personal-key and local modes show that they spend no plan credits. Known smaller model
+windows (GPT-4o: 16,384; GPT-4.1: 32,768) reduce the effective ceiling in both the browser
+and proxy. Provider-specific limits can still apply to other models.
+
+## Completing larger builds
+
+A healthy reply may stream for up to thirty minutes rather than being cut off after two.
+The proxy stops a provider that sends nothing for two minutes; streamed data resets that
+inactivity timer. The browser waits five extra seconds so it can receive the proxy error.
+Chat and Build both resume generated web code that reaches a length limit or ends in an open code
+fence, up to three continuation calls per attempt. Each call is metered normally and stays
+within the selected model, tier, and remaining allowance. The continuation carries the
+original request, the project beginning, and a larger tail of the existing source so it
+can retain names and state while finishing the files. Growing continuations stay visible.
+
+If the automatic attempts still cannot finish, the accumulated code remains saved and
+**Continue** resumes that same reply. It does not start a new conversation turn that only
+has a short excerpt of the unfinished file. Opening an older incomplete web build's preview
+also attempts recovery once. Partial multi-file replies do not replace the last completed
+preview. Completion passes use the actual reply budget rather than a fixed 700-token rewrite.

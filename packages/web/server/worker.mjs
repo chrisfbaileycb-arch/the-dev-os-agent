@@ -20,7 +20,7 @@ const normalizeBase = value => { const trimmed = (value || '').trim().replace(/\
 const BASE = normalizeBase(process.env.WEB_SERVICE_URL);
 const TOKEN = process.env.WORKER_TOKEN || '';
 const IDLE_MS = Math.max(1000, Number(process.env.WORKER_POLL_MS) || 3000);
-const STAGE_TIMEOUT_MS = 120_000;
+const STAGE_TIMEOUT_MS = 1_805_000;
 
 export { normalizeBase };
 
@@ -66,7 +66,7 @@ export async function runStage({ job, system, prompt, fetchImpl = fetch }) {
     headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': job.workspaceId },
     // No key is sent: background jobs are zero-config only, so the proxy funds them from the
     // deployment's own keys and meters them against the workspace's free allowance.
-    body: JSON.stringify({ provider: connection.provider || 'groq', model: connection.model, max_tokens: connection.maxTokens || 8192, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] }),
+    body: JSON.stringify({ provider: connection.provider || 'groq', model: connection.model, max_tokens: connection.maxTokens || 16384, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] }),
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => null);

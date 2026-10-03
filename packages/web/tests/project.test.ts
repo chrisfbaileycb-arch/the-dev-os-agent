@@ -337,8 +337,8 @@ describe('truncated multi-file replies', () => {
     expect(parseProject(full)?.kind).toBe('react');
   });
 
-  it('falls back to a sibling html document', () => {
+  it('does not declare success while a sibling file is still inside an open fence', () => {
     const mixed = `${truncated}\n\`\`\`html\n<!doctype html><html><body>ok</body></html>\n\`\`\``;
-    expect(parseProject(mixed)?.entry).toBe('index.html');
+    expect(parseProject(mixed)).toBeNull();
   });
 });
