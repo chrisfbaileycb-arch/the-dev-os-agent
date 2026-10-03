@@ -50,6 +50,10 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     // with models:read, rate-limited for prototyping) and Cerebras (open-weight models, free tier).
     github: 'https://models.github.ai/inference',
     cerebras: 'https://api.cerebras.ai/v1',
+    // Meta's Model API (Muse) is OpenAI-compatible. Operator-funded only; it is not offered for a visitor's own key.
+    meta: 'https://api.meta.ai/v1',
+    // Vercel AI Gateway: OpenAI-compatible, bearer key, lists its roster at /models.
+    vercel: 'https://ai-gateway.vercel.sh/v1',
     'cheaper-inference': cheaperInferenceBase(env),
     xkiro: xkiroBase(env),
   };

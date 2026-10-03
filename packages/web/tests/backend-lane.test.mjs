@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { openDatabase } from '../server/db.mjs';
 import { openSettings, cleanTiers } from '../server/settings.mjs';
 import { createAdmin, discoverForProvider } from '../server/admin.mjs';
-import { keyFor } from '../server/proxy.mjs';
+import { keyFor, resolveTarget } from '../server/proxy.mjs';
 import { FREE_MODELS, adminTierConfig, freeModel, freeModels, freeTierStatus, paidModels, setAdminTiers } from '../server/freetier.mjs';
 import { REGISTRY, backendProviders, isBackendProvider, isShieldEligible } from '../server/providerRegistry.mjs';
 
@@ -13,7 +13,7 @@ import { REGISTRY, backendProviders, isBackendProvider, isShieldEligible } from 
 // the lane enforced, which is the default; the older funding-mechanics tests switch it off.
 
 const TOKEN = 'a-long-admin-token-for-tests';
-const NON_LANE = ['github', 'openrouter', 'huggingface', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'ollama', 'custom'];
+const NON_LANE = ['github', 'vercel', 'openrouter', 'huggingface', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'ollama', 'custom'];
 
 test.afterEach(() => setAdminTiers(null));
 
@@ -29,8 +29,8 @@ async function login(url) {
   return r.headers.get('set-cookie').split(';')[0];
 }
 
-test('the registry names the lane: the six integrated US providers, with Meta, Azure and Bedrock decided but not yet routable', () => {
-  assert.deepEqual(backendProviders().sort(), ['anthropic', 'cerebras', 'google', 'groq', 'openai', 'xai']);
+test('the registry names the lane: the seven integrated US providers, with Azure and Bedrock decided but not yet routable', () => {
+  assert.deepEqual(backendProviders().sort(), ['anthropic', 'cerebras', 'google', 'groq', 'meta', 'openai', 'xai']);
   assert.deepEqual(backendProviders({ onlyIntegrated: false }).sort(), ['anthropic', 'azure', 'bedrock', 'cerebras', 'google', 'groq', 'meta', 'openai', 'xai']);
   for (const id of ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras', 'meta', 'azure', 'bedrock']) assert.equal(isBackendProvider(id), true, id);
   for (const id of [...NON_LANE, 'not-a-provider', '', undefined]) assert.equal(isBackendProvider(id), false, String(id));
@@ -104,11 +104,11 @@ test('the admin API lists the lane, parks leftover keys apart, says what is plan
   await withServer([createAdmin({ db, env, settings, log: () => {} })], async url => {
     const cookie = await login(url);
     const config = await (await call(url, '/api/admin/config', { cookie })).json();
-    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'cerebras', 'google', 'groq', 'openai', 'xai']);
+    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'cerebras', 'google', 'groq', 'meta', 'openai', 'xai']);
     assert.ok(config.providers.every(p => p.backend === true));
     // Only a dashboard-stored leftover is offered for removal; an environment key has no row at all.
     assert.deepEqual(config.retired.map(p => p.provider), ['venice']);
-    assert.deepEqual(config.planned.map(p => p.provider).sort(), ['azure', 'bedrock', 'meta']);
+    assert.deepEqual(config.planned.map(p => p.provider).sort(), ['azure', 'bedrock']);
     const save = await call(url, '/api/admin/keys', { method: 'PUT', body: { provider: 'openrouter', key: 'sk-or-x' }, cookie, origin: url });
     assert.ok(save.status >= 400, 'saving a key outside the lane is refused');
     const gone = await call(url, '/api/admin/keys', { method: 'PUT', body: { provider: 'venice', key: '' }, cookie, origin: url });
@@ -118,4 +118,18 @@ test('the admin API lists the lane, parks leftover keys apart, says what is plan
     assert.equal(discover.status, 400);
   });
   await assert.rejects(() => discoverForProvider('openrouter', { OPENROUTER_API_KEY: 'k' }), /US backend providers/);
+});
+
+test('Meta Muse is a backend provider with its own fixed route; Vercel AI Gateway is own-key only', async () => {
+  assert.equal((await resolveTarget('meta', '', {})).base, 'https://api.meta.ai/v1');
+  assert.equal((await resolveTarget('vercel', '', {})).base, 'https://ai-gateway.vercel.sh/v1');
+  const db = openDatabase(':memory:');
+  const settings = await openSettings({ db, env: { ADMIN_TOKEN: TOKEN } });
+  await settings.setKey('meta', 'muse-key-for-test');
+  assert.equal(settings.env().META_API_KEY, 'muse-key-for-test');
+  await assert.rejects(() => settings.setKey('vercel', 'k'), /Unknown provider|US backend providers/);
+  // A plan token reaches Muse on the deployment's key, and never reaches the gateway.
+  const env = { PLAN_ACCESS_TOKENS: 'plan-token-0123456789', META_API_KEY: 'muse-env', VERCEL_AI_GATEWAY_API_KEY: 'v-env' };
+  assert.equal(keyFor({ provider: 'meta', serverAccessToken: 'plan-token-0123456789' }, env), 'muse-env');
+  assert.equal(keyFor({ provider: 'vercel', serverAccessToken: 'plan-token-0123456789' }, env), '');
 });

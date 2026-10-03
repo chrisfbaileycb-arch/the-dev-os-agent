@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -58,6 +58,12 @@ export const providers: Record<Provider, ProviderInfo> = {
   // US-hosted open-weight models, including OpenAI's gpt-oss, on a free account with no card.
   cerebras: { name: 'Cerebras', tier: 'Free key', endpoint: 'https://api.cerebras.ai/v1', flagship: 'gpt-oss-120b', models: ['gpt-oss-120b'] },
   xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: [] },
+  // Meta's Muse, through its Model API (OpenAI-compatible). Operator-funded only: it is configured in the
+  // admin dashboard and its models reach visitors as free or plan models, so it is not in Settings' list.
+  // No seed ids on purpose: names a provider retires are how the picker once offered models that 404.
+  meta: { name: 'Meta Muse', tier: 'Frontier', endpoint: 'https://api.meta.ai/v1', models: [] },
+  // Vercel AI Gateway: one OpenAI-compatible endpoint, one key, many providers behind it. Discover lists the roster.
+  vercel: { name: 'Vercel AI Gateway', tier: 'Gateway', endpoint: 'https://ai-gateway.vercel.sh/v1', models: [] },
   // Optional future adapter only. It is deliberately not configured, discovered, or shown to
   // customers in this phase; hosted Cheaper Inference is the initial managed route.
   omniroute: { name: 'Optional self-hosted route', tier: 'Future adapter', endpoint: '', models: [] },

@@ -45,6 +45,7 @@ export default function Admin(p: AdminProps) {
   const [catalogs, setCatalogs] = useState<Record<string, ModelChoice[]>>({});
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [queries, setQueries] = useState<Record<string, string>>({});
+  const [manualIds, setManualIds] = useState<Record<string, string>>({});
   const [tiers, setTiers] = useState<Tiers | null>(null);
   const [dirty, setDirty] = useState(false);
 
@@ -171,6 +172,10 @@ export default function Admin(p: AdminProps) {
         const isLoading = loading.has(r.provider);
         return <div key={r.provider} className="tier">
           <div className="panel-head"><h3>{r.name}<small>{all ? `${all.length.toLocaleString()} models on this key` : 'Live list not loaded'}</small></h3><span className="row gap">{all && <label className="row gap admin-filter"><Search size={12} /><input type="search" placeholder="Filter" value={queries[r.provider] ?? ''} onChange={e => setQueries(q => ({ ...q, [r.provider]: e.target.value }))} /></label>}<button className="button small" disabled={isLoading} onClick={() => discover(r.provider)}>{isLoading ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}{all ? 'Reload' : 'Load models'}</button></span></div>
+          <form className="row gap admin-add" onSubmit={e => { e.preventDefault(); const id = (manualIds[r.provider] ?? '').trim(); if (!id || id.length > 200) return; setCatalogs(c => ({ ...c, [r.provider]: [{ id, label: id }, ...(c[r.provider] ?? []).filter(m => m.id !== id)] })); setManualIds(m => ({ ...m, [r.provider]: '' })); }}>
+            <input aria-label={`Add a ${r.name} model ID`} placeholder="Not in the list? Type a model ID" value={manualIds[r.provider] ?? ''} onChange={e => setManualIds(m => ({ ...m, [r.provider]: e.target.value }))} />
+            <button type="submit" className="button small" disabled={!(manualIds[r.provider] ?? '').trim()}>Add model ID</button>
+          </form>
           {all && <div className="ledger-wrap"><table className="ledger tier-table"><tbody>
             {list.slice(0, 80).map(m => { const t = tierOf(m.id); const entry: TierEntry = { id: m.id, provider: r.provider, ...(m.label !== m.id ? { label: m.label } : {}) }; return <tr key={m.id}>
               <td><strong>{m.label}</strong>{m.label !== m.id && <><br /><small className="mono">{m.id}</small></>}{m.free && <em className="model-badge included"> free at provider</em>}</td>

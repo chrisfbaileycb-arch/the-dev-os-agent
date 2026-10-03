@@ -383,19 +383,6 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     });
     setNotice('');
   }
-  /**
-   * A key typed into a model dropdown. It goes into the keyring and straight into this browser's
-   * storage, for that one provider only, so it is there on the next visit without a trip through
-   * Settings. Saving sends nothing: the key rides only on requests to that provider (listing or
-   * running its models), through the relay. An empty key forgets it. Newly keyed providers have their live model list read by the
-   * effect that watches `keyed`.
-   */
-  function saveProviderKey(provider: Provider, key: string) {
-    const value = key.trim();
-    setKeys(k => ({ ...k, [provider]: value }));
-    saveKeyring({ [provider]: value });
-    setNotice(value ? `${providers[provider].name} key saved in this browser.` : `${providers[provider].name} key removed from this browser.`);
-  }
   function modelNeedsKey(m: CatalogModel) {
     // The ask is made where the visitor is standing. Bouncing them to Settings mid-thought loses
     // the model they just chose; one modal names it, and the button onward carries it with them.
@@ -763,7 +750,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
               openConnectors={() => openConnectors()} connectorCount={connectorCount} openGithubPull={() => setGithubPullOpen(true)}
-              model={connection.model} provider={connection.provider} saveProviderKey={saveProviderKey} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
+              model={connection.model} provider={connection.provider} openSettings={() => setPage('settings')} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
               discovered={discovered} discovering={discovering} pipes={pipes}
               pickModel={pickModel} modelNeedsKey={modelNeedsKey} modelNeedsPlan={setPlanPrompt} discover={id => void discover(id)}
               busy={busy} ready={ready} send={send} stop={stop}
@@ -794,7 +781,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} />}
+        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} />}
         {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
       </div>
       <StatusBar model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />

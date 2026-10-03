@@ -4,7 +4,7 @@ import type { Provider } from './providers';
 // The two model dropdowns on the dock.
 //
 //   us   Models from the US providers this deployment can fund itself: Anthropic, OpenAI, Google,
-//        xAI, Groq and Cerebras (Meta, Azure and Bedrock join when the proxy can route to them). Free and plan models live
+//        xAI, Groq, Cerebras and Meta Muse (Azure and Bedrock join when the proxy can route to them). Free and plan models live
 //        here, and a visitor's own key for one of these vendors unlocks its group here too.
 //   own  Everything else — OpenRouter, GitHub Models, Cohere, Venice, Hugging Face, xKiro, AIHubMix
 //        and a local model. The deployment never pays for these. They run on a key
@@ -16,7 +16,7 @@ import type { Provider } from './providers';
 
 export type Lane = 'us' | 'own';
 
-export const US_LANE_PROVIDERS: readonly Provider[] = ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras'];
+export const US_LANE_PROVIDERS: readonly Provider[] = ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras', 'meta'];
 
 export const isUsProvider = (provider: Provider | string | undefined): boolean =>
   US_LANE_PROVIDERS.includes(provider as Provider);
