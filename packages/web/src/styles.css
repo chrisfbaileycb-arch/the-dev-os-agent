@@ -132,6 +132,14 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .edit-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .stream-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 .streaming-note { position: absolute; top: 10px; left: 12px; z-index: 2; padding: 3px 7px; border: 1px solid var(--accent); border-radius: 4px; background: rgba(15,18,32,.82); color: #fff; font-size: 10.5px; }
+/* The hourglass: flips a half turn, rests, flips again while a reply is growing. Held still and amber when it has gone quiet. */
+.hourglass { display: inline-flex; color: var(--accent); }
+.hourglass.turning { animation: hourglass-flip 1.8s ease-in-out infinite; }
+.hourglass.stalled { color: var(--warn, #d9a441); }
+@keyframes hourglass-flip { 0% { transform: rotate(0); } 70%, 100% { transform: rotate(180deg); } }
+.writing-status { display: inline-flex; align-items: center; gap: 7px; margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.writing-status.stalled { color: var(--warn, #d9a441); }
+@media (prefers-reduced-motion: reduce) { .hourglass.turning { animation: none; } }
 @keyframes pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
 .preview-content { flex: 1; overflow: auto; padding: 14px 16px; }
 .preview-body { font: 13px/1.6 var(--font); border: 0; background: transparent; white-space: pre-wrap; word-break: break-word; }

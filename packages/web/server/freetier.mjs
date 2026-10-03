@@ -241,6 +241,7 @@ export function resetKeyRotation() { poolCursor.clear(); }
 export const PROVIDER_KEY_VARS = {
   openrouter: 'OPENROUTER_API_KEY',
   groq: 'GROQ_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   google: 'GOOGLE_API_KEY',

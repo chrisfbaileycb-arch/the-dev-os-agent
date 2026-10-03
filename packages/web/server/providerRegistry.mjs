@@ -88,14 +88,15 @@ export const allowedUnderShield = id => isShieldEligible(providerRecord(id));
 // deployment funds on its own account (the free tier, the paid plan, the plan-token routes).
 //
 // It is a deliberately shorter list than Shield. Shield asks "is this a US company serving from the
-// US"; the backend lane is the operator's own choice of first-party US model makers and the two US
-// hyperscalers that resell them, nothing else. Groq, Cerebras and GitHub Models are US companies and
-// stay Shield-eligible, but they are not on this list, so they live in the visitor's own-key lane
-// (a key typed in the browser, see src/lib/modelLanes.ts) rather than on the operator's card.
+// US"; the backend lane is the operator's own choice: first-party US model makers, the two US
+// hyperscalers that resell them, and the US inference hosts Groq and Cerebras. GitHub Models is a US
+// host too but is not on this list, and gateways and relays (xKiro, OpenRouter, ...) never can be,
+// so those live in the visitor's own-key lane (a key typed in the browser, see
+// src/lib/modelLanes.ts) rather than on the operator's card.
 //
 // Adding a provider here is the only way to put it on the dashboard, and the intersection with
 // isShieldEligible means a registry edit that moves a company out of the US takes it off again.
-const BACKEND_IDS = ['anthropic', 'openai', 'google', 'xai', 'meta', 'azure', 'bedrock'];
+const BACKEND_IDS = ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras', 'meta', 'azure', 'bedrock'];
 
 let laneEnforced = true;
 /**

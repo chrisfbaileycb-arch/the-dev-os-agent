@@ -114,7 +114,7 @@ services:
       - key: FREE_MAX_OUTPUT_TOKENS
         value: "1024"
       # There is no longer a switch for US-only funding: the server funds only the backend lane
-      # (Anthropic, OpenAI, Google, xAI; see server/providerRegistry.mjs). Add those keys, and pick
+      # (Anthropic, OpenAI, Google, xAI, Groq, Cerebras; see server/providerRegistry.mjs). Add those keys, and pick
       # which of their models are free or paid, in the admin dashboard. Every other provider is
       # used with a key the visitor types into the browser.
       # "true" switches the tier off without removing the provider keys.

@@ -215,7 +215,7 @@ export default function ModelPicker(p: ModelPickerProps) {
 
   return <div className="model-picker" ref={root}>
     {/* The dropdown that holds the current model shows it; the other shows its own name, dimmed. */}
-    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}${holdsCurrent ? '' : ' idle'}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title={holdsCurrent ? `Choose a model — ${LANE_LABEL[p.lane]}` : managed ? 'US models: Anthropic, OpenAI, Google, xAI' : 'Other providers, on your own API key'}>
+    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}${holdsCurrent ? '' : ' idle'}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title={holdsCurrent ? `Choose a model — ${LANE_LABEL[p.lane]}` : managed ? 'US models: Anthropic, OpenAI, Google, xAI, Groq, Cerebras' : 'Other providers, on your own API key'}>
       {holdsCurrent
         ? (p.inference === 'free' ? <Sparkles size={13} strokeWidth={1.75} /> : p.inference === 'credits' ? <Wallet size={13} strokeWidth={1.75} /> : <KeyRound size={13} strokeWidth={1.75} />)
         : (managed ? <Sparkles size={13} strokeWidth={1.75} /> : <Globe size={13} strokeWidth={1.75} />)}
@@ -224,7 +224,7 @@ export default function ModelPicker(p: ModelPickerProps) {
       <ChevronDown size={12} />
     </button>
     {open && <div className="model-menu" role="listbox" aria-label={`Model: ${LANE_LABEL[p.lane]}`}>
-      <div className="model-lane-head"><strong>{LANE_LABEL[p.lane]}</strong><small>{managed ? 'Anthropic, OpenAI, Google and xAI — free, plan, or your own key.' : 'Runs on your own API key. Saved in this browser only.'}</small></div>
+      <div className="model-lane-head"><strong>{LANE_LABEL[p.lane]}</strong><small>{managed ? 'Anthropic, OpenAI, Google, xAI, Groq and Cerebras — free, plan, or your own key.' : 'Runs on your own API key. Saved in this browser only.'}</small></div>
       {total > 8 && <label className="model-search"><Search size={12} /><input ref={search} type="search" value={query} placeholder={`Filter ${total.toLocaleString()} models…`} aria-label="Filter models" onChange={e => setQuery(e.target.value)} /></label>}
 
       {extendedTotal > 0 && <div className="model-tabs" role="tablist" aria-label="Catalog Sections">
