@@ -183,6 +183,8 @@ export function errorMessage(status) {
  */
 export function clientMessage(status, detail) {
   const base = errorMessage(status);
+  // A text-only model handed a photo answers with a schema complaint; say what it means.
+  if (status === 400 && /content must be a string/i.test(String(detail ?? ''))) return 'This model can only read text, and the message includes a photo. Remove the photo, or pick a model that can read images.';
   if (![400, 404, 413, 422].includes(status) || !detail) return base;
   const safe = String(detail).replace(/\b(?:sk|xai|gsk|hf|pk)[-_][A-Za-z0-9_-]{16,}/gi, '[redacted]').replace(/\s+/g, ' ').trim().slice(0, 300);
   return safe ? `${base} The provider said: ${safe}` : base;
@@ -262,6 +264,15 @@ export const ANTHROPIC_VERSION = '2023-06-01';
 export const MAX_OUTPUT_TOKENS = 65536;
 /** What a request that names no limit gets: enough for a complete multi-file app. */
 export const DEFAULT_OUTPUT_TOKENS = 8192;
+/**
+ * The cap on a free-tier reply when the operator has not set FREE_MAX_OUTPUT_TOKENS. It used to be
+ * 1,024, and the setting itself was silently clamped to 4,096 whatever the dashboard said, so a
+ * value of 10,000 was accepted, shown as saved, and never took effect. The operator's number now
+ * applies up to MAX_OUTPUT_TOKENS. Note that Groq's free tier counts the requested reply against
+ * its tokens-per-minute limit, so a high cap can make Groq refuse requests outright.
+ */
+export const FREE_DEFAULT_OUTPUT_TOKENS = 4096;
+export const freeOutputCapFor = (env = process.env) => Math.min(MAX_OUTPUT_TOKENS, Math.max(64, Number(env.FREE_MAX_OUTPUT_TOKENS ?? FREE_DEFAULT_OUTPUT_TOKENS) || FREE_DEFAULT_OUTPUT_TOKENS));
 
 /**
  * Resolves the maximum allowable output window for a given provider and model when none is specified.
@@ -434,7 +445,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
     const path = new URL(req.url, 'http://proxy').pathname;
     if (!['/api/chat','/api/models','/api/providers'].includes(path)) return false;
     const env = currentEnv();
-    const freeOutputCap = Math.min(4096, Math.max(64, Number(env.FREE_MAX_OUTPUT_TOKENS ?? 1024) || 1024));
+    const freeOutputCap = freeOutputCapFor(env);
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 120_000);
     res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     try {

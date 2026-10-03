@@ -41,17 +41,18 @@ test('the registry names the lane: the six integrated US providers, with Meta, A
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'xkiro')), false);
 });
 
-test('the zero-config pool holds Groq and nothing outside the lane, and every non-lane model is refused by id', () => {
-  // Groq is the only provider in the built-in pool that is also in the lane.
-  assert.ok(FREE_MODELS.length > 0 && FREE_MODELS.every(m => m.provider === 'groq'), JSON.stringify(FREE_MODELS.map(m => m.provider)));
+test('the dashboard picks are the only funded models: the built-in Groq and OpenRouter ids are gone', () => {
+  assert.deepEqual(FREE_MODELS, []);
   const env = { GROQ_API_KEY: 'k', OPENROUTER_API_KEY: 'k', XKIRO_API_KEY: 'k', HF_TOKEN: 'k' };
-  assert.ok(freeModels(env, ['a/free']).every(m => m.provider === 'groq'));
-  for (const id of ['openrouter/auto', 'meta-llama/llama-3.2-3b-instruct:free', 'a/free', 'Qwen/Qwen2.5-7B-Instruct']) assert.equal(freeModel(id, env, ['a/free']), undefined, id);
-  assert.equal(freeModel('groq/llama-3.3-70b-versatile', env, [])?.provider, 'groq');
-  // With only xKiro, OpenRouter and Hugging Face keys, nothing is funded at all.
-  const nonLaneOnly = { OPENROUTER_API_KEY: 'k', XKIRO_API_KEY: 'k', HF_TOKEN: 'k' };
-  assert.equal(freeTierStatus(nonLaneOnly, ['a/free']).enabled, false);
-  assert.equal(freeTierStatus(env, ['a/free']).enabled, true);
+  assert.deepEqual(freeModels(env, ['a/free']), []);
+  // Groq retired these on a live key (404 "does not exist"); they must never be offered as free.
+  for (const id of ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant', 'openrouter/auto', 'meta-llama/llama-3.2-3b-instruct:free', 'a/free', 'Qwen/Qwen2.5-7B-Instruct']) assert.equal(freeModel(id, env, ['a/free']), undefined, id);
+  assert.equal(freeTierStatus(env, ['a/free']).enabled, false);
+  // A pick the operator made from Groq's live list is funded, and only with a key behind it.
+  setAdminTiers({ mode: 'manual', free: [{ id: 'openai/gpt-oss-120b', provider: 'groq' }], paid: [] });
+  assert.equal(freeModel('openai/gpt-oss-120b', env, [])?.provider, 'groq');
+  assert.deepEqual(freeTierStatus(env, []).models, ['openai/gpt-oss-120b']);
+  assert.deepEqual(freeTierStatus({}, []).models, []);
 });
 
 test('a dashboard pick from the lane is funded; one from outside it is dropped on save, on load and at the funding gate', () => {

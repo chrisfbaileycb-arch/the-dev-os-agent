@@ -26,7 +26,7 @@ export interface ModelChoice {
  * survives the filter and simply fails on send if it really wasn't chat, while wrongly hiding
  * a working model is a choice the visitor cannot recover from.
  */
-const NON_CHAT = /embed|rerank|whisper|tts|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl/i;
+const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl/i;
 export function isChatModel(id: string): boolean {
   return id.trim().length > 0 && id.length <= 300 && !NON_CHAT.test(id);
 }
