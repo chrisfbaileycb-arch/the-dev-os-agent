@@ -3,6 +3,7 @@ import { Check, ChevronDown, ChevronRight, CircleAlert, Download, Play, Square }
 import type { Run } from '../lib/types';
 import { exportRun } from '../lib/store';
 import { workflows } from '../lib/roster';
+import { HourglassIcon } from './WritingStatus';
 
 // A Plan / Autonomous Run, shown as one calm result rather than a multi-agent control room.
 //
@@ -32,7 +33,7 @@ export default function RunCard({ run, onApprove, onStop }: RunCardProps) {
   const gateOutputs = run.status === 'awaiting_approval' && run.gate ? finished.filter(s => s.phase === run.gate!.phase - 1) : [];
 
   return <div className={`run calm ${run.status}`}>
-    {run.status === 'running' && <p className="run-pulse" role="status"><span className="pulse-dot" />Building… <span className="run-step">{current?.title ?? 'Starting'}</span></p>}
+    {run.status === 'running' && <p className="run-pulse" role="status"><HourglassIcon />Building… <span className="run-step">{current?.title ?? 'Starting'}</span></p>}
 
     {run.status === 'awaiting_approval' && <div className="run-gate" role="group" aria-label="Approval needed">
       <p className="run-gate-head"><strong>Phase {run.gate?.phase ?? finished.length} of {run.gate?.phases ?? 4} done — approve to continue</strong><small>Nothing further is sent to the model until you approve.</small></p>

@@ -25,6 +25,7 @@ export { PROVIDER_KEY_VARS };
 export const PROVIDER_META = {
   openrouter: { name: 'OpenRouter', console: 'https://openrouter.ai/keys' },
   groq: { name: 'Groq', console: 'https://console.groq.com/keys' },
+  cerebras: { name: 'Cerebras', console: 'https://cloud.cerebras.ai' },
   openai: { name: 'OpenAI', console: 'https://platform.openai.com/api-keys' },
   anthropic: { name: 'Anthropic', console: 'https://console.anthropic.com/settings/keys' },
   google: { name: 'Google Gemini', console: 'https://aistudio.google.com/apikey' },

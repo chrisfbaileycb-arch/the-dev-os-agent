@@ -3,6 +3,7 @@ import { CircleAlert, CircleCheck, Download, KeyRound, PanelRightClose, PanelRig
 import Rail, { type Page } from './ui/Rail';
 import Dock, { type Attached, type RunMode } from './ui/Dock';
 import RunCard from './ui/RunCard';
+import WritingStatus from './ui/WritingStatus';
 import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
@@ -53,11 +54,11 @@ const starters: { text: string; persona: string; workMode: WorkMode }[] = [
 ];
 
 function AssistantReply({ content, working }: { content: string; working: boolean }) {
-  if (!content) return <pre className="msg-body">{working ? 'Working…' : ''}</pre>;
+  if (!content) return working ? <WritingStatus content="" working /> : <pre className="msg-body" />;
   const fence = content.indexOf('```');
   const bareHtml = content.search(/<!doctype\s+html|<html\b/i);
   const start = fence < 0 ? bareHtml : bareHtml < 0 ? fence : Math.min(fence, bareHtml);
-  if (start < 0) return <pre className="msg-body">{content}</pre>;
+  if (start < 0) return <><pre className="msg-body">{content}</pre><WritingStatus content={content} working={working} /></>;
   const explanation = content.slice(0, start).trim();
   return <div className="generated-reply">
     {explanation && <pre className="msg-body">{explanation}</pre>}
@@ -65,6 +66,7 @@ function AssistantReply({ content, working }: { content: string; working: boolea
       <summary>Generated code {working ? '· writing…' : '· show source'}</summary>
       <pre className="msg-body">{content.slice(start)}</pre>
     </details>
+    <WritingStatus content={content} working={working} code />
   </div>;
 }
 

@@ -11,6 +11,7 @@ import type { GithubSettings } from '../lib/connectors';
 import PushToGithub from './PushToGithub';
 import GithubSyncDrawer, { type SyncToast } from './GithubSyncDrawer';
 import { emptySyncState, loadSyncSettings, type GithubSyncState } from '../lib/githubSync';
+import { HourglassIcon } from './WritingStatus';
 
 export interface OutputPanelProps {
   content: string;
@@ -318,8 +319,8 @@ export default function OutputPanel(p: OutputPanelProps) {
 
   const previewPane = project && <div className="output-preview">
     <div className={device === 'mobile' ? 'device-stage mobile' : 'device-stage'}>
-      {isBuilding && <div className="preview-empty"><LoaderCircle size={20} className="spin" /><span>{p.streaming ? 'Receiving executable code…' : 'Compiling the latest app…'}</span></div>}
-      {p.streaming && <span className="streaming-note">Live code stream · preview refreshes when complete</span>}
+      {isBuilding && <div className="preview-empty">{p.streaming ? <HourglassIcon size={22} /> : <LoaderCircle size={20} className="spin" />}<span>{p.streaming ? 'Receiving executable code…' : 'Compiling the latest app…'}</span></div>}
+      {p.streaming && <span className="streaming-note"><HourglassIcon size={11} /> Live code stream · preview refreshes when complete</span>}
       {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
       {build.kind === 'idle' && <div className="preview-empty"><Code2 size={20} strokeWidth={1.25} /><span>{selectedFile} is not a page on its own. Open it in the code view, or pull an HTML or React entry file.</span></div>}
       {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} onRuntime={setRuntime} />{runtime.state === 'error' && <p className="preview-runtime-error" role="alert">The app crashed: {runtime.message}</p>}{runtime.state === 'blank' && <p className="preview-runtime-error" role="status">The app built but put nothing on screen. Check the code view, or ask the agent to fix the blank page.</p>}<button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Rerun</button></>}
