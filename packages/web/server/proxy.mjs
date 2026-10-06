@@ -3,7 +3,7 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
+import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeTierStatus, monthlyPool, omnirouteBase, omnirouteEnabled, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { modelsUrl, normalizeModelList } from './models.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
