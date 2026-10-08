@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Check, Coins, CreditCard, ExternalLink, HardDrive, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
 import { flagshipFor, providers, switchProvider, modelOutputCeiling, effectiveOutputLimit, type Keyring, type Provider, DEFAULT_OUTPUT_TOKENS, OUTPUT_LIMITS } from '../lib/providers';
-import { rankChoices, type ModelChoice } from '../lib/modelChoices';
+import { isChatModel, rankChoices } from '../lib/modelChoices';
 import { localEndpointError, normalizeLocalEndpoint, type PipeSettings } from '../lib/pipes';
 import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
 import type { Balance, FreeTier, LedgerEntry, PlanReading } from '../lib/store';
@@ -30,30 +30,22 @@ export interface SettingsProps {
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
-const BYOK_PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic', 'google', 'github', 'cerebras', 'xai', 'groq', 'cohere', 'venice', 'aihubmix', 'huggingface', 'xkiro', 'vercel'];
+const BYOK_PROVIDERS: Provider[] = ['openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
-  openrouter: 'Your OpenRouter key',
-  vercel: 'Your Vercel AI Gateway key',
-  openai: 'Your OpenAI key',
-  anthropic: 'Your Anthropic key',
+  openai: 'sk-…',
+  anthropic: 'sk-ant-…',
   google: 'Your Google AI Studio key',
-  groq: 'Your Groq key',
-  cohere: 'Your Cohere key',
-  xai: 'Your xAI key (xai-…)',
-  venice: 'Your Venice key',
-  aihubmix: 'Your AIHubMix key',
   huggingface: 'Your Hugging Face token',
-  xkiro: 'Your xKiro key',
-  github: 'A GitHub token with Models: read',
-  cerebras: 'Your Cerebras key',
+  groq: 'Your Groq key',
+  nvidia: 'Your NVIDIA NIM key',
+  xai: 'Your xAI key',
 };
 
 export default function Settings(p: SettingsProps) {
   const c = p.connection;
-  const provider: Provider = BYOK_PROVIDERS.includes(c.provider as Provider) ? c.provider as Provider : 'openrouter';
+  const provider: Provider = BYOK_PROVIDERS.includes(c.provider as Provider) ? c.provider as Provider : 'openai';
   const inference = c.inference === 'free' ? 'free' : c.inference === 'credits' ? 'credits' : 'byok';
   const hasToken = Boolean(c.serverAccessToken?.trim());
-  const [manualModel, setManualModel] = useState(false);
   const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch, mode: 'remote' });
 
   function setKey(id: Provider, value: string) {
@@ -84,8 +76,7 @@ export default function Settings(p: SettingsProps) {
   // The dropdown always has something to choose from. It used to stay empty and disabled until
   // live discovery answered, so a slow or failed catalog read looked like a broken setting. The
   // built-in list shows at once; the live list replaces it when it arrives.
-  const choices = useMemo(() => rankChoices(live?.models?.length ? live.models : providers[provider].models.map((id): ModelChoice => ({ id, label: id }))), [live, provider]);
-  const fromSeeds = !live?.models?.length;
+  const choices = useMemo(() => rankChoices(live && !live.error && live.models?.length ? live.models.filter(m => isChatModel(m.id)) : []), [live]);
   const checking = p.discovering.has(provider);
   const selectedInChoices = choices.some(choice => choice.id === c.model);
   const recent = p.ledger.slice().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8);
@@ -144,7 +135,7 @@ export default function Settings(p: SettingsProps) {
               <summary>No key yet? Get a free one in a few minutes</summary>
               <p className="help">Each of these is free from a US company. Your own free key comes with its own limits, so it keeps working when the shared free tier is busy.</p>
               <ul className="free-key-list">
-                {FREE_KEY_OPTIONS.map(o => <li key={o.provider}>
+                {FREE_KEY_OPTIONS.filter(o => BYOK_PROVIDERS.includes(o.provider)).map(o => <li key={o.provider}>
                   <h3>{o.name}</h3>
                   <ol>{o.steps.map(step => <li key={step}>{step}</li>)}</ol>
                   {o.note && <p className="help">{o.note}</p>}
@@ -167,11 +158,9 @@ export default function Settings(p: SettingsProps) {
                 <button className="button primary small" disabled={p.busy || checking || !(c.token || p.keys[provider])} onClick={() => p.discover(provider)}>{checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}{live ? 'Refresh' : 'Discover'}</button>
               </span></label>
             </div>
-            {live && !live.error && <p className="help">{choices.length.toLocaleString()} models reachable on your {providers[provider].name} key, read {new Date(live.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. The same list is in the dropdown on the prompt bar.</p>}
-            {fromSeeds && <p className="help">{checking ? 'Reading the live list from your provider. You can pick from the built-in list now.' : 'Showing the built-in list. Discover reads every model your key reaches.'}</p>}
-            {live?.error && <p className="help" role="alert">Could not read the live list: {live.error}. The built-in list still works, and you can type a model ID below.</p>}
-            <button type="button" className="text-button" onClick={() => setManualModel(value => !value)}>{manualModel ? 'Hide manual model ID' : 'Can’t find your model? Enter its ID'}</button>
-            {manualModel && <label>Model ID<input value={c.model} maxLength={200} placeholder="Provider model ID" onChange={e => pickModel(e.target.value)} /></label>}
+            {live && !live.error && <p className="help">{choices.length.toLocaleString()} models this {providers[provider].name} key can call, read {new Date(live.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. The same list is in the chat window.</p>}
+            {!live?.error && !choices.length && <p className="help">{checking ? 'Reading the models this key can call…' : 'Enter a key. The list is only the models that key can call.'}</p>}
+            {live?.error && <p className="help" role="alert">Could not read the live list: {live.error}.</p>}
             <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember personal keys in this browser</label>
             <p className="help">Keys stay in this browser only when you choose Remember. They are not sent to third-party scripts, placed in the app bundle, or returned by the server.</p>
           </>}

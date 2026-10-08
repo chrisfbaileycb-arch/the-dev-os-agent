@@ -569,12 +569,11 @@ test('model catalog endpoint differentiates ready vs extended models and support
     const body = await res.json();
     assert.ok(Array.isArray(body.ready), 'ready array present');
     assert.ok(Array.isArray(body.extended), 'extended array present');
-    assert.deepEqual(body.ready.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash']);
-    assert.deepEqual(body.extended.map(m => m.id), ['experimental-unverified-preview-123']);
+    assert.deepEqual(body.ready.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash', 'experimental-unverified-preview-123']);
+    assert.deepEqual(body.extended.map(m => m.id), []);
     assert.equal(body.ready[0].verified, true);
     assert.equal(body.ready[0].section, 'ready');
-    assert.equal(body.extended[0].verified, false);
-    assert.equal(body.extended[0].section, 'extended');
+    assert.equal(body.extended.length, 0);
   });
 
   // filter: 'ready'
@@ -582,7 +581,7 @@ test('model catalog endpoint differentiates ready vs extended models and support
     const res = await post(url, { ...base, provider: 'google', filter: 'ready' }, '/api/models');
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body.data.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash']);
+    assert.deepEqual(body.data.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash', 'experimental-unverified-preview-123']);
   });
 
   // filter: 'extended'
@@ -590,7 +589,7 @@ test('model catalog endpoint differentiates ready vs extended models and support
     const res = await post(url, { ...base, provider: 'google', filter: 'extended' }, '/api/models');
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body.data.map(m => m.id), ['experimental-unverified-preview-123']);
+    assert.deepEqual(body.data.map(m => m.id), []);
   });
 });
 

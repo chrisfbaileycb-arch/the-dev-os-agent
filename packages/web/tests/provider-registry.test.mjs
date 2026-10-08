@@ -26,7 +26,7 @@ test('records are well formed and retention is never claimed without a source an
 });
 
 test('Shield allows US companies and hosts, and refuses relays, other countries, unknowns and custom endpoints', () => {
-  for (const id of ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras', 'github', 'azure', 'bedrock', 'meta']) assert.equal(allowedUnderShield(id), true, id);
+  for (const id of ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras', 'github', 'azure', 'bedrock', 'meta', 'nvidia']) assert.equal(allowedUnderShield(id), true, id);
   // OpenRouter and Hugging Face are US companies but relays: the upstream host is not guaranteed to be US.
   for (const id of ['openrouter', 'huggingface', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'custom', 'ollama']) assert.equal(allowedUnderShield(id), false, id);
   assert.equal(allowedUnderShield('not-a-provider'), false, 'an unknown id is refused, never assumed');
@@ -35,7 +35,7 @@ test('Shield allows US companies and hosts, and refuses relays, other countries,
 
 test('the integrated Shield list is exactly what the proxy can reach today; unbuilt ones wait', () => {
   const live = shieldProviders();
-  assert.deepEqual([...live].sort(), ['anthropic', 'cerebras', 'github', 'google', 'groq', 'meta', 'openai', 'xai']);
+  assert.deepEqual([...live].sort(), ['anthropic', 'cerebras', 'github', 'google', 'groq', 'meta', 'nvidia', 'openai', 'xai']);
   for (const id of ['azure', 'bedrock']) { assert.equal(isShieldEligible(providerRecord(id)), true); assert.ok(!live.includes(id), `${id} is not integrated yet`); }
   assert.ok(shieldProviders({ onlyIntegrated: false }).includes('azure'));
 });

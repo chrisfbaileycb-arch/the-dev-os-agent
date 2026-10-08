@@ -8,6 +8,7 @@ export { planHolder } from './plans.mjs';
 import { isBackendProvider } from './providerRegistry.mjs';
 import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeModels, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
+import { accountProbe } from './keyProbe.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
 import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog, ensureOpenRouterCatalog, openRouterCatalogStatus } from './discovery.mjs';
@@ -44,6 +45,7 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     // Hugging Face's Inference Providers router is likewise OpenAI-compatible for chat and
     // lists its live roster at /v1/models, so it too needs only a fixed home.
     huggingface: 'https://router.huggingface.co/v1',
+    nvidia: 'https://integrate.api.nvidia.com/v1',
     // xAI (Grok) and Venice both speak the OpenAI chat surface at a fixed home.
     xai: 'https://api.x.ai/v1',
     venice: 'https://api.venice.ai/api/v1',
@@ -577,6 +579,17 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       const headers = { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT, Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? (target.nativeAnthropic ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION } : { Authorization: `Bearer ${apiKey}` }) : {}) };
       // APP_ORIGIN is operator-set and also becomes a header, so it gets the same treatment.
       if (provider === 'openrouter') { headers['HTTP-Referer'] = cleanKey(env.APP_ORIGIN) || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Signal Forge OS'; }
+      if (path === '/api/models' && provider === 'google' && apiKey) {
+        delete headers.Authorization;
+        headers['x-goog-api-key'] = apiKey;
+      }
+      if (path === '/api/models' && provider === 'huggingface' && apiKey) {
+        const probe = accountProbe('huggingface');
+        let who;
+        try { who = await fetch(probe.url, { headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}`, 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(15_000) }); }
+        catch (error) { throw new HttpError(502, `Could not reach Hugging Face: ${error?.message || 'connection failed'}`); }
+        if (!who.ok) throw new HttpError(who.status === 401 || who.status === 403 ? 401 : 502, who.status === 401 || who.status === 403 ? 'The provider rejected this key.' : `The provider answered HTTP ${who.status}.`);
+      }
       let payload; let suffix;
       if (path === '/api/chat') {
         if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || !validContent(m.content))) throw new HttpError(400, 'messages must contain standard role/content text pairs, optionally with up to five image parts.');

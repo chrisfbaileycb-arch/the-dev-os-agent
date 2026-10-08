@@ -335,7 +335,7 @@ export default function Connectors(p: ConnectorsProps) {
               <button className="button primary small" onClick={() => saveKey(id)}><Check size={13} />Save key</button>
               <button className="button small" disabled={!key.trim() || busy} onClick={() => p.discover(id)}>{busy ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Discover</button>
             </div>
-            <p className="help">{live?.error ? `Could not read the model list: ${live.error}` : live?.models.length ? `${live.models.length.toLocaleString()} models on this key. New keys start on ${providers[id].flagship ?? 'the strongest model found'}.` : key.trim() ? 'Key entered. Save it, and the model list loads by itself.' : `No key yet. With one, the dropdown lists every ${providers[id].name} model it reaches and starts on ${providers[id].flagship ?? 'the strongest'}.`}</p>
+            <p className="help">{live?.error ? `Could not read the model list: ${live.error}` : live?.models.length ? `${live.models.length.toLocaleString()} models this key can call.` : key.trim() ? 'Key entered. Save it, and the model list loads from that account.' : `No key yet. With one, the chat window lists only the ${providers[id].name} models that key can call.`}</p>
           </section>;
         })}
         <section className="panel pipe-row">

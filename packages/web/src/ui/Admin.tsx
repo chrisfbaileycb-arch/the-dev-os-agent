@@ -45,7 +45,6 @@ export default function Admin(p: AdminProps) {
   const [catalogs, setCatalogs] = useState<Record<string, ModelChoice[]>>({});
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [queries, setQueries] = useState<Record<string, string>>({});
-  const [manualIds, setManualIds] = useState<Record<string, string>>({});
   const [tiers, setTiers] = useState<Tiers | null>(null);
   const [dirty, setDirty] = useState(false);
 
@@ -140,7 +139,7 @@ export default function Admin(p: AdminProps) {
 
     <section className="panel">
       <div className="panel-head"><h2><KeyRound size={15} strokeWidth={1.75} /> Provider keys</h2><span className="pill">{config.providers.filter(r => r.source !== 'none').length} of {config.providers.length} connected</span></div>
-      <p className="help"><strong>This dashboard manages the US backend only</strong> — the labs this deployment pays for itself. Visitors reach every other provider (OpenRouter, GitHub Models, Cohere, Venice, xKiro and the rest) from the second model dropdown, with a key they type in; that key stays in their own browser and never reaches this page or this server's storage. A key entered here is encrypted before it is stored and is never returned to any browser, this one included. It wins over the same variable in the hosting environment; remove it and the environment value applies again. <strong>Stack several keys</strong> by putting one per line: the free tier rotates across them, so a rate-limited account rolls over to the next instead of failing the visitor, and the count shown beside the key is how many are in the rotation. Keys stack across providers too: every connected provider can fund models in the tiers below.</p>
+      <p className="help"><strong>These seven keys are the backend and the visitor key list.</strong> OpenAI, Anthropic, Google, Hugging Face, Groq, NVIDIA, and xAI. A visitor can bring the same seven. After a key is connected, the chat window lists only the models that key’s own endpoint returns. A key entered here is encrypted before it is stored and is never returned to any browser. It wins over the same variable in the hosting environment; remove it and the environment value applies again. <strong>Stack several keys</strong> by putting one per line.</p>
       <div className="ledger-wrap"><table className="ledger admin-keys"><thead><tr><th>Provider</th><th>Status</th><th>Key</th><th></th></tr></thead><tbody>
         {config.providers.map(r => <tr key={r.provider}>
           <td><strong>{r.name}</strong><br /><small className="mono">{r.env}</small>{r.console && <> · <a href={r.console} target="_blank" rel="noreferrer" className="text-button">get a key <ExternalLink size={10} /></a></>}</td>
@@ -172,10 +171,6 @@ export default function Admin(p: AdminProps) {
         const isLoading = loading.has(r.provider);
         return <div key={r.provider} className="tier">
           <div className="panel-head"><h3>{r.name}<small>{all ? `${all.length.toLocaleString()} models on this key` : 'Live list not loaded'}</small></h3><span className="row gap">{all && <label className="row gap admin-filter"><Search size={12} /><input type="search" placeholder="Filter" value={queries[r.provider] ?? ''} onChange={e => setQueries(q => ({ ...q, [r.provider]: e.target.value }))} /></label>}<button className="button small" disabled={isLoading} onClick={() => discover(r.provider)}>{isLoading ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}{all ? 'Reload' : 'Load models'}</button></span></div>
-          <form className="row gap admin-add" onSubmit={e => { e.preventDefault(); const id = (manualIds[r.provider] ?? '').trim(); if (!id || id.length > 200) return; setCatalogs(c => ({ ...c, [r.provider]: [{ id, label: id }, ...(c[r.provider] ?? []).filter(m => m.id !== id)] })); setManualIds(m => ({ ...m, [r.provider]: '' })); }}>
-            <input aria-label={`Add a ${r.name} model ID`} placeholder="Not in the list? Type a model ID" value={manualIds[r.provider] ?? ''} onChange={e => setManualIds(m => ({ ...m, [r.provider]: e.target.value }))} />
-            <button type="submit" className="button small" disabled={!(manualIds[r.provider] ?? '').trim()}>Add model ID</button>
-          </form>
           {all && <div className="ledger-wrap"><table className="ledger tier-table"><tbody>
             {list.slice(0, 80).map(m => { const t = tierOf(m.id); const entry: TierEntry = { id: m.id, provider: r.provider, ...(m.label !== m.id ? { label: m.label } : {}) }; return <tr key={m.id}>
               <td><strong>{m.label}</strong>{m.label !== m.id && <><br /><small className="mono">{m.id}</small></>}{m.free && <em className="model-badge included"> free at provider</em>}</td>

@@ -70,7 +70,7 @@ export function payLabel(inference: InferenceMode): string {
 /** How many rows a filtered group shows before asking for a narrower filter. */
 const VISIBLE_CAP = 60;
 /** Vendors in the order their groups appear; gateways after the direct vendors. */
-const ORDER: Provider[] = ['ollama', 'openrouter', 'vercel', 'anthropic', 'openai', 'google', 'github', 'cerebras', 'xai', 'groq', 'cohere', 'venice', 'xkiro', 'aihubmix', 'huggingface'];
+const ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
 const tierOf = (m: ModelChoice) => TIER_LABELS[capabilityTier(m.id, m.label)];
 
 export default function ModelPicker(p: ModelPickerProps) {
@@ -187,7 +187,7 @@ export default function ModelPicker(p: ModelPickerProps) {
 
   return <div className="model-picker" ref={root}>
     {/* The dropdown that holds the current model shows it; the other shows its own name, dimmed. */}
-    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}${holdsCurrent ? '' : ' idle'}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title={holdsCurrent ? `Choose a model — ${LANE_LABEL[p.lane]}` : managed ? 'US models: Anthropic, OpenAI, Google, xAI, Groq, Cerebras' : 'Other providers, on your own API key'}>
+    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}${holdsCurrent ? '' : ' idle'}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title={holdsCurrent ? `Choose a model — ${LANE_LABEL[p.lane]}` : managed ? 'OpenAI, Anthropic, Google, Hugging Face, Groq, NVIDIA, xAI' : 'A model running on this machine'}>
       {holdsCurrent
         ? (p.inference === 'free' ? <Sparkles size={13} strokeWidth={1.75} /> : p.inference === 'credits' ? <Wallet size={13} strokeWidth={1.75} /> : <KeyRound size={13} strokeWidth={1.75} />)
         : (managed ? <Sparkles size={13} strokeWidth={1.75} /> : <Globe size={13} strokeWidth={1.75} />)}
@@ -196,7 +196,7 @@ export default function ModelPicker(p: ModelPickerProps) {
       <ChevronDown size={12} />
     </button>
     {open && <div className="model-menu" role="listbox" aria-label={`Model: ${LANE_LABEL[p.lane]}`}>
-      <div className="model-lane-head"><strong>{LANE_LABEL[p.lane]}</strong><small>{managed ? 'Connected US providers — managed access or your own key. Keys are configured in Settings or the admin dashboard.' : 'Runs on your own API key. Saved in this browser only.'}</small></div>
+      <div className="model-lane-head"><strong>{LANE_LABEL[p.lane]}</strong><small>{managed ? 'Only models a connected key can call, plus the ones this deployment funds.' : 'A model running on this machine. No key.'}</small></div>
       {total > 8 && <label className="model-search"><Search size={12} /><input ref={search} type="search" value={query} placeholder={`Filter ${total.toLocaleString()} models…`} aria-label="Filter models" onChange={e => setQuery(e.target.value)} /></label>}
 
       {extendedTotal > 0 && <div className="model-tabs" role="tablist" aria-label="Catalog Sections">
@@ -256,7 +256,7 @@ export default function ModelPicker(p: ModelPickerProps) {
         <button type="button" className="button small" onClick={() => { setOpen(false); p.onOpenSettings(); }}><KeyRound size={12} />Open Settings</button>
       </div>}
 
-      {query && total > 0 && !shown(freeModels).length && !shown(paidModels).length && usable.every(v => !shown(v.models).length) && <small className="model-group-note">Nothing matches “{query}”. You can still type any model ID in Settings.</small>}
+      {query && total > 0 && !shown(freeModels).length && !shown(paidModels).length && usable.every(v => !shown(v.models).length) && <small className="model-group-note">Nothing matches “{query}”.</small>}
     </div>}
   </div>;
 }

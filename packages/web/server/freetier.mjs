@@ -253,6 +253,7 @@ export const PROVIDER_KEY_VARS = {
   xkiro: 'XKIRO_API_KEY',
   aihubmix: 'AIHUBMIX_API_KEY',
   huggingface: 'HF_TOKEN',
+  nvidia: 'NVIDIA_API_KEY',
   'cheaper-inference': 'CHEAPER_INFERENCE_API_KEY',
   omniroute: 'OMNIROUTE_API_KEY',
   custom: 'CUSTOM_API_KEY',
@@ -347,10 +348,8 @@ const STATIC_FREE = [
  * FREE_TIER_ALLOW_FRONTIER no longer has anything to unlock among them.
  */
 /**
- * What this deployment may fund on its own account is the backend lane in the provider registry
- * (Anthropic, OpenAI, Google, xAI, plus Meta, Azure and Bedrock once integrated). Everything else —
- * gateways, relays, other countries, even other US hosts — is reachable only with a key the visitor
- * brings, in the browser's own-key dropdown. See providerRegistry.mjs.
+ * What this deployment may fund on its own account is the key lane in the provider registry
+ * (OpenAI, Anthropic, Google, Hugging Face, Groq, NVIDIA, xAI). Everything else is not a key slot.
  */
 export function freeModels(env = process.env, discovered = discoveredXkiro, tiers = adminTiers) {
   // Not an option: the backend lane is the architecture, not a launch setting. It applies to the
@@ -380,7 +379,7 @@ function allFreeModels(env, discovered, tiers) {
   // HF serverless joins only when the deployment holds a token: without one these ids would
   // advertise as free and answer 503, which is the exact "warming up" lie the status message
   // exists to avoid.
-  const hf = HF_POOL.some(id => isFrontier(id)) ? [] : (env.HF_TOKEN ? HF_POOL.map(id => ({ id, provider: 'huggingface', envKey: 'HF_TOKEN' })) : []);
+  const hf = isBackendLaneEnforced() ? [] : (HF_POOL.some(id => isFrontier(id)) ? [] : (env.HF_TOKEN ? HF_POOL.map(id => ({ id, provider: 'huggingface', envKey: 'HF_TOKEN' })) : []));
   const automatic = [
     ...guarded,
     ...hf,

@@ -7,9 +7,14 @@
 // provider itself calls the model free — so that is what this module reduces each payload to.
 // Fields that are not known are omitted rather than guessed, so `{ id }` stays `{ id }`.
 
-const zero = value => value === 0 || value === '0' || value === '0.0' || Number(value) === 0;
+const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b/i;
 
-/** Whether a catalogue entry is free at the provider, by the provider's own signals only. */
+/** A catalogue id that can take a chat turn. Embeddings, speech, and image models cannot. */
+export function isChatModelId(id) {
+  return typeof id === 'string' && id.trim().length > 0 && id.length <= 200 && !NON_CHAT.test(id);
+}
+
+const zero = value => value === 0 || value === '0' || value === '0.0' || Number(value) === 0;
 export function entryIsFree(provider, entry) {
   const id = String(entry.id ?? entry.name ?? '');
   if (provider === 'openrouter') {
@@ -33,39 +38,11 @@ export function isVerifiedOperational(provider, modelId) {
   if (!modelId || typeof modelId !== 'string') return false;
   const id = modelId.toLowerCase().trim();
   const prov = String(provider || '').toLowerCase().trim();
-
-  // Currently loaded local endpoints
-  if (prov === 'ollama') return true;
-
-  // Direct BYOK providers: Gemini, Claude, OpenAI flagships
-  if (prov === 'google') {
-    return /^gemini-(?:2\.5|2\.0|1\.5|3\.)/i.test(id) || id.startsWith('gemini-');
-  }
-  if (prov === 'anthropic') {
-    return /^claude-(?:3|4|sonnet|opus|haiku)/i.test(id) || id.startsWith('claude-');
-  }
-  if (prov === 'openai') {
-    return /^(?:gpt-4o|gpt-4\.1|gpt-5|o1|o3)/i.test(id);
-  }
-
-  // Curated flagship verified models on other direct BYOK providers
-  if (prov === 'groq') {
-    return /^(?:llama-3\.[13]|mixtral|gemma-2)/i.test(id);
-  }
-  if (prov === 'cerebras') {
-    return /^(?:llama-3\.[13]|llama3\.)/i.test(id);
-  }
-  if (prov === 'github') {
-    return /^(?:openai\/gpt-4|meta\/llama-3)/i.test(id);
-  }
-  if (prov === 'cohere') {
-    return /^command-(?:a|r)/i.test(id);
-  }
-  if (prov === 'xai') {
-    return /^grok-(?:2|3|4)/i.test(id);
-  }
-
-  // Raw unverified listings from gateways (OpenRouter community models, Hugging Face open routers, etc.)
+  if (prov === 'ollama') return isChatModelId(id);
+  // The key's own catalogue is the access list. A compiled flagship list is how the picker
+  // used to offer models the key cannot call.
+  const lane = ['openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
+  if (lane.includes(prov)) return isChatModelId(id);
   return false;
 }
 
@@ -78,7 +55,10 @@ export function isVerifiedOperational(provider, modelId) {
  * dropdown between loads is worth more than any sort this module could impose.
  */
 export function normalizeModelList(provider, payload, limit = 2000, options = {}) {
-  const entries = provider === 'cohere' ? payload?.models : provider === 'github' && Array.isArray(payload) ? payload : payload?.data;
+  const entries = provider === 'cohere' ? payload?.models
+    : provider === 'github' && Array.isArray(payload) ? payload
+    : provider === 'google' && Array.isArray(payload?.models) ? payload.models
+    : payload?.data;
   if (!Array.isArray(entries)) return null;
   const filter = typeof options?.filter === 'string' ? options.filter.toLowerCase().trim() : null;
   const differentiate = Boolean(options?.differentiate);
@@ -87,12 +67,14 @@ export function normalizeModelList(provider, payload, limit = 2000, options = {}
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object') continue;
     let id = provider === 'cohere' ? entry.name : entry.id;
+    if (provider === 'google' && (typeof id !== 'string' || !id.trim()) && typeof entry.name === 'string') id = entry.name;
     if (typeof id !== 'string') continue;
     id = id.trim();
     if (provider === 'google') id = id.replace(/^models\//, '');
     if (!id || id.length > 200 || seen.has(id)) continue;
-    // Cohere lists embedding and rerank models beside chat ones and says which is which.
     if (provider === 'cohere' && Array.isArray(entry.endpoints) && !entry.endpoints.includes('chat')) continue;
+    if (provider === 'google' && Array.isArray(entry.supportedGenerationMethods) && !entry.supportedGenerationMethods.includes('generateContent')) continue;
+    if (!isChatModelId(id)) continue;
 
     const verified = isVerifiedOperational(provider, id);
     if (filter === 'ready' && !verified) continue;
@@ -100,7 +82,8 @@ export function normalizeModelList(provider, payload, limit = 2000, options = {}
 
     seen.add(id);
     const item = { id };
-    const label = [entry.name, entry.display_name, entry.displayName].find(v => typeof v === 'string' && v.trim());
+    const labelFields = provider === 'google' ? [entry.displayName, entry.display_name] : [entry.name, entry.display_name, entry.displayName];
+    const label = labelFields.find(v => typeof v === 'string' && v.trim());
     if (label && label.trim() !== id) item.label = label.trim().slice(0, 80);
     if (entryIsFree(provider, entry)) item.free = true;
     if (differentiate) {
@@ -120,7 +103,8 @@ export function normalizeModelList(provider, payload, limit = 2000, options = {}
  */
 export function modelsUrl(provider, base) {
   if (provider === 'cohere') return 'https://api.cohere.com/v1/models';
-  // GitHub Models lists its catalogue apart from the inference host, as a bare JSON array.
   if (provider === 'github') return 'https://models.github.ai/catalog/models';
+  // Chat stays on the OpenAI-compatible base. The access list is the AI Studio models API.
+  if (provider === 'google') return 'https://generativelanguage.googleapis.com/v1beta/models';
   return `${base}/models`;
 }

@@ -42,12 +42,14 @@ export const REGISTRY = [
   { id: 'azure', name: 'Microsoft Azure OpenAI / AI Foundry', hq: 'US', kind: 'cloud', integrated: false, ...unchecked,
     note: 'Microsoft Copilot is a product, not a developer API; this is the developer route. Pin a US region.' },
   { id: 'bedrock', name: 'Amazon Bedrock', hq: 'US', kind: 'cloud', integrated: false, ...unchecked,
-    note: 'Pin a US region; GovCloud is a separate partition with its own terms.' },
+    note: 'Pin a US region; GovCloud is a separate partition with its own terms. Not a key slot.' },
   { id: 'github', name: 'GitHub Models', hq: 'US', kind: 'host', integrated: true, ...unchecked,
     note: 'GitHub is a Microsoft company; rate-limited for prototyping.' },
 
   // --- US inference hosts for open-weight models ---
   { id: 'groq', name: 'Groq', hq: 'US', kind: 'host', integrated: true, ...unchecked },
+  { id: 'nvidia', name: 'NVIDIA NIM', hq: 'US', kind: 'host', integrated: true, ...unchecked,
+    note: 'integrate.api.nvidia.com. A key lists only the models that account can call.' },
   { id: 'cerebras', name: 'Cerebras', hq: 'US', kind: 'host', integrated: true, ...unchecked },
 
   // --- On the visitor's machine ---
@@ -86,19 +88,12 @@ export function shieldProviders({ onlyIntegrated = true } = {}) {
 /** Whether Shield permits routing to this provider. Unknown ids are refused, never assumed. */
 export const allowedUnderShield = id => isShieldEligible(providerRecord(id));
 
-// The backend lane: what the operator's dashboard can hold a key for, and therefore everything this
-// deployment funds on its own account (the free tier, the paid plan, the plan-token routes).
-//
-// It is a deliberately shorter list than Shield. Shield asks "is this a US company serving from the
-// US"; the backend lane is the operator's own choice: first-party US model makers, the two US
-// hyperscalers that resell them, and the US inference hosts Groq and Cerebras. GitHub Models is a US
-// host too but is not on this list, and gateways and relays (xKiro, OpenRouter, ...) never can be,
-// so those live in the visitor's own-key lane (a key typed in the browser, see
-// src/lib/modelLanes.ts) rather than on the operator's card.
-//
-// Adding a provider here is the only way to put it on the dashboard, and the intersection with
-// isShieldEligible means a registry edit that moves a company out of the US takes it off again.
-const BACKEND_IDS = ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras', 'meta', 'azure', 'bedrock'];
+// Keys the operator connects on the backend, and the same keys a visitor may bring.
+// Identical on purpose. Hugging Face is a relay, so it is not Shield-eligible, but the operator
+// asked for it on this list anyway.
+export const KEY_LANE_IDS = ['openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
+
+const BACKEND_IDS = KEY_LANE_IDS;
 
 let laneEnforced = true;
 /**
@@ -113,7 +108,7 @@ export function setBackendLaneEnforcedForTests(on) { laneEnforced = Boolean(on);
 export const isBackendLaneEnforced = () => laneEnforced;
 
 /** Whether the operator's backend may hold a key for, and fund requests to, this provider. */
-export const isBackendProvider = id => !laneEnforced || (BACKEND_IDS.includes(String(id ?? '').toLowerCase()) && isShieldEligible(providerRecord(id)));
+export const isBackendProvider = id => !laneEnforced || BACKEND_IDS.includes(String(id ?? '').toLowerCase());
 
 /** Backend provider ids. With `onlyIntegrated` (the default) only the ones the proxy can route to today. */
 export function backendProviders({ onlyIntegrated = true } = {}) {

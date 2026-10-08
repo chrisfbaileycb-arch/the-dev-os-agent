@@ -13,7 +13,7 @@ import { REGISTRY, backendProviders, isBackendProvider, isShieldEligible } from 
 // the lane enforced, which is the default; the older funding-mechanics tests switch it off.
 
 const TOKEN = 'a-long-admin-token-for-tests';
-const NON_LANE = ['github', 'vercel', 'openrouter', 'huggingface', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'ollama', 'custom'];
+const NON_LANE = ['github', 'vercel', 'openrouter', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'ollama', 'custom', 'cerebras', 'meta', 'azure', 'bedrock'];
 
 test.afterEach(() => setAdminTiers(null));
 
@@ -29,14 +29,15 @@ async function login(url) {
   return r.headers.get('set-cookie').split(';')[0];
 }
 
-test('the registry names the lane: the seven integrated US providers, with Azure and Bedrock decided but not yet routable', () => {
-  assert.deepEqual(backendProviders().sort(), ['anthropic', 'cerebras', 'google', 'groq', 'meta', 'openai', 'xai']);
-  assert.deepEqual(backendProviders({ onlyIntegrated: false }).sort(), ['anthropic', 'azure', 'bedrock', 'cerebras', 'google', 'groq', 'meta', 'openai', 'xai']);
-  for (const id of ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras', 'meta', 'azure', 'bedrock']) assert.equal(isBackendProvider(id), true, id);
+test('the registry names the key lane: the same seven providers on the dashboard and for a visitor key', () => {
+  const lane = ['anthropic', 'google', 'groq', 'huggingface', 'nvidia', 'openai', 'xai'];
+  assert.deepEqual(backendProviders().sort(), lane);
+  assert.deepEqual(backendProviders({ onlyIntegrated: false }).sort(), lane);
+  for (const id of lane) assert.equal(isBackendProvider(id), true, id);
   for (const id of [...NON_LANE, 'not-a-provider', '', undefined]) assert.equal(isBackendProvider(id), false, String(id));
-  // The lane is a subset of Shield, never wider: a company that stops being US-eligible leaves it.
-  for (const r of REGISTRY) if (isBackendProvider(r.id)) assert.equal(isShieldEligible(r), true, r.id);
-  // GitHub Models is US and Shield-eligible, but deliberately lives in the own-key lane. xKiro never can be.
+  // Hugging Face is on the lane by request. It is a relay, so it is not Shield-eligible.
+  for (const r of REGISTRY) if (isBackendProvider(r.id) && r.id !== 'huggingface') assert.equal(isShieldEligible(r), true, r.id);
+  assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'huggingface')), false);
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'github')), true);
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'xkiro')), false);
 });
@@ -90,7 +91,9 @@ test('the dashboard stores keys for the lane only, and can still clear one left 
   const flags = Object.fromEntries(settings.keyStatus({}).map(p => [p.provider, p.backend]));
   assert.equal(flags.anthropic, true);
   assert.equal(flags.groq, true);
-  assert.equal(flags.cerebras, true);
+  assert.equal(flags.nvidia, true);
+  assert.equal(flags.huggingface, true);
+  assert.equal(flags.cerebras, false);
   assert.equal(flags.xkiro, false);
   assert.equal(flags.openrouter, false);
 });
@@ -104,11 +107,11 @@ test('the admin API lists the lane, parks leftover keys apart, says what is plan
   await withServer([createAdmin({ db, env, settings, log: () => {} })], async url => {
     const cookie = await login(url);
     const config = await (await call(url, '/api/admin/config', { cookie })).json();
-    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'cerebras', 'google', 'groq', 'meta', 'openai', 'xai']);
+    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'google', 'groq', 'huggingface', 'nvidia', 'openai', 'xai']);
     assert.ok(config.providers.every(p => p.backend === true));
     // Only a dashboard-stored leftover is offered for removal; an environment key has no row at all.
     assert.deepEqual(config.retired.map(p => p.provider), ['venice']);
-    assert.deepEqual(config.planned.map(p => p.provider).sort(), ['azure', 'bedrock']);
+    assert.deepEqual(config.planned, []);
     const save = await call(url, '/api/admin/keys', { method: 'PUT', body: { provider: 'openrouter', key: 'sk-or-x' }, cookie, origin: url });
     assert.ok(save.status >= 400, 'saving a key outside the lane is refused');
     const gone = await call(url, '/api/admin/keys', { method: 'PUT', body: { provider: 'venice', key: '' }, cookie, origin: url });
@@ -120,16 +123,18 @@ test('the admin API lists the lane, parks leftover keys apart, says what is plan
   await assert.rejects(() => discoverForProvider('openrouter', { OPENROUTER_API_KEY: 'k' }), /US backend providers/);
 });
 
-test('Meta Muse is a backend provider with its own fixed route; Vercel AI Gateway is own-key only', async () => {
-  assert.equal((await resolveTarget('meta', '', {})).base, 'https://api.meta.ai/v1');
-  assert.equal((await resolveTarget('vercel', '', {})).base, 'https://ai-gateway.vercel.sh/v1');
+test('NVIDIA NIM is on the key lane; Amazon Bedrock is not a key slot', async () => {
+  assert.equal((await resolveTarget('nvidia', '', {})).base, 'https://integrate.api.nvidia.com/v1');
+  await assert.rejects(() => resolveTarget('bedrock', '', {}), /Unsupported provider/);
   const db = openDatabase(':memory:');
   const settings = await openSettings({ db, env: { ADMIN_TOKEN: TOKEN } });
-  await settings.setKey('meta', 'muse-key-for-test');
-  assert.equal(settings.env().META_API_KEY, 'muse-key-for-test');
-  await assert.rejects(() => settings.setKey('vercel', 'k'), /Unknown provider|US backend providers/);
-  // A plan token reaches Muse on the deployment's key, and never reaches the gateway.
-  const env = { PLAN_ACCESS_TOKENS: 'plan-token-0123456789', META_API_KEY: 'muse-env', VERCEL_AI_GATEWAY_API_KEY: 'v-env' };
-  assert.equal(keyFor({ provider: 'meta', serverAccessToken: 'plan-token-0123456789' }, env), 'muse-env');
-  assert.equal(keyFor({ provider: 'vercel', serverAccessToken: 'plan-token-0123456789' }, env), '');
+  await settings.setKey('nvidia', 'nvapi-test-key');
+  assert.equal(settings.env().NVIDIA_API_KEY, 'nvapi-test-key');
+  await assert.rejects(() => settings.setKey('bedrock', 'AKIAIOSFODNN7EXAMPLE'), /Unknown provider|US backend providers/);
+  await assert.rejects(() => settings.setKey('openai', 'not-openai'), /sk-/);
+  await assert.rejects(() => settings.setKey('meta', 'muse-key-for-test'), /US backend providers/);
+  const env = { PLAN_ACCESS_TOKENS: 'plan-token-0123456789', NVIDIA_API_KEY: 'nv-env', META_API_KEY: 'muse-env' };
+  assert.equal(keyFor({ provider: 'nvidia', serverAccessToken: 'plan-token-0123456789' }, env), 'nv-env');
+  assert.equal(keyFor({ provider: 'meta', serverAccessToken: 'plan-token-0123456789' }, env), '');
+  assert.equal(keyFor({ provider: 'bedrock', serverAccessToken: 'plan-token-0123456789' }, env), '');
 });
