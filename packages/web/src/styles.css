@@ -481,3 +481,71 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 
 /* Pastels (alternate): Soft lavender, blush rose, subtle mint, and warm cream surfaces */
 :root[data-theme="pastels"] { color-scheme: light; --bg: #fdf6ff; --panel: #faf0f5; --panel-2: #f5e8f0; --ink: #5a4d5c; --muted: #a89fad; --line: #e6d6e9; --line-strong: #d4b5d0; --accent: #b19cd9; --accent-ink: #9a82c4; --accent-soft: rgba(177, 156, 217, 0.15); --ok: #a7c9ae; --warn: #d4a5a5; --danger: #d483a8; --rail: #4a3f4d; --rail-ink: #e6d6e9; --rail-active: #5a4d5c; --shadow: 0 8px 28px rgba(90, 77, 92, 0.12); }
+/* GitHub Repository Sync drawer */
+.sync-drawer .token-field { display: flex; align-items: center; gap: 6px; } .sync-drawer .token-field input { flex: 1; }
+.sync-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.sync-alert { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--danger); color: var(--ink); border-radius: var(--radius); padding: 6px 10px; font-size: 12px; } .sync-alert svg { color: var(--danger); flex: none; margin-top: 2px; }
+.sync-alert.conflict { border-color: var(--warn); } .sync-alert.conflict svg { color: var(--warn); }
+.sync-actions { flex-wrap: wrap; }
+
+/* Plan / Autonomous Run: a calm card. The engine's stages stay folded under "Show working". */
+.run.calm { border: 0; background: transparent; overflow: visible; display: flex; flex-direction: column; gap: 8px; }
+.run.calm.running, .run.calm.awaiting_approval { border-color: transparent; }
+.run-pulse { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
+.run-pulse .run-step { color: var(--ink); }
+.pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.run-gate { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); }
+.run-gate-head { display: flex; flex-direction: column; gap: 2px; } .run-gate-head strong { font-size: 12.5px; } .run-gate-head small { color: var(--muted); font-size: 11.5px; }
+.run-phase { display: flex; flex-direction: column; gap: 3px; } .run-phase > small { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.run-gate .run-phase .msg-body { max-height: 260px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--panel); }
+.run-foot { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 11.5px; }
+.run-foot .text-button { display: inline-flex; align-items: center; gap: 4px; }
+.run-done { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--ok); }
+.run-working { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border-left: 2px solid var(--line-strong); }
+.run-working .msg-body { max-height: 220px; overflow: auto; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; } }
+
+/* Dock work-mode toggle and the sentence under it that says what the mode does. */
+.work-modes button { padding: 4px 9px; font-size: 12px; }
+.dock-hint strong { color: var(--ink); font-weight: 600; }
+
+/* Push to GitHub: the staged file list. */
+.stage-list { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
+.stage-list .check { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.redacted-tag { margin-left: auto; font-style: normal; font-size: 10px; padding: 0 5px; border-radius: 4px; color: var(--warn); border: 1px solid var(--warn); }
+.push-drawer textarea { width: 100%; font: 12px/1.5 var(--mono); padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel); resize: vertical; }
+
+/* Memory panel and provider pipes. */
+.memory-panel { display: flex; flex-direction: column; gap: 8px; }
+.memory-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow: auto; }
+.memory-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.memory-row > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; } .memory-row small { color: var(--muted); font-size: 10.5px; }
+.memory-kind { flex: 0 0 auto; font-style: normal; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line-strong); color: var(--muted); }
+.memory-kind.preference { color: var(--accent-ink); border-color: var(--accent); } .memory-kind.failure { color: var(--danger); border-color: var(--danger); } .memory-kind.project { color: var(--ok); border-color: var(--ok); }
+.pipe-row { display: flex; flex-direction: column; gap: 8px; } .pipe-row .panel-head small { color: var(--muted); }
+.muted { color: var(--muted); font-weight: 400; }
+
+/* Private beta gate: always dark, whatever palette the workspace uses. */
+.beta-gate { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 600px at 50% -10%, #1d2340 0%, #0b0e1a 55%, #070912 100%); color: #e8e9f0; color-scheme: dark; }
+.beta-card { width: min(400px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 28px 26px 24px; border: 1px solid #262b3f; border-radius: 16px; background: rgba(22, 26, 43, 0.92); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); }
+.beta-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 11px; background: rgba(255, 106, 92, 0.14); color: #ff8a7e; }
+.beta-card h1 { font-size: 19px; line-height: 1.3; color: #fff; } .beta-card h1 span { display: block; font-size: 13px; font-weight: 500; color: #9aa0b8; margin-top: 2px; }
+.beta-card > p { color: #9aa0b8; font-size: 13px; line-height: 1.5; }
+.beta-field { display: flex; align-items: center; gap: 9px; padding: 0 12px; border: 1px solid #3a4059; border-radius: 10px; background: #0f1220; color: #9aa0b8; }
+.beta-field:focus-within { border-color: #ff6a5c; box-shadow: 0 0 0 3px rgba(255, 106, 92, 0.18); }
+.beta-field input { flex: 1; min-width: 0; padding: 11px 0; border: 0; outline: none; background: transparent; color: #e8e9f0; font-size: 14px; }
+.beta-submit { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 11px 14px; border-radius: 10px; background: #ff6a5c; color: #1a0d0b; font-weight: 650; font-size: 14px; }
+.beta-submit:hover:not(:disabled) { background: #ff7f73; }
+.beta-error { color: #f07167 !important; font-size: 12.5px; }
+.beta-note { color: #6f7590 !important; font-size: 11.5px; } .beta-card code { color: #c9cce0; }
+.rail-lock { color: var(--rail-ink); }
+
+/* Free-key onboarding in Settings */
+.free-keys { margin: 0 0 12px; }
+.free-keys > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.free-keys > summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.free-key-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 12px; }
+.free-key-list > li { border: 1px solid var(--border, rgba(127,127,127,.3)); border-radius: 8px; padding: 10px 12px; }
+.free-key-list h3 { margin: 0 0 4px; font-size: 14px; }
+.free-key-list ol { margin: 0 0 8px; padding-left: 20px; }
+.preview-runtime-error { margin: 6px 8px; font-size: 12px; }

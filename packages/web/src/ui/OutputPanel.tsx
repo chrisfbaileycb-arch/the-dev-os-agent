@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, CircleAlert, Code2, Copy, Eye, LoaderCircle, PanelRightClose, PanelRightOpen, RotateCw, Server, Settings2 } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, CircleCheck, Code2, Columns2, Copy, Eye, FileArchive, FileDown, LoaderCircle, Maximize2, Minimize2, Monitor, MonitorPlay, PanelRightClose, Pencil, RotateCw, Server, Smartphone, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
-import { parseProject, type Project, type ProjectFile } from '../lib/project';
+import { parseProject, preparePreviewProject, type Project, type ProjectFile } from '../lib/project';
+import { cssDraft } from '../lib/buildPreview';
 import { buildProject, type BuildResult } from '../lib/bundle/client';
 import { highlightCode } from '../lib/highlight';
 import { archiveName, saveBlob, zipBlob } from '../lib/download';
@@ -84,22 +85,36 @@ function SandboxFrame({ html, refresh, onRuntime }: { html: string; refresh: num
 }
 
 /** What the badge above the toolbar can honestly say about the preview. */
-type PreviewStatus = 'idle' | 'building' | 'live' | 'failed';
+type PreviewStatus = 'idle' | 'building' | 'starting' | 'live' | 'blank' | 'crashed' | 'failed';
 
 /**
  * The state of the preview, named for what it actually is.
  *
- * This used to read "Dev Server: Running / Ready" while nothing of the kind existed: there is no
- * server hosting the generated app. `buildProject` compiles the project in a worker and the result
- * is handed to a sandboxed iframe, so the honest words are about the build and the frame. Calling
- * it a server made two failures hard to read — a build that never finished looked like a server
- * that was "Ready", and a preview that did not paint looked like a server that would not start.
+ * There is no server hosting the generated app: `buildProject` compiles the project in a worker
+ * and the result is handed to a sandboxed iframe, so the honest words are about the build and the
+ * frame, never a "Dev Server: Running" that does not exist.
  */
 function statusLabel(status: PreviewStatus): { text: string; running: boolean } {
   if (status === 'building') return { text: 'Building…', running: false };
-  if (status === 'live') return { text: 'Preview live', running: true };
+  if (status === 'starting') return { text: 'Starting app…', running: false };
+  if (status === 'live') return { text: 'App running', running: true };
+  if (status === 'blank') return { text: 'Built, but nothing rendered', running: false };
+  if (status === 'crashed') return { text: 'App crashed', running: false };
   if (status === 'failed') return { text: 'Build failed', running: false };
-  return { text: 'No preview yet', running: false };
+  return { text: 'Idle', running: false };
+}
+
+/**
+ * A file pulled into an empty canvas becomes a project of its own.
+ *
+ * Wrapping it in a path-named fence and handing it to `parseProject` means a pulled `index.html`
+ * or `App.tsx` gets exactly the same treatment as one an agent wrote. A file that is not runnable
+ * on its own (a README, a helper module) still opens, so it can be read, edited and pushed back.
+ */
+function projectFromFile(path: string, content: string): { project: Project; runnable: boolean } {
+  const parsed = parseProject(`\`\`\`${path}\n${content}\n\`\`\``);
+  if (parsed) return { project: parsed, runnable: true };
+  return { project: { files: [{ path, content }], entry: path, dependencies: {}, kind: /\.(tsx|jsx)$/.test(path) ? 'react' : 'html' }, runnable: false };
 }
 
 export default function OutputPanel(p: OutputPanelProps) {
@@ -136,7 +151,7 @@ export default function OutputPanel(p: OutputPanelProps) {
     editTimer.current = null;
     const controller = new AbortController(); abortRef.current = controller;
     setBuild({ kind: 'building' });
-    const run = () => void buildProject(next, controller.signal).then(result => {
+    const run = () => void buildProject(preparePreviewProject(next), controller.signal).then(result => {
       if (controller.signal.aborted) return;
       setBuild(buildState(result, ++seqRef.current));
     }).catch(error => {
@@ -174,8 +189,6 @@ export default function OutputPanel(p: OutputPanelProps) {
     setActiveCode(next.files.find(file => file.path === next.entry)?.content ?? '');
     setView('preview'); setEditing(false);
     setEditDirty(false);
-    abortRef.current?.abort();
-    if (!next) { setBuild({ kind: 'idle' }); return; }
     compile(next, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.content]);
@@ -271,7 +284,11 @@ export default function OutputPanel(p: OutputPanelProps) {
   const isBuilding = build.kind === 'building';
   // The badge tracks the build state, which is the only state there is: a compiled result or a
   // failure, never a server that might or might not be listening.
-  const previewStatus: PreviewStatus = isBuilding || p.streaming ? 'building' : build.kind === 'ready' ? 'live' : build.kind === 'error' ? 'failed' : 'idle';
+  // "Live" used to mean only that the code compiled. It now means the page actually ran and put
+  // something on screen, as reported from inside the sandbox.
+  const previewStatus: PreviewStatus = isBuilding || (p.streaming && project) ? 'building'
+    : build.kind === 'ready' ? (runtime.state === 'ready' ? 'live' : runtime.state === 'blank' ? 'blank' : runtime.state === 'error' ? 'crashed' : 'starting')
+      : build.kind === 'error' ? 'failed' : 'idle';
   const devStatus = statusLabel(previewStatus);
   const codeMarkup = highlightCode(activeCode);
   /** Every route back to the running app: re-mount the frame and restore the canonical split. */
@@ -326,30 +343,23 @@ export default function OutputPanel(p: OutputPanelProps) {
         <button className="toolbar-button" onClick={() => setSyncOpen(true)} title="Pull or push one file against a GitHub branch"><GithubMark size={12} />GitHub: Sync</button>
       </div>
       <div className="toolbar-actions">
+        <span className="segmented" role="group" aria-label="Viewport">
+          <button aria-pressed={device === 'desktop'} className={device === 'desktop' ? 'active' : ''} title="Desktop width" aria-label="Desktop viewport" onClick={() => setDevice('desktop')}><Monitor size={12} /></button>
+          <button aria-pressed={device === 'mobile'} className={device === 'mobile' ? 'active' : ''} title="Mobile width" aria-label="Mobile viewport" onClick={() => setDevice('mobile')}><Smartphone size={12} /></button>
+          <button aria-pressed={split} className={split ? 'active' : ''} title="Code and preview side by side" aria-label="Split code and preview" disabled={!project} onClick={() => setSplit(s => !s)}><Columns2 size={12} /></button>
+          <button aria-pressed={fullscreen} className={fullscreen ? 'active' : ''} title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => setFullscreen(f => !f)}>{fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
+        </span>
         <span className={devStatus.running ? 'dev-status running' : 'dev-status'} title="The generated app is compiled in this browser and rendered in a sandboxed frame; nothing is served from a dev server."><Server size={12} />{devStatus.text}</span>
-        <button className="toolbar-button" onClick={rebuild} disabled={!project || isBuilding} title="Restart the generated app"><RotateCw size={12} />Restart</button>
-        {project && <button className="toolbar-button" onClick={() => setPushOpen(true)} title="Save the current files to GitHub"><GithubMark size={12} />GitHub</button>}
-        <button className="icon-button" aria-label="Close output panel" onClick={p.close}><PanelRightClose size={14} /></button>
+        <button className="icon-button" onClick={rebuild} disabled={!project || sourceOnly || isBuilding} title="Rebuild the generated app" aria-label="Rebuild the generated app"><RotateCw size={13} /></button>
+        <button className="icon-button" aria-label="Close output panel" onClick={() => { setFullscreen(false); p.close(); }}><PanelRightClose size={14} /></button>
       </div>
     </header>
     {p.issue && <div className="preview-issue" role="alert"><CircleAlert size={13} /><span>{p.issue}</span>{p.onFinish && <button className="button small" onClick={p.onFinish}>Finish &amp; Preview</button>}</div>}
     <div className="preview-content">
-      {!project && (!p.content ? <div className="preview-empty"><PanelRightOpen size={22} strokeWidth={1.25} /><span>Agent output will appear here</span></div> : <pre className="preview-body">{p.content}</pre>)}
-      {project && view === 'preview' && <div className="output-preview">
-        {isBuilding && <div className="preview-empty"><LoaderCircle size={20} className="spin" /><span>{p.streaming ? 'Receiving executable code…' : 'Compiling the latest app…'}</span></div>}
-        {p.streaming && <span className="streaming-note">Live code stream · preview refreshes when complete</span>}
-        {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
-        {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} /><button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Refresh / Rerun</button></>}
-      </div>}
-      {project && view === 'code' && <div className="output-code">
-        <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>
-        <div className="code-toolbar"><span>{selectedFile ?? 'Generated source'}</span><button className="toolbar-button" onClick={() => void copyCode()}><Copy size={12} />{copied ? 'Copied' : 'Copy Code'}</button></div>
-        <pre className="syntax-code" dangerouslySetInnerHTML={{ __html: codeMarkup }} />
-      </div>}
-      {project && view === 'edit' && <div className="output-editor">
-        <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>
-        <div className="code-toolbar"><span>Edit source{editDirty ? ' · unsaved' : ''}</span><button className="toolbar-button" onClick={showPreview}><Check size={12} />Apply & Preview</button></div>
-        <textarea aria-label="Generated code editor" className="code-editor" spellCheck={false} value={activeCode} onChange={event => edit(event.target.value)} />
+      {!project && <div className="preview-empty canvas-idle">
+        <MonitorPlay size={26} strokeWidth={1.1} />
+        <strong>Canvas Idle · Ready to preview</strong>
+        <span>Prompt the agent on the left or load a file to see live rendering.</span>
       </div>}
       {project && split && <div className="output-split">{codePane}{previewPane}</div>}
       {project && !split && (view === 'code' ? codePane : previewPane)}

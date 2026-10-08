@@ -126,16 +126,11 @@ export function xkiroPool(env = process.env, discovered = discoveredXkiro) {
 }
 
 /**
- * FreeLLMAPI (the OmniRoute adapter), self-hosted. Where the deployment's install lives is the
- * operator's to say, so it is configured exactly like XKIRO_BASE_URL: an HTTPS origin, no
- * credentials or query, validated and defaulted rather than trusted blind — a typo should surface
- * as a clear message in Settings, not as a puzzling network error. Unlike xKiro there is no public
- * default to fall back to, so an unset variable resolves to '' and the provider simply does not
- * resolve until it is configured.
- *
- * https://github.com/tashfeenahmed/freellmapi — an MIT-licensed router that aggregates the free
- * tiers of dozens of providers behind one OpenAI-compatible `/v1` endpoint. One install, one
- * unified key, and the hundreds of free model endpoints behind it become reachable from here.
+ * OmniRoute, self-hosted. Where the deployment's install lives is the operator's to say, so it is
+ * configured exactly like XKIRO_BASE_URL: an HTTPS origin, no credentials or query, validated and
+ * defaulted rather than trusted blind — a typo should surface as a clear message in Settings, not
+ * as a puzzling network error. Unlike xKiro there is no public default to fall back to, so an
+ * unset variable resolves to '' and the provider simply does not resolve until it is configured.
  */
 export const OMNIROUTE_DEFAULT_BASE = '';
 export function omnirouteBase(env = process.env) {
@@ -149,31 +144,15 @@ export function omnirouteBase(env = process.env) {
 }
 
 /**
- * Whether this deployment serves a FreeLLMAPI install at all.
- *
- * Funding and routing both hinge on this: an unconfigured adapter must refuse cleanly rather than
- * send a request to an empty base URL. Two variables make it live — the install's address and its
- * unified key (`freellmapi-…` bearer token) — and either one missing means off.
- */
-export function omnirouteEnabled(env = process.env) {
-  return Boolean(omnirouteBase(env)) && Boolean(cleanKeySafe(env.OMNIROUTE_API_KEY));
-}
-const cleanKeySafe = value => typeof value === 'string' && value.trim() ? value.trim() : '';
-
-/**
- * The FreeLLMAPI ids this deployment offers free.
+ * The OmniRoute ids this deployment offers free.
  *
  * Deliberately a plain allowlist, without the discovered-catalogue intersection XKIRO_FREE_MODELS
  * was corrected into. That intersection exists because the xKiro gateway publishes a price and a
  * tier per id, so the server can check the operator's list against what the gateway actually gives
- * away. FreeLLMAPI's /v1/models is the plain OpenAI shape — no pricing block, no access_tier — and
+ * away. OmniRoute's /v1/models is the plain OpenAI shape — no pricing block, no access_tier — and
  * whether a run costs anything depends on which providers the operator connected to their own
  * install, which is knowledge only they have. There is nothing upstream to check a claimed id
  * against, so the operator naming it is the whole decision, and the list is taken verbatim.
- *
- * `auto` is always available on a FreeLLMAPI install and costs whatever the models it picks cost,
- * so it is worth adding to this list once the operator has decided the router may spend their
- * stacked free tiers on the deployment's behalf.
  */
 export function omniRoutePool(env = process.env) {
   return [...new Set((env.OMNIROUTE_FREE_MODELS || '').split(',').map(s => s.trim()).filter(id => id && id.length <= 200))];
@@ -291,7 +270,9 @@ export const PROVIDER_KEY_VARS = {
  * `discoveredXkiro` is: the funding decision is synchronous. server/settings.mjs writes here.
  */
 let adminTiers = { mode: 'auto', free: [], paid: [] };
-const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider) && m.provider !== 'custom'
+// An entry from a provider outside the backend lane is dropped here, so a stored tier list that
+// predates the lane split (or a hand-built request) cannot put a non-US provider back on the card.
+const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider) && isBackendProvider(m.provider)
   ? { id: m.id.trim(), provider: m.provider, envKey: PROVIDER_KEY_VARS[m.provider], ...(typeof m.label === 'string' && m.label.trim() ? { label: m.label.trim().slice(0, 80) } : {}) }
   : null;
 export function setAdminTiers(tiers) {
@@ -380,19 +361,21 @@ export function freeModels(env = process.env, discovered = discoveredXkiro, tier
 function allFreeModels(env, discovered, tiers) {
   // The operator's own free list, first: an entry they wrote is theirs to fund, so it carries no
   // FRONTIER guard — the dashboard warns about the cost instead of refusing. In manual mode it is
-  // the whole pool. One exception: a FreeLLMAPI entry stays only while the adapter is configured
-  // end to end. Its base URL has no public default, so promoting one of its ids from the dashboard
-  // before OMNIROUTE_BASE_URL and OMNIROUTE_API_KEY are both set would advertise a model that can
-  // never be reached — the exact "warming up" lie this file exists to avoid.
-  const chosen = tiers.free.map(m => ({ ...m }))
-    .filter(m => m.provider !== 'omniroute' || omnirouteEnabled(env));
+  // the whole pool.
+  const chosen = tiers.free.map(m => ({ ...m }));
   if (tiers.mode === 'manual') return chosen;
   const liveOpenRouter = openRouterPool(env, discoveredOpenRouter);
   // `openrouter/auto` is the cycling entry: OpenRouter is asked to try the first id and fall back
   // through the rest of the list, so a momentarily rate-limited free model degrades to another
   // free model rather than to a paid one. Its pool is the *live* one, so the fan-out covers every
   // free id discovery found instead of the three this file was born with.
-  const guarded = (env.FREE_TIER_ALLOW_FRONTIER === 'true' ? STATIC_FREE : STATIC_FREE.filter(m => !isFrontier(m.id)))
+  // The built-in Groq and OpenRouter ids are names written into this file, and provider catalogues
+  // outgrow them: Groq now answers 404 for both built-in ids on a live key, which the visitor saw as
+  // "free tier warming up". With the backend lane enforced the operator's dashboard picks, which are
+  // chosen from the provider's own live list, are the only funded models. The built-in pool survives
+  // only for the funding-mechanics tests, which run with the lane off.
+  const builtin = isBackendLaneEnforced() ? [] : STATIC_FREE;
+  const guarded = (env.FREE_TIER_ALLOW_FRONTIER === 'true' ? builtin : builtin.filter(m => !isFrontier(m.id)))
     .map(m => m.pool ? { ...m, pool: liveOpenRouter } : m);
   // HF serverless joins only when the deployment holds a token: without one these ids would
   // advertise as free and answer 503, which is the exact "warming up" lie the status message

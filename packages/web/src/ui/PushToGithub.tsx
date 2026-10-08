@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { CircleAlert, ExternalLink, GitBranch, LoaderCircle, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { CircleAlert, ExternalLink, GitBranch, LoaderCircle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
-import { pushProject, type GithubSettings } from '../lib/connectors';
+import { commitMessageFor, formatGithubError, GithubConnectorError, listRepos, parseRepo, pushProject, repoDefaultBranch, type GithubRepo, type GithubSettings } from '../lib/connectors';
+import { sanitizeFiles } from '../lib/secrets';
 import type { ProjectFile } from '../lib/project';
 import { useDismiss } from './useDismiss';
 import type { SyncToast } from './GithubSyncDrawer';
@@ -134,6 +135,7 @@ export default function PushToGithub(p: PushToGithubProps) {
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) p.close(); }}>
     <section className="drawer push-drawer" role="dialog" aria-modal="true" aria-labelledby="push-title">
       <div className="drawer-head"><h2 id="push-title"><GithubMark size={15} strokeWidth={1.75} /> Push to GitHub</h2><button className="icon-button" aria-label="Close" onClick={p.close} autoFocus><X size={16} /></button></div>
+      <p className="help">Commits every staged file to one branch as a single commit.</p>
 
       <label className="grow">Personal access token
         <input type="password" autoComplete="off" spellCheck={false} value={token} disabled={busy} placeholder="github_pat_… with Contents: read and write" onChange={e => setToken(e.target.value)} />
@@ -166,9 +168,9 @@ export default function PushToGithub(p: PushToGithubProps) {
       {status.kind === 'done' && <p className="notice" role="status"><span>Pushed {status.filesPushed} file{status.filesPushed === 1 ? '' : 's'} to <strong>{status.branch}</strong>{status.firstCommit ? ' as the repository’s first commit' : ''}. <a href={status.url} target="_blank" rel="noreferrer">View the commit <ExternalLink size={11} /></a></span></p>}
 
       <div className="row gap">
-        <button className="button primary" disabled={!hasToken || !repo || status.kind === 'busy'} onClick={() => void push()}>
-          {status.kind === 'busy' ? <LoaderCircle size={13} className="spin" /> : <GithubMark size={13} />}
-          Push {p.files.length} file{p.files.length === 1 ? '' : 's'}
+        <button className="button primary" disabled={!hasToken || !target || !staged.length || busy} onClick={() => void push()}>
+          {busy ? <LoaderCircle size={13} className="spin" /> : <GithubMark size={13} />}
+          Push {staged.length} file{staged.length === 1 ? '' : 's'}
         </button>
         <button className="button small" onClick={p.close}>Close</button>
       </div>

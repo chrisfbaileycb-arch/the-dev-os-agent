@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Check, Coins, CreditCard, ExternalLink, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { Check, Coins, CreditCard, ExternalLink, HardDrive, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
@@ -10,7 +10,6 @@ import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
 import type { Balance, FreeTier, LedgerEntry, PlanReading } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
-import { cheaperInferenceDashboard } from '../lib/cheaperInference';
 import ThemePicker from './ThemePicker';
 import type { ThemeChoice } from '../lib/theme';
 
@@ -26,6 +25,8 @@ export interface SettingsProps {
   ledger: LedgerEntry[]; busy: boolean; canInstall: boolean; serverReachable: boolean; requestClear: () => void;
   /** The visitor's colour palette, and the one place it changes (see lib/theme.ts). */
   theme: ThemeChoice; setTheme: (choice: ThemeChoice) => void;
+  /** The local-model switch and address (lib/pipes.ts), which the Local model box below edits. */
+  pipes: PipeSettings; setPipes: (next: PipeSettings) => void;
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
