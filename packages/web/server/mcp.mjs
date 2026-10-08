@@ -1,7 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { HttpError, publicAddress } from './proxy.mjs';
 import { checkOrigin } from './state.mjs';
-import { matchBuiltinMcp, isBuiltinHost, executeBuiltinTool } from './mcpRegistry.mjs';
 
 // /api/mcp: lets the browser talk to remote MCP servers over Streamable HTTP (MCP 2025-06-18) or
 // the older HTTP+SSE transport (MCP 2024-11-05) without exposing them to cross-origin fetches. The browser supplies the server URL and an optional bearer
@@ -133,7 +132,6 @@ export async function checkServer(rawUrl, { resolve = lookup, allowPrivate = fal
   if (!allowPrivate && url.protocol !== 'https:') throw new HttpError(400, 'MCP servers must use https.');
   if (!['http:', 'https:'].includes(url.protocol)) throw new HttpError(400, 'MCP servers must use http or https.');
   if (!allowPrivate) {
-    if (isBuiltinHost(url.hostname)) return url;
     const addresses = await resolve(url.hostname, { all: true }).catch(() => []);
     if (!addresses.length || addresses.some(a => !publicAddress(a.address))) throw new HttpError(403, 'Private, reserved, or unresolvable MCP destinations are blocked.');
   }
@@ -186,38 +184,19 @@ export function createMcp({ env = process.env, resolve = lookup, allowPrivate = 
     } catch (e) { if (session.closed) sseSessions.delete(key); throw e; }
   }
   async function call(url, method, params, authorization, workspace, transport = 'http') {
-    const builtin = matchBuiltinMcp(url);
-    let parsedUrl;
-    try { parsedUrl = new URL(url); } catch { parsedUrl = null; }
-    if (builtin && (parsedUrl && isBuiltinHost(parsedUrl.hostname) || !authorization)) {
-      if (method === 'tools/list') return { tools: builtin.tools };
-      if (method === 'tools/call') {
-        return await executeBuiltinTool(builtin, params?.name, params?.arguments || {}, { authorization, workspace });
-      }
-    }
+    if (transport === 'sse') return await callSse(url, method, params, authorization, workspace);
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), TIMEOUT);
+    const key = `${workspace}|${url}`; const opts = { authorization, fetchImpl, signal: controller.signal };
     try {
-      if (transport === 'sse') return await callSse(url, method, params, authorization, workspace);
-      const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), TIMEOUT);
-      const key = `${workspace}|${url}`; const opts = { authorization, fetchImpl, signal: controller.signal };
-      try {
-        let session = sessions.get(key); if (session && Date.now() - session.at > SESSION_TTL) { sessions.delete(key); session = null; }
-        if (!session) {
-          const init = await rpc(url, { jsonrpc: '2.0', id: counter++, method: 'initialize', params: { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'Signal Forge OS', version: '0.1' } } }, opts);
-          session = { id: init.sessionId || null, at: Date.now() }; sessions.set(key, session);
-          await rpc(url, { jsonrpc: '2.0', method: 'notifications/initialized' }, { ...opts, sessionId: session.id });
-        }
-        try { const out = await rpc(url, { jsonrpc: '2.0', id: counter++, method, params }, { ...opts, sessionId: session.id }); session.at = Date.now(); return out.result; }
-        catch (e) { if (e instanceof HttpError && e.status === 404) { sessions.delete(key); return call(url, method, params, authorization, workspace); } throw e; }
-      } finally { clearTimeout(timer); }
-    } catch (err) {
-      if (builtin) {
-        if (method === 'tools/list') return { tools: builtin.tools };
-        if (method === 'tools/call') {
-          return await executeBuiltinTool(builtin, params?.name, params?.arguments || {}, { authorization, workspace });
-        }
+      let session = sessions.get(key); if (session && Date.now() - session.at > SESSION_TTL) { sessions.delete(key); session = null; }
+      if (!session) {
+        const init = await rpc(url, { jsonrpc: '2.0', id: counter++, method: 'initialize', params: { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'Signal Forge OS', version: '0.1' } } }, opts);
+        session = { id: init.sessionId || null, at: Date.now() }; sessions.set(key, session);
+        await rpc(url, { jsonrpc: '2.0', method: 'notifications/initialized' }, { ...opts, sessionId: session.id });
       }
-      throw err;
-    }
+      try { const out = await rpc(url, { jsonrpc: '2.0', id: counter++, method, params }, { ...opts, sessionId: session.id }); session.at = Date.now(); return out.result; }
+      catch (e) { if (e instanceof HttpError && e.status === 404) { sessions.delete(key); return call(url, method, params, authorization, workspace); } throw e; }
+    } finally { clearTimeout(timer); }
   }
   async function handler(req, res) {
     if (new URL(req.url, 'http://mcp').pathname !== '/api/mcp') return false;

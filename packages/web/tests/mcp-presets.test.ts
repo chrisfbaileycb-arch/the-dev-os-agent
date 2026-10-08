@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm } from '../src/lib/mcpPresets';
 
+const REMOVED = ['thinking', 'database', 'playwright', 'fs', 'docker', 'jira'];
+
 describe('MCP presets', () => {
   it('lists unique ids and https URLs the server guard will accept', () => {
     expect(new Set(MCP_PRESETS.map(p => p.id)).size).toBe(MCP_PRESETS.length);
@@ -8,6 +10,7 @@ describe('MCP presets', () => {
       const url = new URL(p.url);
       expect(url.protocol).toBe('https:');
       expect(url.username).toBe('');
+      expect(url.hostname.endsWith('.internal')).toBe(false);
     }
   });
   it('puts every preset in a known group', () => {
@@ -22,19 +25,7 @@ describe('MCP presets', () => {
     expect(presetConnected(github, [{ url: 'https://API.githubcopilot.com/mcp' }])).toBe(true);
     expect(presetConnected(github, [{ url: 'https://mcp.linear.app/mcp' }])).toBe(false);
   });
-  it('includes all 20 active protocol MCP integrations', () => {
-    const expected = [
-      'github', 'supabase', 'database', 'playwright', 'fs',
-      'firecrawl', 'exa', 'vercel', 'render', 'cloudflare',
-      'docker', 'sentry', 'stripe', 'postman', 'figma',
-      'linear', 'jira', 'slack', 'notion', 'thinking'
-    ];
-    for (const id of expected) {
-      const preset = MCP_PRESETS.find(p => p.id === id);
-      expect(preset, `MCP preset ${id} must exist`).toBeDefined();
-      expect(preset?.name.length).toBeGreaterThan(0);
-      expect(preset?.url).toMatch(/^https:\/\//);
-      expect(preset?.blurb.length).toBeGreaterThan(0);
-    }
+  it('does not ship the in-process ECC tool stand-ins', () => {
+    for (const id of REMOVED) expect(MCP_PRESETS.find(p => p.id === id)).toBeUndefined();
   });
 });

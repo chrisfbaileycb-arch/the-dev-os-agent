@@ -210,25 +210,25 @@ export default function Connectors(p: ConnectorsProps) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
             <div>
               <h3 style={{ fontSize: '13px', fontWeight: 650, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Zap size={14} style={{ color: 'var(--accent)' }} /> Active MCP Tool Registry (20 Integrations)
+                <Zap size={14} style={{ color: 'var(--accent)' }} /> Remote MCP servers
               </h3>
-              <p className="help">Full protocol-level access to developer tools, databases, infrastructure, and reasoning scratchpads. Connect individually or in batch.</p>
+              <p className="help">Bookmarks for real remote servers. Each one is contacted at its own URL with a token you supply. Nothing here runs inside this app.</p>
             </div>
             <button
               className="button primary small"
               disabled={busyId !== null || MCP_PRESETS.every(pr => presetConnected(pr, p.mcp))}
               onClick={() => void connectAllPresets()}
-              title="Connect all 20 protocol MCP integrations into your workspace"
+              title="Add every bookmark that is not already connected"
             >
               {busyId === 'all' ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}
-              Connect All 20 MCPs
+              Connect listed servers
             </button>
           </div>
 
           <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
             <input
               type="search"
-              placeholder="Search 20 MCP connectors (e.g. thinking, sql, github, playwright...)"
+              placeholder="Search MCP servers"
               value={presetQuery}
               onChange={e => setPresetQuery(e.target.value)}
               style={{ flex: 1, minWidth: '180px', padding: '5px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--line-strong)', background: 'var(--panel)', fontSize: '12px' }}
@@ -252,7 +252,7 @@ export default function Connectors(p: ConnectorsProps) {
               if (activeGroup !== 'All' && pr.group !== activeGroup) return false;
               if (!presetQuery.trim()) return true;
               const q = presetQuery.toLowerCase();
-              return pr.name.toLowerCase().includes(q) || pr.blurb.toLowerCase().includes(q) || (pr.prefix && pr.prefix.toLowerCase().includes(q)) || pr.id.toLowerCase().includes(q);
+              return pr.name.toLowerCase().includes(q) || pr.blurb.toLowerCase().includes(q) || pr.id.toLowerCase().includes(q);
             }).map(presetItem => {
               const connected = presetConnected(presetItem, p.mcp);
               const isSelected = url === presetItem.url;
@@ -271,11 +271,6 @@ export default function Connectors(p: ConnectorsProps) {
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '6px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
-                    {presetItem.prefix && (
-                      <code style={{ fontSize: '10px', color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 4px', borderRadius: '3px', fontWeight: 600 }}>
-                        {presetItem.prefix}
-                      </code>
-                    )}
                     <strong style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{presetItem.name}</strong>
                   </div>
                   {connected ? (
@@ -326,7 +321,7 @@ export default function Connectors(p: ConnectorsProps) {
           {c.tools.length > 0 && <div className="caps">{c.tools.map(t => <em key={t.name} title={t.description}>{t.name}</em>)}</div>}
           <div className="row gap"><button className="button small" disabled={busyId === c.id} onClick={() => void refresh(c)}>{busyId === c.id ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}Refresh</button><button className="button small danger" onClick={() => p.setMcp(p.mcp.filter(x => x.id !== c.id))}><Trash2 size={13} />Remove</button></div>
         </section>)}
-        {!p.mcp.length && <p className="help"><Database size={12} /> No servers connected yet. Choose any of the 20 MCP integrations above or click "Connect All 20 MCPs" to enable them in your workspace.</p>}
+        {!p.mcp.length && <p className="help"><Database size={12} /> No servers connected yet. Pick one above, or paste any https MCP URL.</p>}
       </>}
 
       {p.tab === 'models' && <>

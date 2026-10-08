@@ -60,22 +60,3 @@ test('the HTTP route validates input, enforces the budget, and blocks private ho
   } finally { await new Promise(r => server.close(r)); await fake.stop(); }
 });
 
-test('built-in MCP registry lists and executes tools for thinking and database protocols', async () => {
-  const mcp = createMcp({ env: {}, allowPrivate: false });
-  const thinkingList = await mcp.call('https://mcp.thinking.internal/mcp', 'tools/list', {}, undefined, 'ws-test');
-  assert.ok(Array.isArray(thinkingList.tools));
-  assert.ok(thinkingList.tools.some(t => t.name === 'step'));
-  const thinkingCall = await mcp.call('https://mcp.thinking.internal/mcp', 'tools/call', {
-    name: 'step',
-    arguments: { thought: 'Evaluate alternative architectural pathways', thoughtNumber: 1, totalThoughts: 2, nextThoughtNeeded: true }
-  }, undefined, 'ws-test');
-  assert.ok(thinkingCall.content[0].text.includes('Thinking Step 1/2'));
-
-  const dbList = await mcp.call('https://mcp.database.internal/mcp', 'tools/list', {}, undefined, 'ws-test');
-  assert.ok(dbList.tools.some(t => t.name === 'introspect_schema'));
-  const dbCall = await mcp.call('https://mcp.database.internal/mcp', 'tools/call', {
-    name: 'introspect_schema',
-    arguments: {}
-  }, undefined, 'ws-test');
-  assert.ok(dbCall.content[0].text.length > 0);
-});
