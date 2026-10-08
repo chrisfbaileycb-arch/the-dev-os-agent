@@ -534,3 +534,15 @@ test('the dashboard publishes a stacked key field as the pool the router reads',
   assert.equal(settings.env().GROQ_API_KEY, 'only-one-key');
   assert.equal(settings.keyStatus().find(r => r.provider === 'groq').hint, '…-key');
 });
+
+test('a new X-Workspace-Id header does not buy a fresh month of free credits', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.recordUsage(workspace, { model: 'groq/llama-3.3-70b-versatile', tokens: 100_000, credits: 50 });
+    await withProxy({ env: { GROQ_API_KEY: 'server-key', FREE_CREDIT_MONTHLY_POOL: '10' }, db, transport: async () => { throw Error('must not call'); } }, async url => {
+      for (const id of ['aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000002']) {
+        assert.equal((await chat(url, base, { 'X-Workspace-Id': id })).status, 402, `header ${id} must not reset the quota`);
+      }
+    });
+  } finally { db.close(); }
+});

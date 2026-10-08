@@ -7,6 +7,7 @@ import { USER_AGENT } from './discovery.mjs';
 import { modelsUrl, normalizeModelList } from './models.mjs';
 import { PROVIDER_META, TUNABLES } from './settings.mjs';
 import { loadVault, saveVault, getClientConfig } from './vault.mjs';
+import { REGISTRY, isBackendProvider } from './providerRegistry.mjs';
 
 // The operator's dashboard: /api/admin/*.
 //

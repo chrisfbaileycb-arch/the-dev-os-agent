@@ -9,7 +9,7 @@ const items: { id: Page; label: string; icon: typeof MessageSquare }[] = [
   { id: 'settings', label: 'Settings and model hub', icon: Settings2 },
 ];
 /** The admin entry is always shown: it is how the owner reaches the setup form on a fresh deployment. */
-export default function Rail({ page, setPage, collapsed, toggle, badge, authUser, googleEnabled, admin }: { page: Page; setPage: (p: Page) => void; collapsed: boolean; toggle: () => void; badge: Partial<Record<Page, number>>; authUser?: AuthUser | null; googleEnabled?: boolean; admin?: boolean }) {
+export default function Rail({ page, setPage, collapsed, toggle, badge, authUser, googleEnabled, admin, onLock }: { page: Page; setPage: (p: Page) => void; collapsed: boolean; toggle: () => void; badge: Partial<Record<Page, number>>; authUser?: AuthUser | null; googleEnabled?: boolean; admin?: boolean; onLock?: () => void }) {
   const visible = [...items, { id: 'admin' as Page, label: 'Admin dashboard', icon: ShieldCheck }];
   return <aside className={collapsed ? 'rail collapsed' : 'rail'} aria-label="Primary">
     <button className="rail-brand" onClick={() => setPage('workspace')} aria-label="Signal Forge OS home"><img src="icons/icon-192.png" alt="" width={26} height={26} /><span>Signal Forge OS</span></button>
