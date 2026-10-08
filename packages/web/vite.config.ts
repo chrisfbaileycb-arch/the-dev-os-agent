@@ -67,30 +67,15 @@ const devHosts = { host: '0.0.0.0', allowedHosts: true as const, strictPort: fal
 // deliberately DOM-only. Reading it through a narrow local type keeps that boundary — nothing else
 // in the repo gains a Node global, and no @types/node is pulled into the client compile.
 const nodeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
-const port = Number.parseInt(nodeProcess?.env?.PORT ?? '', 10) || 3000;
-const devPort = { port, strictPort: false };
+const port = Number.parseInt(nodeProcess?.env?.PORT ?? '', 10);
+const devPort = Number.isInteger(port) && port > 0 ? { port, strictPort: true } : {};
 
-/**
- * The private-beta passcode, reduced to a salted PBKDF2 hash at build time.
- *
- * `VITE_BETA_ACCESS_KEY` is read here, in Node, and only its hash is injected into the bundle as
- * `__BETA_ACCESS_HASH__`; client code never reads `import.meta.env.VITE_BETA_ACCESS_KEY`, so the
- * passcode itself is not shipped to every visitor's browser. `vite dev` falls back to
- * BETA_DEV_PASSCODE when the variable is unset. A production build with it unset injects an empty
- * hash, and the gate then refuses everyone rather than opening — a private beta fails closed.
- */
-export default defineConfig(async ({ mode, command }) => {
-  const env = loadEnv(mode, '.', 'VITE_');
-  const passcode = (nodeProcess?.env?.VITE_BETA_ACCESS_KEY ?? env.VITE_BETA_ACCESS_KEY ?? '').trim() || BETA_DEV_PASSCODE;
-  const hash = passcode ? await deriveBetaHash(passcode) : '';
-  return {
-  define: { __BETA_ACCESS_HASH__: JSON.stringify(hash), __BETA_DEV_FALLBACK__: JSON.stringify(!(nodeProcess?.env?.VITE_BETA_ACCESS_KEY ?? env.VITE_BETA_ACCESS_KEY ?? '').trim()) },
+export default defineConfig({
   base: './',
   plugins: [api, shellWorker],
   server: { ...devHosts, ...devPort },
   preview: { ...devHosts, ...devPort },
-  test: { include: ['tests/**/*.test.{ts,tsx}'] },
+  test: { include: ['tests/**/*.test.ts'] },
   build: { target: 'es2022' },
-  worker: { format: 'es' as const },
-  };
+  worker: { format: 'es' },
 });

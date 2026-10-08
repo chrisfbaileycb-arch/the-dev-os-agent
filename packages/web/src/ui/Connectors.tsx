@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Check, Cpu, Database, FileText, Globe, LoaderCircle, Plug, Plus, RefreshCw, Search, Trash2, Upload, X, Zap } from 'lucide-react';
+import { Database, FileText, Globe, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
-import { guessTransport, refreshTools, type McpConnection, type McpTransport } from '../lib/mcp';
+import { refreshTools, type McpConnection } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
 import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset, type McpPresetGroup } from '../lib/mcpPresets';
 import { localEndpointError, normalizeLocalEndpoint, pipeEnabled, PIPE_PROVIDERS, type PipeSettings } from '../lib/pipes';

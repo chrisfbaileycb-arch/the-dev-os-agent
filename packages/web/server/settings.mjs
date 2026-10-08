@@ -51,7 +51,7 @@ export const PROVIDER_META = {
 export const TUNABLES = {
   FREE_CREDIT_MONTHLY_POOL: { kind: 'number', min: 0, max: 10_000_000, label: 'Free credits per workspace per month' },
   FREE_MAX_PER_HOUR: { kind: 'number', min: 1, max: 100_000, label: 'Free requests per hour from one network' },
-  FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Output cap on a free reply (default 16,384; legacy 1,024 / 8,192 are upgraded)' },
+  FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 0, max: Number.MAX_SAFE_INTEGER, label: 'Output cap on a free reply' },
   FREE_TIER_DISABLED: { kind: 'boolean', label: 'Free tier switched off' },
   FREE_TIER_ALLOW_FRONTIER: { kind: 'boolean', label: 'Allow frontier ids in the automatic free pool' },
   PLAN_STARTER_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$25 Starter: monthly credits (default 1,000)' },
@@ -282,7 +282,6 @@ export async function openSettings({ db, env = process.env, log = console.error 
     unreadable: () => [...unreadable],
     async setKey(provider, value) {
       if (!Object.hasOwn(PROVIDER_KEY_VARS, provider)) throw new Error('Unknown provider.');
-      if (!isBackendProvider(provider)) throw new Error('The dashboard only holds keys for the US backend providers. Other providers are used with a key typed in the browser.');
       // A field may hold a pool (see keyPool), so the header-safe rule is applied per key rather
       // than to the whole block: one pasted key with a stray newline should name itself, not
       // reject the other four alongside it.
@@ -340,7 +339,7 @@ export async function openSettings({ db, env = process.env, log = console.error 
         // the rotation depth they configured without the values ever leaving the server.
         const count = pool.length || (value ? 1 : 0);
         const shape = count > 1 ? `${count} keys` : value ? hint(value) : '';
-        return { provider, name: PROVIDER_META[provider]?.name ?? provider, env: name, console: PROVIDER_META[provider]?.console ?? null, source, hint: shape, count, unreadable: unreadable.has(name), backend: isBackendProvider(provider) };
+        return { provider, name: PROVIDER_META[provider]?.name ?? provider, env: name, console: PROVIDER_META[provider]?.console ?? null, source, hint: shape, count, unreadable: unreadable.has(name) };
       });
     },
     tunableStatus(base = env) {

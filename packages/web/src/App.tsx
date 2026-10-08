@@ -38,9 +38,8 @@ import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadW
 import { useInstallAvailable, useOnline } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
-import { activeCount, activeTools, clearSettings, loadSettings, saveSettings, type ConnectorSettings, type GithubSettings } from './lib/connectors';
-import { loadSyncSettings } from './lib/githubSync';
-import type { Connection, Knowledge, MemoryEntry, MemoryKind, Run, Workflow, WorkerEvent } from './lib/types';
+import { activeCount, activeTools, clearSettings, loadSettings, saveSettings, type ConnectorSettings } from './lib/connectors';
+import type { Connection, Knowledge, Run, WorkerEvent } from './lib/types';
 import { loadTheme, saveTheme, type ThemeChoice } from './lib/theme';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
