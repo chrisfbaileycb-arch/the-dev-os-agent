@@ -1,4 +1,4 @@
-import { CreditCard, Database, LogIn, LogOut, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings2, ShieldCheck, Users } from 'lucide-react';
+import { CreditCard, Database, LockKeyhole, LogIn, LogOut, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings2, ShieldCheck, Users } from 'lucide-react';
 import type { AuthUser } from '../lib/store';
 export type Page = 'workspace' | 'roster' | 'knowledge' | 'pricing' | 'settings' | 'admin';
 const items: { id: Page; label: string; icon: typeof MessageSquare }[] = [
@@ -12,7 +12,7 @@ const items: { id: Page; label: string; icon: typeof MessageSquare }[] = [
 export default function Rail({ page, setPage, collapsed, toggle, badge, authUser, googleEnabled, admin }: { page: Page; setPage: (p: Page) => void; collapsed: boolean; toggle: () => void; badge: Partial<Record<Page, number>>; authUser?: AuthUser | null; googleEnabled?: boolean; admin?: boolean }) {
   const visible = [...items, { id: 'admin' as Page, label: 'Admin dashboard', icon: ShieldCheck }];
   return <aside className={collapsed ? 'rail collapsed' : 'rail'} aria-label="Primary">
-    <button className="rail-brand" onClick={() => setPage('workspace')} aria-label="Hey Buddy home"><img src="icons/icon-192.png" alt="" width={26} height={26} /><span>Hey Buddy</span></button>
+    <button className="rail-brand" onClick={() => setPage('workspace')} aria-label="Signal Forge OS home"><img src="icons/icon-192.png" alt="" width={26} height={26} /><span>Signal Forge OS</span></button>
     <nav>{visible.map(n => <button key={n.id} className={page === n.id ? 'rail-item active' : 'rail-item'} title={collapsed ? n.label : undefined} aria-current={page === n.id ? 'page' : undefined} onClick={() => setPage(n.id)}><n.icon size={17} strokeWidth={1.75} /><span>{n.label}</span>{badge[n.id] ? <em className="rail-badge">{badge[n.id]}</em> : null}</button>)}</nav>
     <div className="rail-foot">
       {authUser
@@ -24,6 +24,7 @@ export default function Rail({ page, setPage, collapsed, toggle, badge, authUser
         : googleEnabled
           ? <a href="/auth/google" className="rail-item" title={collapsed ? 'Sign in with Google' : undefined}><LogIn size={17} strokeWidth={1.75} /><span>Sign in</span></a>
           : null}
+      {onLock && <button className="rail-item rail-lock" onClick={onLock} title={collapsed ? 'Sign out / Lock' : 'Lock the workspace until the beta passcode is entered again'} aria-label="Sign out and lock"><LockKeyhole size={17} strokeWidth={1.75} /><span>Sign out / Lock</span></button>}
       <button className="rail-item rail-toggle" onClick={toggle} aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'} title={collapsed ? 'Expand' : 'Collapse'}>{collapsed ? <PanelLeftOpen size={17} strokeWidth={1.75} /> : <PanelLeftClose size={17} strokeWidth={1.75} />}<span>Collapse</span></button>
     </div>
   </aside>;

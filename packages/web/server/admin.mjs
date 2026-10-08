@@ -64,7 +64,7 @@ const cookieHeader = (req, value, maxAge) => `${COOKIE}=${encodeURIComponent(val
  * pick tier models by name from what the key actually reaches rather than typing ids.
  */
 export async function discoverForProvider(provider, env, fetchImpl = fetch) {
-  if (!Object.hasOwn(PROVIDER_KEY_VARS, provider) || provider === 'custom' || provider === 'omniroute') throw new HttpError(400, 'Choose a named provider.');
+  if (!Object.hasOwn(PROVIDER_KEY_VARS, provider) || !isBackendProvider(provider)) throw new HttpError(400, 'Choose one of the US backend providers.');
   const key = cleanKey(env[PROVIDER_KEY_VARS[provider]]) || (provider === 'openrouter' ? cleanKey(env.SETTINGS_OWNER_API_KEY) || cleanKey(env.OPENROUTER_OWNER_KEY) : '');
   if (!key && provider !== 'openrouter') throw new HttpError(400, `Add a ${PROVIDER_META[provider]?.name ?? provider} key first.`);
   const target = await resolveTarget(provider, '', env);
@@ -118,9 +118,17 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, l
   function config() {
     const env = currentEnv();
     const tiers = settings.tiers();
+    const rows = settings.keyStatus(baseEnv).map(p => ({ ...p, console: PROVIDER_META[p.provider]?.console ?? null }));
     return {
       persistent: settings.persistent,
-      providers: settings.keyStatus(baseEnv).map(p => ({ ...p, console: PROVIDER_META[p.provider]?.console ?? null })),
+      // The dashboard only manages the US backend lane. A key stored under a provider outside it
+      // (from before the lane split) is listed apart, removable and otherwise inert: nothing funds
+      // from it any more. An environment-sourced one has no row, since the dashboard cannot remove it.
+      providers: rows.filter(p => p.backend),
+      retired: rows.filter(p => !p.backend && p.source === 'dashboard'),
+      // Backend providers the registry has decided on but the proxy cannot route to yet, so the
+      // dashboard says so instead of offering a key field that would do nothing.
+      planned: REGISTRY.filter(r => isBackendProvider(r.id) && !r.integrated).map(r => ({ provider: r.id, name: r.name, note: r.note ?? '' })),
       tunables: settings.tunableStatus(baseEnv),
       tunableSpecs: Object.fromEntries(Object.entries(TUNABLES).map(([name, spec]) => [name, { kind: spec.kind, label: spec.label, min: spec.min, max: spec.max }])),
       tiers: { ...tiers, warnings: tiers.free.filter(m => isFrontier(m.id)).map(m => m.id) },

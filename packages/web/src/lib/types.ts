@@ -3,17 +3,27 @@ import type { InferenceMode } from './catalog';
 import type { Persona } from './roster';
 export type Mode = 'remote';
 export type Workflow = 'build' | 'research' | 'review';
-export interface Connection { provider?: Provider; saveKey?: boolean; serverAccessToken?: string; mode: Mode; inference?: InferenceMode; endpoint: string; model: string; token: string; maxTokens: number; }
+export interface Connection { provider?: Provider; saveKey?: boolean; serverAccessToken?: string; mode: Mode; inference?: InferenceMode; endpoint: string; model: string; token: string; maxTokens: number; customOutputLimit?: boolean; }
 export interface Knowledge { id: string; title: string; content: string; createdAt: string; }
-export interface StepView { id: string; title: string; agent: string; status: string; output?: string; error?: string; attempts: number; /** The model that ran this stage, when it differs from the connection's own. */ model?: string; }
+/**
+ * One persistent memory, held in this browser's IndexedDB and never synced to the server.
+ *
+ * `preference` is something the person asked to be remembered ("I use pnpm"), `project` a line of
+ * context about something built here, `failure` a note about something that went wrong so the
+ * next attempt can avoid it. `hits` and `usedAt` let the lookup favour memories that keep proving
+ * relevant, and let the store drop the stalest first when it is full.
+ */
+export type MemoryKind = 'preference' | 'project' | 'failure';
+export interface MemoryEntry { id: string; kind: MemoryKind; text: string; tags: string[]; createdAt: string; usedAt?: string; hits: number; }
+export interface StepView { id: string; title: string; agent: string; status: string; output?: string; error?: string; attempts: number; /** The model that ran this stage, when it differs from the connection's own. */ model?: string; /** Which phase (0-based dependency depth) the step belongs to. */ phase?: number; }
 /** `origin` records where the stages ran: this browser's Web Worker, or the Render background worker. */
-export interface Run { id: string; goal: string; workflow: Workflow; mode: Mode; model: string; status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'; startedAt: string; completedAt?: string; steps: StepView[]; tokens: number; calls: number; cacheHits: number; contextTitles: string[]; sessionId?: string; persona?: string; origin?: 'browser' | 'server'; }
+export interface Run { id: string; goal: string; workflow: Workflow; mode: Mode; model: string; status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'interrupted'; /** Set while the run waits at an approval gate: the phase just finished, of how many. */ gate?: { phase: number; phases: number }; startedAt: string; completedAt?: string; steps: StepView[]; tokens: number; calls: number; cacheHits: number; contextTitles: string[]; sessionId?: string; persona?: string; origin?: 'browser' | 'server'; }
 /**
  * `leadPersona` carries the lead agent itself, not only its id. A custom agent lives in
  * localStorage, which a Web Worker cannot read, so an id alone would resolve to the default agent
  * inside the worker and quietly drop the lead context of the very agent the user wrote.
  */
-export interface StartMessage { type: 'start'; runId: string; goal: string; workflow: Workflow; connection: Connection; knowledge: Knowledge[]; sessionId?: string; persona?: string; leadPersona?: Persona; attachments?: { name: string; content: string }[]; /** Discovered, funded ids the run may spread across stages; every stage model comes from here. */ stageCandidates?: string[]; }
+export interface StartMessage { type: 'start'; runId: string; goal: string; workflow: Workflow; connection: Connection; knowledge: Knowledge[]; sessionId?: string; persona?: string; leadPersona?: Persona; attachments?: { name: string; content: string }[]; /** Discovered, funded ids the run may spread across stages; every stage model comes from here. */ stageCandidates?: string[]; /** Persistent memories; the run carries only those matching its goal. */ memories?: MemoryEntry[]; /** Pause for the person's approval after every phase but the last. */ approvalGates?: boolean; }
 /**
  * One model per workflow family, chosen for the whole run before it starts.
  *
@@ -23,6 +33,7 @@ export interface StartMessage { type: 'start'; runId: string; goal: string; work
  * produces three identical values here and the run behaves exactly as before.
  */
 export interface StageModels { plan: string; build: string; verify: string; }
-export type WorkerMessage = StartMessage | { type: 'cancel' };
+export type WorkerMessage = StartMessage | { type: 'cancel' } | { type: 'approve' };
 export type WorkerEvent = { type: 'update'; run: Run } | { type: 'done'; run: Run } | { type: 'error'; message: string };
-export interface Completion { text: string; tokens: number; }
+/** `inputTokens` and `outputTokens` are present only when the provider reported them separately. */
+export interface Completion { text: string; tokens: number; inputTokens?: number; outputTokens?: number; truncated?: boolean; }

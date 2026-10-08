@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inlineLocalAssets, isSafeProjectPath, parseProject, placeholderImage, resolveLocalRef, stitchFragments, wrapScriptDocument } from '../src/lib/project';
+import { inlineLocalAssets, missingLocalImports, isSafeProjectPath, latestPreviewReply, missingReactImports, parseProject, placeholderImage, preparePreviewProject, resolveLocalRef, stitchFragments, withReactHookImports, wrapScriptDocument, type Project } from '../src/lib/project';
 import { highlightCode } from '../src/lib/highlight';
 
 const fence = (info: string, body: string) => `\`\`\`${info}\n${body}\n\`\`\``;
@@ -171,6 +171,12 @@ describe('parseProject', () => {
       expect(result).toMatch(/^<!DOCTYPE html>[\s\S]*<html[\s\S]*<body>[\s\S]*<script>/);
       expect(result).toContain('canvas { display: block; }');
     });
+
+    it('wraps script execution with a DOMContentLoaded and readyState check', () => {
+      const result = wrapScriptDocument('document.getElementById("btn").addEventListener("click", () => {});');
+      expect(result).toContain("document.readyState !== 'loading'");
+      expect(result).toContain("window.addEventListener('DOMContentLoaded'");
+    });
   });
 
   describe('highlightCode', () => {
@@ -207,6 +213,27 @@ describe('parseProject', () => {
       const reply = `I could write that with:\n\n${fence('js', 'console.log(1)')}\n\nWant me to?`;
       expect(parseProject(reply)).toBeNull();
     });
+  });
+});
+
+describe('live preview selection and mounting', () => {
+  it('holds the last runnable app while a later reply streams, then selects its completed app', () => {
+    const first = fence('index.html', '<html><body>First</body></html>');
+    const second = fence('index.html', '<html><body>Second</body></html>');
+    const messages = [{ role: 'assistant', content: first }, { role: 'user', content: 'Change it' }, { role: 'assistant', content: 'Writing the update…' }];
+    expect(latestPreviewReply(messages)).toBe(first);
+    messages[2].content = second;
+    expect(latestPreviewReply(messages)).toBe(second);
+  });
+
+  it('mounts a standalone component and supplies its missing hooks without changing source', () => {
+    const source = 'export default function App() { const [n, setN] = useState(0); return <button onClick={() => setN(n + 1)}>{n}</button>; }';
+    const original: Project = { kind: 'react', entry: 'src/App.tsx', dependencies: {}, files: [{ path: 'src/App.tsx', content: source }] };
+    const prepared = preparePreviewProject(original);
+    expect(original.files[0].content).toBe(source);
+    expect(prepared.files[0].content).toContain("import { useState } from 'react';");
+    expect(prepared.entry).toBe('__preview_main.tsx');
+    expect(prepared.files[1].content).toContain("createRoot(document.getElementById('root')!).render(<App />)");
   });
 });
 
@@ -259,5 +286,59 @@ describe('inlineLocalAssets', () => {
   it('names the missing file in the placeholder so the gap reads as a gap and not as a bug', () => {
     expect(decodeURIComponent(placeholderImage('images/hero.jpg'))).toContain('>hero.jpg<');
     expect(decodeURIComponent(placeholderImage('<evil>.png'))).not.toContain('<evil>');
+  });
+});
+
+describe('withReactHookImports', () => {
+  const project = (files: Record<string, string>, entry = Object.keys(files)[0]): Project => ({ files: Object.entries(files).map(([path, content]) => ({ path, content })), entry, dependencies: {}, kind: 'react' });
+
+  it('imports exactly the hooks a file calls without importing', () => {
+    expect(missingReactImports({ path: 'src/App.tsx', content: 'export default function App() { const [n] = useState(0); useEffect(() => {}, []); return <p>{n}</p>; }' }))
+      .toBe("import { useState, useEffect } from 'react';");
+  });
+  it('binds React when a file references it without importing it', () => {
+    expect(missingReactImports({ path: 'src/App.jsx', content: 'export const Memo = React.memo(() => <React.Fragment />);' }))
+      .toBe("import * as React from 'react';");
+  });
+  it('fixes each file on its own, since imports are module-scoped', () => {
+    const next = withReactHookImports(project({
+      'src/main.tsx': "import React from 'react';\nimport Counter from './Counter';",
+      'src/Counter.tsx': 'export default function Counter() { const [n, set] = useState(0); return <button onClick={() => set(n + 1)}>{n}</button>; }',
+    }));
+    expect(next.files[0].content).toBe("import React from 'react';\nimport Counter from './Counter';");
+    expect(next.files[1].content.startsWith("import { useState } from 'react';\n")).toBe(true);
+  });
+  it('adds only the hook a partial import forgot', () => {
+    expect(missingReactImports({ path: 'src/App.tsx', content: "import { useState } from 'react';\nuseState(0); useEffect(() => {});" }))
+      .toBe("import { useEffect } from 'react';");
+  });
+  it('leaves files alone that already have what they use', () => {
+    const p = project({ 'src/App.tsx': "import * as React from 'react';\nconst { useState } = React;\nexport default () => { useState(0); return <p />; };" });
+    expect(withReactHookImports(p)).toBe(p);
+    expect(missingReactImports({ path: 'src/App.tsx', content: 'React.useState(0);' })).toBe("import * as React from 'react';");
+    expect(missingReactImports({ path: 'src/util.ts', content: 'useState(0);' })).toBe('');
+    expect(missingReactImports({ path: 'src/App.tsx', content: 'function useState() {} useState();' })).toBe('');
+  });
+});
+
+describe('truncated multi-file replies', () => {
+  const truncated = "```src/main.tsx\nimport App from './App';\nimport './index.css';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')!).render(<App />);\n```\n```src/App.tsx\nexport default function App() { return <div>hi";
+
+  it('is not a project when its own imports never arrived', () => {
+    expect(parseProject(truncated)).toBeNull();
+  });
+
+  it('reports which imports dangle', () => {
+    expect(missingLocalImports([{ path: 'src/main.tsx', content: "import App from './App';\nimport './index.css';" }])).toEqual(['src/main.tsx -> ./App', 'src/main.tsx -> ./index.css']);
+  });
+
+  it('stays a project once every import resolves', () => {
+    const full = "```src/main.tsx\nimport App from './App';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')!).render(<App />);\n```\n```src/App.tsx\nexport default function App() { return <div>hi</div>; }\n```";
+    expect(parseProject(full)?.kind).toBe('react');
+  });
+
+  it('does not declare success while a sibling file is still inside an open fence', () => {
+    const mixed = `${truncated}\n\`\`\`html\n<!doctype html><html><body>ok</body></html>\n\`\`\``;
+    expect(parseProject(mixed)).toBeNull();
   });
 });

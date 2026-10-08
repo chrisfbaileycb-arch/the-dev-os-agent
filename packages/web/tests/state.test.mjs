@@ -49,3 +49,36 @@ test('validates shapes and refuses oversized batches', async () => { await withS
   assert.equal((await call(url, 'POST', { ledger: Array.from({ length: 101 }, (_, i) => ({ ...entry, id: 'l' + i })) })).status, 400);
   assert.throws(() => validateEntry({ ...entry, mode: 'stolen' }));
 }); });
+
+const del = (url, ids, headers = {}) => fetch(url + '/api/state/delete', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': ws, ...headers }, body: JSON.stringify({ sessions: ids }) });
+const other = '9a1c7e22-1b3d-4f6a-8c5e-2d4b6f8a0c1e';
+
+test('deleting a session removes it from the server so a refresh cannot bring it back', async () => { await withState({}, async url => {
+  await call(url, 'POST', { sessions: [session, { ...session, id: 's2', title: 'Keep me' }] });
+  assert.equal((await del(url, ['s1'])).status, 200);
+  const state = await (await call(url, 'GET')).json();
+  assert.deepEqual(state.sessions.map(s => s.id), ['s2']);
+  // Deleting an id the server never had is not an error: a queued delete may be sent twice.
+  assert.equal((await del(url, ['s1'])).status, 200);
+}); });
+
+test('a delete only touches its own workspace and validates its input', async () => { await withState({}, async url => {
+  await call(url, 'POST', { sessions: [session] });
+  await call(url, 'POST', { sessions: [session] }, { 'X-Workspace-Id': other });
+  await del(url, ['s1']);
+  assert.equal((await (await call(url, 'GET')).json()).sessions.length, 0);
+  assert.equal((await (await call(url, 'GET', undefined, { 'X-Workspace-Id': other })).json()).sessions.length, 1);
+  assert.equal((await del(url, ['../etc/passwd'])).status, 400);
+  assert.equal((await del(url, [{ id: 's1' }])).status, 400);
+  assert.equal((await del(url, ['s1'], { Origin: 'https://evil.example' })).status, 403);
+}); });
+
+test('free allowance readback uses the same canonical funding identity as the proxy', async () => {
+  await withState({}, async (url, db) => {
+    db.recordUsage('127.0.0.1', { model: 'm', tokens: 1000, credits: 2 });
+    const reading = await (await fetch(url + '/api/state/usage', { headers: { 'X-Workspace-Id': ws } })).json();
+    assert.equal(reading.freeUsed, 2); assert.equal(reading.entry.credits, 2);
+    const rotated = await (await fetch(url + '/api/state/usage', { headers: { 'X-Workspace-Id': other } })).json();
+    assert.equal(rotated.freeUsed, 2, 'the displayed free meter cannot be reset by a new browser header');
+  });
+});

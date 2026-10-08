@@ -1,5 +1,6 @@
 {
-  "name": "hey-buddy-web-bridge",
+  "name": "signal-forge-os-web-bridge",
+  "description": "Render build bridge for Signal Forge OS.",
   "version": "1.0.0",
   "private": true,
   "scripts": {

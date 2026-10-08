@@ -4,9 +4,16 @@ import type { ToolSpec } from './tools';
 // Connected MCP servers. Connections live in localStorage; the bearer token stays in memory
 // unless the person chooses to remember it. Calls go through /api/mcp, which does the
 // handshake and the safety checks. Tools from enabled servers become chat tools.
+//
+// Two transports, because servers in the wild speak both: Streamable HTTP (MCP 2025-06-18, one
+// POST per request, the current standard) and HTTP+SSE (MCP 2024-11-05, a long-lived event stream
+// plus a POST endpoint it names), which many existing servers still expose at a `/sse` path.
 
 export interface McpTool { name: string; description: string; inputSchema?: { properties?: Record<string, { type?: string; description?: string }>; required?: string[] }; }
-export interface McpConnection { id: string; name: string; url: string; token: string; saveToken: boolean; enabled: boolean; tools: McpTool[]; checkedAt?: string; error?: string; }
+export type McpTransport = 'http' | 'sse';
+export interface McpConnection { id: string; name: string; url: string; transport: McpTransport; token: string; saveToken: boolean; enabled: boolean; tools: McpTool[]; checkedAt?: string; error?: string; }
+/** A URL ending in /sse is almost always the older transport; everything else defaults to Streamable HTTP. */
+export const guessTransport = (url: string): McpTransport => /\/sse\/?$/i.test(url.trim()) ? 'sse' : 'http';
 
 const KEY = 'hb-mcp';
 const tokens = new Map<string, string>();
@@ -14,7 +21,7 @@ const tokens = new Map<string, string>();
 export function loadConnections(): McpConnection[] {
   try {
     const list = JSON.parse(localStorage.getItem(KEY) || '[]') as Partial<McpConnection>[];
-    return list.filter(c => typeof c.id === 'string' && typeof c.url === 'string').map(c => ({ id: c.id!, name: typeof c.name === 'string' ? c.name : 'MCP server', url: c.url!, token: c.saveToken && typeof c.token === 'string' ? c.token : (tokens.get(c.id!) ?? ''), saveToken: Boolean(c.saveToken), enabled: c.enabled !== false, tools: Array.isArray(c.tools) ? c.tools as McpTool[] : [], checkedAt: c.checkedAt, error: c.error }));
+    return list.filter(c => typeof c.id === 'string' && typeof c.url === 'string').map(c => ({ id: c.id!, name: typeof c.name === 'string' ? c.name : 'MCP server', url: c.url!, transport: c.transport === 'sse' ? 'sse' : 'http', token: c.saveToken && typeof c.token === 'string' ? c.token : (tokens.get(c.id!) ?? ''), saveToken: Boolean(c.saveToken), enabled: c.enabled !== false, tools: Array.isArray(c.tools) ? c.tools as McpTool[] : [], checkedAt: c.checkedAt, error: c.error }));
   } catch { return []; }
 }
 export function saveConnections(list: McpConnection[]): void {
@@ -25,7 +32,7 @@ export function clearConnections(): void { tokens.clear(); try { localStorage.re
 
 async function rpc<T>(conn: McpConnection, method: 'tools/list' | 'tools/call', params: Record<string, unknown>, signal: AbortSignal): Promise<T> {
   const token = conn.token.trim();
-  const response = await fetch('/api/mcp', { method: 'POST', credentials: 'same-origin', signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]), headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId() }, body: JSON.stringify({ url: conn.url, method, params, ...(token ? { authorization: /^bearer /i.test(token) ? token : `Bearer ${token}` } : {}) }) });
+  const response = await fetch('/api/mcp', { method: 'POST', credentials: 'same-origin', signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]), headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId() }, body: JSON.stringify({ url: conn.url, transport: conn.transport, method, params, ...(token ? { authorization: /^bearer /i.test(token) ? token : `Bearer ${token}` } : {}) }) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(typeof body?.error?.message === 'string' ? body.error.message : `MCP request failed (HTTP ${response.status}).`);
   return body.result as T;

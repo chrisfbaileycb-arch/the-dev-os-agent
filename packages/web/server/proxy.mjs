@@ -1,5 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
+import { Transform } from 'node:stream';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
@@ -42,6 +43,17 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     // Hugging Face's Inference Providers router is likewise OpenAI-compatible for chat and
     // lists its live roster at /v1/models, so it too needs only a fixed home.
     huggingface: 'https://router.huggingface.co/v1',
+    // xAI (Grok) and Venice both speak the OpenAI chat surface at a fixed home.
+    xai: 'https://api.x.ai/v1',
+    venice: 'https://api.venice.ai/api/v1',
+    // Free, US-based options a visitor can get a key for in minutes: GitHub Models (a GitHub token
+    // with models:read, rate-limited for prototyping) and Cerebras (open-weight models, free tier).
+    github: 'https://models.github.ai/inference',
+    cerebras: 'https://api.cerebras.ai/v1',
+    // Meta's Model API (Muse) is OpenAI-compatible. Operator-funded only; it is not offered for a visitor's own key.
+    meta: 'https://api.meta.ai/v1',
+    // Vercel AI Gateway: OpenAI-compatible, bearer key, lists its roster at /models.
+    vercel: 'https://ai-gateway.vercel.sh/v1',
     'cheaper-inference': cheaperInferenceBase(env),
     xkiro: xkiroBase(env),
   };
@@ -92,10 +104,11 @@ export const malformed = value => typeof value === 'string' && value.trim().leng
 export function keyFor(body, env = process.env) {
   if (body.apiKey !== undefined && (typeof body.apiKey !== 'string' || body.apiKey.length > 8192 || /[\r\n]/.test(body.apiKey))) throw new HttpError(400, 'Invalid API key format.');
   if (body.apiKey?.trim()) return cleanKey(body.apiKey);
-  const expected = env.SERVER_CREDIT_ACCESS_TOKEN;
-  const supplied = body.serverAccessToken;
   // Never expose environment-funded requests to anonymous visitors.
-  if (!expected || typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return '';
+  if (!planHolder(body.serverAccessToken, env)) return '';
+  // The deployment's own keys exist only for the backend lane. A plan token unlocks those, never a
+  // key for a provider outside it, so /api/models and /api/chat cannot be pointed at one.
+  if (!isBackendProvider(body.provider)) return '';
   return cleanKey(env[PROVIDER_KEY_VARS[body.provider]]);
 }
 /**
@@ -142,6 +155,23 @@ export function validContent(content) {
 }
 export function errorMessage(status) {
   return status === 401 || status === 403 ? 'Invalid API key or insufficient provider permissions.' : status === 429 ? 'Provider rate limit reached. Wait and retry.' : status === 404 ? 'Provider endpoint or model was not found.' : status >= 500 ? 'Provider is temporarily unavailable.' : 'Provider rejected the request. Check the model and request settings.';
+}
+/**
+ * What a visitor is told about a failed request.
+ *
+ * A bare "Provider rejected the request" gave nobody anything to act on: Anthropic answers 400 for
+ * a key that is not scoped to a workspace, an unpaid balance, an unknown model and a malformed
+ * request alike, and those are four different fixes. For the statuses that describe the request
+ * itself the provider's own sentence is passed along, bounded, and with anything shaped like a
+ * credential removed first. Auth, rate-limit and 5xx answers stay generic on purpose.
+ */
+export function clientMessage(status, detail) {
+  const base = errorMessage(status);
+  // A text-only model handed a photo answers with a schema complaint; say what it means.
+  if (status === 400 && /content must be a string/i.test(String(detail ?? ''))) return 'This model can only read text, and the message includes a photo. Remove the photo, or pick a model that can read images.';
+  if (![400, 404, 413, 422].includes(status) || !detail) return base;
+  const safe = String(detail).replace(/\b(?:sk|xai|gsk|hf|pk)[-_][A-Za-z0-9_-]{16,}/gi, '[redacted]').replace(/\s+/g, ' ').trim().slice(0, 300);
+  return safe ? `${base} The provider said: ${safe}` : base;
 }
 // Stream upstream bytes without buffering. Pinned DNS prevents custom-host rebinding.
 export function upstream(url, { method = 'POST', headers, body, signal, address }) {
@@ -214,12 +244,68 @@ export function logUpstream(provider, url, detail, log = console.error) {
 /** Pinned so a future Anthropic API revision cannot change the wire format under a live deploy. */
 export const ANTHROPIC_VERSION = '2023-06-01';
 
+/** Platform output ceiling; models with smaller windows are capped separately below. */
+export const MAX_OUTPUT_TOKENS = 65536;
+/** What a request that names no limit gets: enough for a complete multi-file app. */
+export const DEFAULT_OUTPUT_TOKENS = 16384;
+/**
+ * The cap on a free-tier reply when the operator has not set FREE_MAX_OUTPUT_TOKENS. It used to be
+ * 1,024, and the setting itself was silently clamped to 4,096 whatever the dashboard said, so a
+ * value of 10,000 was accepted, shown as saved, and never took effect. The operator's number now
+ * applies up to MAX_OUTPUT_TOKENS. Note that Groq's free tier counts the requested reply against
+ * its tokens-per-minute limit, so a high cap can make Groq refuse requests outright.
+ */
+export const FREE_DEFAULT_OUTPUT_TOKENS = 16384;
+export const freeOutputCapFor = freeOutputTokens;
+
+/**
+ * Default reply budget when none is specified; it does not imply a model's maximum capacity.
+ */
+export function defaultMaxTokens(provider, model) {
+  if (provider === 'openai' && typeof model === 'string' && /^(gpt-4o|gpt-4\.1)/i.test(model)) {
+    return 16384;
+  }
+  return DEFAULT_OUTPUT_TOKENS;
+}
+
+/** Known smaller windows must not turn a larger plan allowance into an upstream 400. */
+export function modelOutputCeiling(model) {
+  if (/(?:^|\/)gpt-4o(?:-|$)/i.test(model)) return 16384;
+  if (/(?:^|\/)gpt-4\.1(?:-|$)/i.test(model)) return 32768;
+  return MAX_OUTPUT_TOKENS;
+}
+
+/** Active default model per provider for fallback when extended catalog models fail. */
+export const DEFAULT_ACTIVE_MODELS = {
+  google: 'gemini-2.5-flash',
+  anthropic: 'claude-sonnet-4-5',
+  openai: 'gpt-4o',
+  groq: 'llama-3.3-70b-versatile',
+  cerebras: 'llama-3.3-70b',
+  cohere: 'command-a-03-2025',
+  github: 'openai/gpt-4.1-mini',
+  ollama: 'llama3.2',
+  xai: 'grok-2-1212',
+  openrouter: 'google/gemini-2.5-flash',
+};
+
+/** Resolves the active default model for a given provider or the deployment's primary free model. */
+export function activeDefaultModel(provider, env = {}) {
+  const prov = String(provider || '').toLowerCase().trim();
+  if (DEFAULT_ACTIVE_MODELS[prov]) return DEFAULT_ACTIVE_MODELS[prov];
+  try {
+    const free = freeModels(env);
+    if (free && free.length > 0 && free[0]?.id) return free[0].id;
+  } catch { /* ignore */ }
+  return 'gemini-2.5-flash';
+}
+
 /**
  * OpenAI's reasoning models and the GPT-5 line reject `max_tokens` and require
  * `max_completion_tokens` instead; everything else still wants the original name. Sending the
  * wrong one is a hard 400 with an opaque message, so the choice is made here from the model id.
  */
-export function outputLimit(provider, model, max) {
+export function outputLimit(provider, model, max = DEFAULT_OUTPUT_TOKENS) {
   const reasoning = provider === 'openai' && /^(o[134]|gpt-5)/i.test(model);
   return reasoning ? { max_completion_tokens: max } : { max_tokens: max };
 }
@@ -230,7 +316,84 @@ export function outputLimit(provider, model, max) {
  * token count into a failed run. Requested only where it is known to be supported.
  */
 export const usageReportable = (provider, target) =>
-  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xai', 'cerebras', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
+
+/**
+ * Sentinel SSE chunk appended when an upstream stream is cut short by token output limits.
+ * Notifies the client dock so it knows to trigger a seamless continuation prompt.
+ */
+export const SENTINEL_TRUNCATED_SSE = 'data: {"stream_truncated":true,"finish_reason":"length"}\n\n';
+
+/**
+ * Checks whether an SSE event JSON object indicates length-based stream truncation.
+ * Covers OpenAI/Gemini (finish_reason: 'length'), Anthropic (stop_reason: 'max_tokens'),
+ * and Cohere (finish_reason: 'MAX_TOKENS').
+ */
+export function isLengthTruncated(json) {
+  if (!json || typeof json !== 'object') return false;
+  if (json.choices?.some?.(c => c?.finish_reason === 'length')) return true;
+  if (json.stop_reason === 'max_tokens' || json.delta?.stop_reason === 'max_tokens') return true;
+  if (json.delta?.finish_reason === 'MAX_TOKENS' || json.finish_reason === 'MAX_TOKENS') return true;
+  return false;
+}
+
+/**
+ * A pass-through Transform stream that inspects SSE chunks for length truncation.
+ * If an upstream chunk reports finish_reason === 'length' (or Anthropic/Cohere equivalent),
+ * it appends the sentinel event before the stream closes or immediately following the chunk.
+ */
+export function createTruncationInterceptor() {
+  let buffer = '';
+  let truncatedDetected = false;
+  let sentinelEmitted = false;
+
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        const text = chunk.toString('utf8');
+        buffer += text;
+        let index;
+        while ((index = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, index).replace(/\r$/, '');
+          buffer = buffer.slice(index + 1);
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+          let json;
+          try { json = JSON.parse(payload); } catch { continue; }
+          if (isLengthTruncated(json)) {
+            truncatedDetected = true;
+          }
+        }
+        if (buffer.length > 1_000_000) buffer = buffer.slice(-4096);
+
+        if (truncatedDetected && !sentinelEmitted) {
+          sentinelEmitted = true;
+          const doneIdx = text.indexOf('data: [DONE]');
+          if (doneIdx !== -1) {
+            const beforeDone = text.slice(0, doneIdx);
+            const afterDone = text.slice(doneIdx);
+            this.push(Buffer.from(beforeDone + SENTINEL_TRUNCATED_SSE + afterDone, 'utf8'));
+            return callback();
+          }
+          this.push(chunk);
+          this.push(Buffer.from(SENTINEL_TRUNCATED_SSE, 'utf8'));
+          return callback();
+        }
+      } catch { /* stream interception must never throw */ }
+
+      this.push(chunk);
+      callback();
+    },
+    flush(callback) {
+      if (truncatedDetected && !sentinelEmitted) {
+        sentinelEmitted = true;
+        this.push(Buffer.from(SENTINEL_TRUNCATED_SSE, 'utf8'));
+      }
+      callback();
+    }
+  });
+}
 
 /**
  * An OpenAI-shaped chat request as Anthropic's /v1/messages wants it.
@@ -240,7 +403,7 @@ export const usageReportable = (provider, target) =>
  * differently: `image_url` with a data URL becomes a `source` block of base64 plus media type.
  * Everything else is close enough to pass through.
  */
-export function anthropicPayload(model, messages, max) {
+export function anthropicPayload(model, messages, max = DEFAULT_OUTPUT_TOKENS) {
   const system = messages.filter(m => m.role === 'system').map(m => typeof m.content === 'string' ? m.content : '').filter(Boolean).join('\n\n');
   const turns = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: anthropicContent(m.content) }));
   return { model, messages: turns, stream: true, max_tokens: max, ...(system ? { system } : {}) };
@@ -268,12 +431,17 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
   // entered in the dashboard funds the very next message with no restart.
   const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
   const takeBurst = createBurstLimiter(currentEnv);
+  const activePlans = new Set();
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://proxy').pathname;
     if (!['/api/chat','/api/models','/api/providers'].includes(path)) return false;
     const env = currentEnv();
-    const freeOutputCap = Math.min(4096, Math.max(64, Number(env.FREE_MAX_OUTPUT_TOKENS ?? 1024) || 1024));
-    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 120_000);
+    const freeOutputCap = freeOutputCapFor(env);
+    const controller = new AbortController();
+    let timeout = setTimeout(() => controller.abort(), 120_000);
+    const deadline = path === '/api/chat' ? setTimeout(() => controller.abort(), 1_800_000) : null;
+    const refreshTimeout = () => { clearTimeout(timeout); timeout = setTimeout(() => controller.abort(), 120_000); };
+    let lockedPlan = null;
     res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
       // Read before the browser sends anything, so the model dropdown knows which entries are
@@ -337,6 +505,16 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         }
       }
       let funding;
+      const personalKey = typeof body.apiKey === 'string' && body.apiKey.trim();
+      const access = planAccess(body.serverAccessToken, env);
+      if (body.serverAccessToken && !personalKey && !access)
+        throw new HttpError(401, 'This plan token is invalid or has been revoked. Check it in Settings.', 'plan_token_invalid');
+      if (access && !personalKey && path === '/api/chat') {
+        const entry = paidModel(body.model, env);
+        if (!entry) throw new HttpError(403, 'That model is not on the connected paid-plan list. Select an available plan model.', 'plan_model_required');
+        // The dashboard is authoritative even if a stale client names a different provider.
+        body.provider = entry.provider;
+      }
       if (body.provider === 'cheaper-inference' && body.apiKey === undefined && env.CHEAPER_INFERENCE_ENABLED === 'true') {
         funding = fundingFor(body, env);
       } else {
@@ -347,6 +525,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // entry, and refused for any model outside the operator's paid list once one exists: the
       // access token unlocks the plan, not every key the deployment holds.
       let provider = funding.mode === 'free' ? funding.entry.provider : body.provider;
+      // With no paid models configured, a plan token used to unlock every key the deployment
+      // holds, for any model. A plan now means the operator's plan list, and nothing else.
+      if (funding.mode === 'credits' && path === '/api/chat' && !paidModels(env).length) throw new HttpError(403, 'This deployment has no paid plan models configured. Use your own key.', 'plan_model_required');
       if (funding.mode === 'credits' && path === '/api/chat' && paidModels(env).length) {
         const plan = paidModel(body.model, env);
         if (!plan) throw new HttpError(403, 'That model is not on this deployment\'s paid plan. Pick a plan model from the dropdown, or use your own key.', 'plan_model_required');
@@ -367,19 +548,34 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // anonymous browser-minted header. The session cookie is self-contained and signed, so
       // no database read is needed here — the workspace_id is embedded in the token.
       const session = parseSession(req.headers['cookie'], env.SESSION_SECRET);
-      const workspace = session?.workspaceId ?? (typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'].slice(0, 64) : ip);
+      // The quota is charged to something the visitor cannot mint: their signed-in account, or
+      // their network address. The browser's x-workspace-id header used to be the key, and a new
+      // header value was a fresh month of free credits on every request.
+      const workspace = session?.workspaceId ?? ip;
+      const subscription = funding.mode === 'credits' ? planAccess(body.serverAccessToken, env) : null;
+      const planWorkspace = subscription?.workspace ?? null;
+      let planRemaining = null;
       if (funding.mode === 'free' && path === '/api/chat') {
         const burst = takeBurst(ip);
         if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`, 'free_tier_busy');
         const pool = monthlyPool(env);
         const used = db ? await db.usedThisMonth(workspace, new Date(), 'free') : 0;
-        if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own OpenRouter or Groq key in Settings — both offer free accounts — or wait for the monthly reset.`, 'free_tier_exhausted');
+        if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own free Google AI Studio, GitHub, Groq or Cerebras key in Settings, or wait for the monthly reset.`, 'free_tier_exhausted');
+      }
+      if (planWorkspace && path === '/api/chat') {
+        if (!db) throw new HttpError(503, 'Paid plans require usage storage before managed requests can run.', 'plan_storage_required');
+        if (activePlans.has(planWorkspace)) throw new HttpError(429, 'This plan already has a reply running. Wait for it to finish.', 'plan_busy');
+        activePlans.add(planWorkspace); lockedPlan = planWorkspace;
+        const planPool = subscription.monthlyCredits;
+        const planUsed = await db.usedThisMonth(planWorkspace, new Date(), 'credits');
+        planRemaining = Math.max(0, planPool - planUsed);
+        if (planRemaining <= 0) throw new HttpError(402, `Your ${subscription.name} plan has used its ${planPool} credits for the month. Use your own key or a local model to continue.`, 'plan_exhausted');
       }
       // Anthropic authenticates with x-api-key and a pinned API version rather than a bearer
       // token; every other provider here takes Authorization.
       const headers = { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT, Accept: path === '/api/chat' ? 'text/event-stream' : 'application/json', ...(apiKey ? (target.nativeAnthropic ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION } : { Authorization: `Bearer ${apiKey}` }) : {}) };
       // APP_ORIGIN is operator-set and also becomes a header, so it gets the same treatment.
-      if (provider === 'openrouter') { headers['HTTP-Referer'] = cleanKey(env.APP_ORIGIN) || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Hey Buddy'; }
+      if (provider === 'openrouter') { headers['HTTP-Referer'] = cleanKey(env.APP_ORIGIN) || 'https://github.com/chrisfbaileycb-arch/FreeToken'; headers['X-Title'] = 'Signal Forge OS'; }
       let payload; let suffix;
       if (path === '/api/chat') {
         if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || !validContent(m.content))) throw new HttpError(400, 'messages must contain standard role/content text pairs, optionally with up to five image parts.');
@@ -404,7 +600,14 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         const requested = body.max_tokens ?? 4096;
         if (!Number.isInteger(requested) || requested < 0 || requested > Number.MAX_SAFE_INTEGER) throw new HttpError(400, 'max_tokens must be a non-negative integer.');
         // Server-funded output is capped regardless of what the browser asked for.
-        const max = funding.mode === 'free' ? Math.min(requested, freeOutputCap) : requested;
+        let max = Math.min(modelOutputCeiling(body.model), funding.mode === 'free' ? Math.min(requested, freeOutputCap) : subscription ? Math.min(requested, subscription.maxOutputTokens) : requested);
+        if (subscription && planRemaining !== null) {
+          const rate = planRates(body.model);
+          const promptCredits = Math.ceil(JSON.stringify(messages).length / 3) * rate.input / 1000;
+          const affordableOutput = Math.floor((planRemaining - promptCredits) * 1000 / rate.output);
+          if (affordableOutput < 64) throw new HttpError(402, 'Your remaining plan allowance is too small for this conversation. Use your own key, a local model, or start a shorter conversation.', 'plan_exhausted');
+          max = Math.min(max, affordableOutput);
+        }
         const routed = funding.mode === 'free' ? routeFreeRequest(funding.entry) : { model: normalizeModel(provider, body.model) };
         payload = target.nativeAnthropic
           ? JSON.stringify(anthropicPayload(routed.model, messages ?? body.messages, max))
@@ -413,7 +616,14 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       } else suffix = '/models';
       if (path === '/api/models' && provider === 'cheaper-inference') {
         const models = await discoverCheaperInference(env);
-        json(res, 200, { data: models.map(model => ({ id: model.id })) });
+        const filter = (req.url.includes('?') ? new URL(req.url, 'http://proxy').searchParams.get('filter') : null) || (typeof body?.filter === 'string' ? body.filter : null);
+        const differentiate = (req.url.includes('?') ? new URL(req.url, 'http://proxy').searchParams.get('differentiate') === 'true' : false) || body?.differentiate === true;
+        const entries = normalizeModelList(provider, { data: models }, 2000, { filter, differentiate }) || models.map(model => ({ id: model.id }));
+        if (differentiate) {
+          json(res, 200, { data: entries, ready: entries.filter(e => e.verified), extended: entries.filter(e => !e.verified) });
+          return true;
+        }
+        json(res, 200, { data: entries });
         return true;
       }
       const upstreamUrl = path === '/api/models' ? modelsUrl(provider, target.base) : target.base + suffix;
@@ -467,7 +677,28 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         // send the visitor hunting for a problem that is not theirs. Report it as a tier that is
         // not answering, and leave the real status for the operator's logs.
         if (funding.mode === 'free') throw new HttpError(503, FREE_TIER_UNAVAILABLE, 'free_tier_unavailable');
-        throw new HttpError(status >= 300 && status < 400 ? 502 : status, errorMessage(status));
+
+        // Lightweight fallback in completion proxy: if an extended catalog model returns 503 or 404,
+        // intercept and return a structured warning to the client prompting fallback to the active default model.
+        if (path === '/api/chat' && (status === 503 || status === 404) && !isVerifiedOperational(provider, body?.model)) {
+          const fallbackModel = activeDefaultModel(provider, env);
+          logUpstream(provider, upstreamUrl, `extended catalog model "${body?.model}" returned ${status} -> suggesting fallback to active default "${fallbackModel}"`, log);
+          const warningMessage = `Extended catalog model "${body?.model}" is currently unavailable (HTTP ${status}). Switch to active default model "${fallbackModel}"?`;
+          json(res, status, {
+            error: {
+              message: warningMessage,
+              code: 'model_unavailable',
+              fallback_model: fallbackModel,
+              extended_model: body?.model,
+              provider,
+              status,
+              suggest_fallback: true
+            }
+          });
+          return true;
+        }
+
+        throw new HttpError(status >= 300 && status < 400 ? 502 : status, clientMessage(status, detail));
       }
       if (path === '/api/models') {
         let size = 0; const chunks = [];
@@ -475,8 +706,18 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         let data; try { data = JSON.parse(Buffer.concat(chunks).toString()); } catch { throw new HttpError(502, 'Invalid model catalog.'); }
         // Ids, plus a label and a free flag where the provider gave one, so the dropdown can show
         // everything a key reaches by name rather than by id, and mark what costs nothing.
-        const entries = normalizeModelList(provider, data);
+        const filter = (req.url.includes('?') ? new URL(req.url, 'http://proxy').searchParams.get('filter') : null) || (typeof body?.filter === 'string' ? body.filter : null);
+        const differentiate = (req.url.includes('?') ? new URL(req.url, 'http://proxy').searchParams.get('differentiate') === 'true' : false) || body?.differentiate === true;
+        const entries = normalizeModelList(provider, data, 2000, { filter, differentiate });
         if (!entries) throw new HttpError(502, 'Unsupported model catalog format.');
+        if (differentiate) {
+          json(res, 200, {
+            data: entries,
+            ready: entries.filter(e => e.verified),
+            extended: entries.filter(e => !e.verified),
+          });
+          return true;
+        }
         json(res, 200, { data: entries }); return true;
       }
       if (!String(response.headers['content-type']).includes('text/event-stream')) { response.destroy(); throw new HttpError(502, 'The provider did not return an SSE stream.'); }
@@ -485,16 +726,24 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       // all three shapes in one place rather than this proxy rewriting a stream mid-flight. A
       // free-tier stream additionally runs through a read-only meter so its real cost is
       // recorded from the bytes that crossed the wire, never from a client-reported number.
-      const meter = funding.mode === 'free' ? createMeter({ promptChars: payload.length }) : null;
-      if (meter) response.pipe(meter).pipe(res); else response.pipe(res);
-      await new Promise((resolve, reject) => { response.on('end', resolve); response.on('error', reject); res.on('close', resolve); });
+      const meter = funding.mode === 'free' || planWorkspace ? createMeter({ promptChars: payload.length }) : null;
+      // A healthy long build can take more than ten minutes. Time out silence, not elapsed
+      // generation time; the separate deadline bounds a provider that sends endless heartbeats.
+      refreshTimeout(); response.on('data', refreshTimeout);
+      const interceptor = createTruncationInterceptor();
+      const pipedStream = meter ? response.pipe(interceptor).pipe(meter) : response.pipe(interceptor);
+      // Finish the server ledger before the browser sees EOF and refreshes its allowance.
+      pipedStream.pipe(res, { end: false });
+      await new Promise((resolve, reject) => { pipedStream.on('end', resolve); response.on('error', reject); res.on('close', resolve); });
       // Bill even when the visitor navigated away mid-stream: the tokens were still spent.
-      if (meter && db) { try { const tokens = meter.total(); await db.recordUsage(workspace, { model: body.model, tier: 'free', mode: 'free', tokens, credits: creditsForTokens(tokens) }); } catch { /* metering must never fail a served request */ } }
+      if (meter && db) { try { const tokens = meter.total(); const plan = Boolean(planWorkspace); await db.recordUsage(plan ? planWorkspace : workspace, { model: body.model, tier: plan ? 'pro' : 'free', mode: plan ? 'credits' : 'free', tokens, credits: plan ? planCredits(body.model, meter.usage()) : creditsForTokens(tokens) }); } catch { log('[proxy] Could not persist managed usage.'); } }
+      if (!res.destroyed) res.end();
       return true;
     } catch (error) {
+      if (!(error instanceof HttpError)) console.error('[DEBUG-NONHTTP]', error && error.constructor.name, error && error.message);
       if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) } });
       else if (!res.destroyed) { res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'Provider stream interrupted. Please retry.' } })}\n\n`); res.end(); }
       return true;
-    } finally { clearTimeout(timeout); }
+    } finally { clearTimeout(timeout); if (deadline) clearTimeout(deadline); if (lockedPlan) activePlans.delete(lockedPlan); }
   };
 }

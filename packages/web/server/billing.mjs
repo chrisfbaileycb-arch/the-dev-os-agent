@@ -1,4 +1,4 @@
-// Hey Buddy's own paid plans.
+// Signal Forge OS's own paid plans.
 //
 // This deployment takes payment through a hosted checkout — a Stripe Payment Link or any other
 // HTTPS checkout URL — and the URLs live in the environment rather than in the bundle. Two
@@ -28,11 +28,8 @@ export function checkoutUrl(value) {
   } catch { return null; }
 }
 
-/** The plans this deployment sells, in display order. Prices are copy; the processor is the truth. */
-export const PLANS = [
-  { id: 'starter', name: 'Starter', price: '$12.90', cadence: 'per month', envKey: 'STRIPE_STARTER_URL' },
-  { id: 'premium', name: 'Premium', price: '$24.90', cadence: 'per month', envKey: 'STRIPE_PREMIUM_URL' },
-];
+import { PLANS, planLimits } from './plans.mjs';
+export { PLANS } from './plans.mjs';
 
 /**
  * What the browser is told about billing at load time. Never includes a secret: a Payment Link is
@@ -40,6 +37,8 @@ export const PLANS = [
  * the processor and never reaches this server at all.
  */
 export function billingStatus(env = process.env) {
-  const plans = PLANS.map(p => ({ id: p.id, name: p.name, price: p.price, cadence: p.cadence, checkout: checkoutUrl(env[p.envKey]) }));
+  // New names deliberately exclude old $12.90/$24.90 checkout links: the processor must be
+  // configured for the new prices before these buttons can collect payment.
+  const plans = PLANS.map(p => ({ ...planLimits(p.id, env), checkout: checkoutUrl(env[`BILLING_${p.id.toUpperCase()}_URL`]) }));
   return { enabled: plans.some(p => p.checkout), plans };
 }

@@ -142,7 +142,8 @@ const REACT_ENTRY_PRIORITY = ['src/main.tsx', 'src/main.jsx', 'src/index.tsx', '
 
 /** Turn a raw browser script into the single-file document the preview can execute. */
 export function wrapScriptDocument(script: string, css = ''): string {
-  return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script>\n${script}\n</script></body></html>`;
+  const wrapped = `(function() {\n  function __runScript() {\n${script}\n  }\n  if (document.readyState !== 'loading') {\n    __runScript();\n  } else {\n    window.addEventListener('DOMContentLoaded', __runScript);\n  }\n})();`;
+  return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script>\n${wrapped}\n</script></body></html>`;
 }
 
 function wrapHtmlFragment(html: string): string {
@@ -155,6 +156,37 @@ function looksLikeExecutableScript(text: string): boolean {
   return code.length > 0 && /(?:\b(?:const|let|var|function|class)\s+|=>|document\.|window\.|addEventListener\s*\(|getElementById\s*\(|requestAnimationFrame\s*\()/m.test(code);
 }
 
+
+const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*|\bimport\s+)['"](\.{1,2}\/[^'"]*|\/[^'"]+)['"]/g;
+const CANDIDATE_SUFFIXES = ['', '.tsx', '.ts', '.jsx', '.js', '.css', '.json', '/index.tsx', '/index.ts', '/index.jsx', '/index.js'];
+
+/**
+ * Relative imports a project's source files make that no project file satisfies.
+ *
+ * A reply cut off mid-project (a provider stream error, a free-tier output cap) often leaves the
+ * first closed fence — `src/main.tsx` — importing `./App` and `./index.css` that never arrived.
+ * Such a set looks like a project but can only fail in the bundler, so it is reported here and
+ * treated as incomplete rather than runnable.
+ */
+export function missingLocalImports(files: ProjectFile[]): string[] {
+  const known = new Set(files.map(f => f.path));
+  const missing: string[] = [];
+  for (const file of files) {
+    if (!/\.(tsx?|jsx?|mjs)$/.test(file.path)) continue;
+    const dir = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '';
+    for (const m of file.content.matchAll(RELATIVE_IMPORT)) {
+      const spec = m[1];
+      const parts: string[] = [];
+      for (const part of (spec.startsWith('/') ? spec.slice(1) : dir ? `${dir}/${spec}` : spec).split('/')) {
+        if (part === '' || part === '.') continue;
+        if (part === '..') parts.pop(); else parts.push(part);
+      }
+      const target = parts.join('/');
+      if (!CANDIDATE_SUFFIXES.some(suffix => known.has(target + suffix))) missing.push(`${file.path} -> ${spec}`);
+    }
+  }
+  return missing;
+}
 
 function reactEntry(paths: string[]): string | null {
   for (const candidate of REACT_ENTRY_PRIORITY) if (paths.includes(candidate)) return candidate;
@@ -173,6 +205,8 @@ function reactEntry(paths: string[]): string | null {
  * showing the reply as text, exactly as it always has.
  */
 export function parseProject(text: string): Project | null {
+  // A closed first file followed by an unfinished script is still an unfinished project.
+  if ((text.match(/```/g) ?? []).length % 2 === 1) return null;
   const found = fences(text);
   const pathed = found.filter((f): f is { path: string; lang: string; body: string } => f.path !== null && isSafeProjectPath(f.path));
   if (pathed.length > 0) {
@@ -183,13 +217,16 @@ export function parseProject(text: string): Project | null {
     const dependencies = pkg ? parsePackageJson(pkg.content) : {};
     const paths = files.map(f => f.path);
     const isReact = paths.some(p => /\.(tsx|jsx)$/.test(p)) || 'react' in dependencies;
-    if (isReact) {
+    // A set whose own imports dangle was truncated; it is not a project, so the recovery pass runs.
+    const incomplete = missingLocalImports(files).length > 0;
+    if (isReact && !incomplete) {
       const entry = reactEntry(paths);
       if (entry) return { files, entry, dependencies, kind: 'react' };
     }
     const html = paths.find(p => /\.html?$/.test(p));
     if (html) return { files, entry: html, dependencies, kind: 'html' };
-    return null;
+    if (!incomplete) return null;
+    // Incomplete: fall through so a sibling html fence or bare document can still carry the reply.
   }
   const htmlFences = found.filter(f => f.lang === 'html' || f.lang === 'htm');
   if (htmlFences.length === 1) {
@@ -216,6 +253,12 @@ export function parseProject(text: string): Project | null {
     return { files: [{ path: 'index.html', content: wrapScriptDocument(text.trim()) }], entry: 'index.html', dependencies: {}, kind: 'html' };
   }
   return null;
+}
+
+/** The newest runnable reply stays visible while a follow-up is still being written. */
+export function latestPreviewReply(messages: { role: string; content: string; runId?: string }[]): string {
+  const replies = messages.filter(message => message.role === 'assistant' && !message.runId).reverse();
+  return replies.find(message => parseProject(message.content))?.content ?? replies[0]?.content ?? '';
 }
 
 /**
@@ -258,6 +301,97 @@ export function placeholderImage(name: string): string {
   const label = name.replace(/^.*\//, '').slice(0, 40).replace(/[<>&"']/g, '');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"><rect width="640" height="400" fill="#e6e8ef"/><path d="M200 280l90-110 70 80 50-55 90 85z" fill="#c9cdd9"/><circle cx="430" cy="140" r="34" fill="#c9cdd9"/><text x="320" y="360" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="20" fill="#6b7083" text-anchor="middle">${label}</text></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/**
+ * The React scope a generated app reaches for without importing.
+ *
+ * A model that writes `useState(0)` at the top level of a fenced file — no `import { useState }
+ * from 'react'` in that file — used to build cleanly and then die at load with
+ * "ReferenceError: useState is not defined", because an ES module has no such global and nothing
+ * put it there. The same goes for `React.memo(...)` or `<React.Fragment>` in a file that never
+ * bound `React`: the automatic JSX runtime covers plain JSX, not an explicit `React.` reference.
+ *
+ * The fix belongs here rather than in the worker's bundling options: esbuild's `inject` takes a
+ * transform-time copy of each named export, which would mean writing these files to a disk that
+ * does not exist in this sandbox, and `define` substitutes text, so injecting an expression like
+ * `(globalThis.React&&globalThis.React.useState)` would splice a bare `React &&` into every call
+ * site and break minification. An import statement prepended to the file that needs it is both
+ * simpler and honest: it resolves through the same esm.sh plugin as any other import, so the
+ * bundle carries one shared React.
+ *
+ * It has to be per file. Imports are module-scoped, so an import on the entry does nothing for a
+ * hook called unimported in `src/components/Counter.tsx`; and a project that imports React in one
+ * file can still forget `useEffect` in another.
+ */
+export const REACT_HOOK_NAMES = ['useState', 'useEffect', 'useReducer', 'useRef', 'useMemo', 'useCallback', 'useContext', 'useLayoutEffect', 'useId', 'useTransition', 'useDeferredValue'] as const;
+
+const IMPORT_CLAUSE = /\bimport\s+(?:type\s+)?([\s\S]*?)\s+from\s*['"][^'"]+['"]/g;
+
+/** Is `name` already a binding in this file — imported from anywhere, or declared locally? */
+function isBound(source: string, name: string): boolean {
+  for (const m of source.matchAll(IMPORT_CLAUSE)) if (new RegExp(`(?<![\\w$])${name}(?![\\w$])`).test(m[1])) return true;
+  if (new RegExp(`\\b(?:const|let|var|function|class)\\s+${name}(?![\\w$])`).test(source)) return true;
+  // `const { useState } = React` and friends.
+  return new RegExp(`\\b(?:const|let|var)\\s*\\{[^}]*(?<![\\w$])${name}(?![\\w$])[^}]*\\}\\s*=`).test(source);
+}
+
+/**
+ * The imports one source file needs prepended so it runs with a clean React scope, or '' if none.
+ *
+ * Only `.tsx`/`.jsx` files are read — hooks are component-local and components live there, and a
+ * bare `useState(` in a plain .ts helper is far more likely to be a local mock than a missing
+ * import. A hook counts as used when it appears as a call (`useState(`), not as a property
+ * (`React.useState(`), which is covered by binding `React` instead.
+ */
+export function missingReactImports(file: ProjectFile): string {
+  if (!/\.(tsx|jsx)$/.test(file.path)) return '';
+  const src = file.content;
+  const hooks = REACT_HOOK_NAMES.filter(name => new RegExp(`(?<![\\w$.])${name}\\s*\\(`).test(src) && !isBound(src, name));
+  const needsReact = /(?<![\w$.])React\s*\./.test(src) && !isBound(src, 'React');
+  const lines: string[] = [];
+  if (needsReact) lines.push("import * as React from 'react';");
+  if (hooks.length) lines.push(`import { ${hooks.join(', ')} } from 'react';`);
+  return lines.join('\n');
+}
+
+/** Does any file in this project reach for React scope it never imported? */
+export function needsReactHookFallback(files: ProjectFile[]): boolean {
+  return files.some(file => missingReactImports(file) !== '');
+}
+
+/**
+ * The project with each source file's missing React imports prepended, when any are missing.
+ *
+ * Returns the same object when nothing is, so callers can compare identity. This runs only on the
+ * copy handed to the bundler: the visitor's own sources stay byte-identical in the Code view and in
+ * anything they download or push.
+ */
+export function withReactHookImports(project: Project): Project {
+  if (!needsReactHookFallback(project.files)) return project;
+  const files = project.files.map(file => {
+    const imports = missingReactImports(file);
+    return imports ? { ...file, content: `${imports}\n${file.content}` } : file;
+  });
+  return { ...project, files };
+}
+
+/** Give a standalone React component a browser mount point for the preview build. */
+export function preparePreviewProject(project: Project): Project {
+  const hooked = withReactHookImports(project);
+  if (hooked.kind !== 'react' || !/(?:^|\/)App\.[jt]sx$/.test(hooked.entry)) return hooked;
+  const component = hooked.files.find(file => file.path === hooked.entry);
+  if (!component || /\b(?:createRoot|ReactDOM\.render)\s*\(/.test(component.content)) return hooked;
+  const entry = '__preview_main.tsx';
+  const importPath = `./${hooked.entry.replace(/\.[jt]sx$/, '')}`;
+  const hasDefault = /\bexport\s+default\b/.test(component.content);
+  const hasNamedApp = /\bexport\s+(?:function|const|class)\s+App\b/.test(component.content);
+  const hasLocalApp = /\b(?:function|const|class)\s+App\b/.test(component.content);
+  if (!hasDefault && !hasNamedApp && !hasLocalApp) return hooked;
+  const files = hooked.files.map(file => file.path === component.path && !hasDefault && !hasNamedApp
+    ? { ...file, content: `${file.content}\nexport default App;` } : file);
+  const importStatement = hasNamedApp ? `import { App } from '${importPath}';` : `import App from '${importPath}';`;
+  return { ...hooked, entry, files: [...files, { path: entry, content: `import { createRoot } from 'react-dom/client';\n${importStatement}\ncreateRoot(document.getElementById('root')!).render(<App />);` }] };
 }
 
 const attr = (tag: string, name: string): string | null => {

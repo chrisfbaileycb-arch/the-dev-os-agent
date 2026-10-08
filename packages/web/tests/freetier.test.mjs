@@ -8,8 +8,13 @@ import { openDatabase } from '../server/db.mjs';
 import { FREE_MODELS, OMNIROUTE_DEFAULT_BASE, XKIRO_DEFAULT_BASE, createBurstLimiter, creditsForTokens, freeKey, freeKeyPool, freeModel, freeModels, freeTierStatus, fundedModels, isFrontier, omnirouteBase, omniRoutePool, ownerKey, ownerKeyName, resetKeyRotation, rotateFreeKey, routeFreeRequest, setXkiroCatalog, xkiroBase, xkiroCatalog, xkiroPool } from '../server/freetier.mjs';
 import { openSettings } from '../server/settings.mjs';
 import { createMeter, deltaLength, usageFrom } from '../server/meter.mjs';
+import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
+// These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
+setBackendLaneEnforcedForTests(false);
 
-const workspace = '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f';
+// The free quota is charged to the network address (or a signed-in account), never to a header
+// the browser can change. These tests run over loopback, so that address is the workspace.
+const workspace = '127.0.0.1';
 const base = { provider: 'groq', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
 
 /**
@@ -59,7 +64,7 @@ test('the deployment never funds a frontier model from its own key', () => {
     // that variable now intersects with what the gateway reported rather than replacing it.
     assert.equal(freeModel(id, { XKIRO_FREE_MODELS: id, XKIRO_API_KEY: 'k' }, DISCOVERED), undefined, `${id} must not be fundable`);
   }
-  for (const m of FREE_MODELS) assert.equal(isFrontier(m.id), false, `${m.id} is shipped as free`);
+  for (const m of freeModels({ GROQ_API_KEY: 'k', OPENROUTER_API_KEY: 'k', HF_TOKEN: 'k' }, [])) assert.equal(isFrontier(m.id), false, `${m.id} is shipped as free`);
 });
 
 test('a discovered gateway model is funded on its price, not on its name', () => {

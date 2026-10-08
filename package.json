@@ -1,5 +1,6 @@
 {
-  "name": "hey-buddy",
+  "name": "signal-forge-os",
+  "description": "Signal Forge OS — a privacy-first AI build workspace: chat, build and preview apps, and run approval-gated plans in the browser.",
   "version": "0.1.0",
   "private": true,
   "workspaces": [
@@ -9,7 +10,11 @@
     "dev": "npm run dev --workspace=packages/web",
     "build": "npm run build --workspace=packages/web",
     "test": "npm run test --workspace=packages/web",
-    "start": "npm run start --workspace=packages/web"
+    "start": "npm run start --workspace=packages/web",
+    "check:no-ecc": "node scripts/deny-ecc.js",
+    "predev": "npm run check:no-ecc",
+    "prebuild": "npm run check:no-ecc",
+    "prestart": "npm run check:no-ecc"
   },
   "engines": {
     "node": ">=22.0.0"

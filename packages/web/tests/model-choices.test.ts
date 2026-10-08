@@ -68,3 +68,55 @@ describe('labelled entries and filtering', () => {
     expect(filterChoices(choices, '')).toHaveLength(2);
   });
 });
+
+describe('model verification and section grouping', () => {
+  it('differentiates verified operational models from unverified catalog entries', async () => {
+    const { isVerifiedOperational } = await import('../src/lib/modelChoices');
+
+    // Gemini models on Google BYOK
+    expect(isVerifiedOperational('google', 'gemini-2.5-pro')).toBe(true);
+    expect(isVerifiedOperational('google', 'gemini-2.5-flash')).toBe(true);
+    expect(isVerifiedOperational('google', 'gemini-1.5-pro')).toBe(true);
+    expect(isVerifiedOperational('google', 'gemini-3-flash-preview')).toBe(true);
+
+    // Claude models on Anthropic BYOK
+    expect(isVerifiedOperational('anthropic', 'claude-3-5-sonnet-20241022')).toBe(true);
+    expect(isVerifiedOperational('anthropic', 'claude-sonnet-4-5')).toBe(true);
+    expect(isVerifiedOperational('anthropic', 'claude-3-5-haiku-20241022')).toBe(true);
+
+    // OpenAI flagships
+    expect(isVerifiedOperational('openai', 'gpt-4o')).toBe(true);
+    expect(isVerifiedOperational('openai', 'gpt-4o-mini')).toBe(true);
+    expect(isVerifiedOperational('openai', 'o1')).toBe(true);
+    expect(isVerifiedOperational('openai', 'o3-mini')).toBe(true);
+
+    // Ollama local endpoints
+    expect(isVerifiedOperational('ollama', 'llama3.2')).toBe(true);
+    expect(isVerifiedOperational('ollama', 'qwen2.5-coder:7b')).toBe(true);
+
+    // OpenRouter / gateways without verified flagship status
+    expect(isVerifiedOperational('openrouter', 'community/custom-model')).toBe(false);
+    expect(isVerifiedOperational('huggingface', 'meta-llama/Llama-3.1-8B-Instruct')).toBe(false);
+  });
+
+  it('assigns section and partitions choices into ready and extended sections', async () => {
+    const { modelChoices, partitionChoices } = await import('../src/lib/modelChoices');
+
+    const googleChoices = modelChoices(
+      ['gemini-2.5-flash', 'gemini-2.5-pro', 'some-random-preview-model'],
+      [],
+      'google'
+    );
+
+    expect(googleChoices[0].verified).toBe(true);
+    expect(googleChoices[0].section).toBe('ready');
+    expect(googleChoices[1].verified).toBe(true);
+    expect(googleChoices[1].section).toBe('ready');
+    expect(googleChoices[2].verified).toBe(false);
+    expect(googleChoices[2].section).toBe('extended');
+
+    const partitioned = partitionChoices(googleChoices);
+    expect(partitioned.ready.map(m => m.id)).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro']);
+    expect(partitioned.extended.map(m => m.id)).toEqual(['some-random-preview-model']);
+  });
+});

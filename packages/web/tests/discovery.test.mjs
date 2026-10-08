@@ -7,6 +7,9 @@ import {
 } from '../server/discovery.mjs';
 import { XKIRO_DEFAULT_BASE, freeTierStatus, xkiroCatalog } from '../server/freetier.mjs';
 import { createProxy } from '../server/proxy.mjs';
+import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
+// These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
+setBackendLaneEnforcedForTests(false);
 
 // Discovery is what replaced the hand-written free-model list, so these tests cover both halves of
 // the reason it exists: that the filter is right about what "free" means, and that the list it
@@ -85,7 +88,7 @@ test('the catalogue is read from the configured base, with the key only when the
   assert.equal(calls[0].headers.Authorization, undefined);
   assert.equal(calls[1].headers.Authorization, 'Bearer gw-key', 'a pasted newline is trimmed, not rejected');
   assert.equal(calls[2].headers.Authorization, undefined);
-  assert.match(calls[0].headers['User-Agent'], /^HeyBuddy\//, 'a request with no User-Agent is what bot filters refuse');
+  assert.match(calls[0].headers['User-Agent'], /^SignalForgeOS\//, 'a request with no User-Agent is what bot filters refuse');
 });
 
 test('a gateway that answers with nothing usable is a failure, not an empty free tier', async () => {

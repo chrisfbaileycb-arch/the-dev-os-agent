@@ -30,7 +30,12 @@ export function openDatabase(file = ':memory:') {
     used: db.prepare('SELECT COALESCE(SUM(credits), 0) AS used FROM ledger WHERE workspace_id = ? AND mode = ? AND at >= ? AND at < ?'),
     counts: db.prepare('SELECT (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?) AS sessions, (SELECT COUNT(*) FROM runs WHERE workspace_id = ?) AS runs'),
     latest: db.prepare('SELECT id, at, session_id, model, tier, mode, tokens, credits FROM ledger WHERE workspace_id = ? AND mode = ? ORDER BY at DESC LIMIT 1'),
-    clear: ['sessions', 'runs', 'ledger'].map(t => db.prepare(`DELETE FROM ${t} WHERE workspace_id = ?`)),
+    removeSession: db.prepare('DELETE FROM sessions WHERE workspace_id = ? AND id = ?'),
+    clear: [
+      db.prepare('DELETE FROM sessions WHERE workspace_id = ?'),
+      db.prepare('DELETE FROM runs WHERE workspace_id = ?'),
+      db.prepare('DELETE FROM ledger WHERE workspace_id = ?'),
+    ],
     getSetting: db.prepare('SELECT value FROM settings WHERE key = ?'),
     setSetting: db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'),
     deleteSetting: db.prepare('DELETE FROM settings WHERE key = ?'),
@@ -39,6 +44,8 @@ export function openDatabase(file = ':memory:') {
   const parse = rows => rows.map(r => { try { return JSON.parse(r.body); } catch { return null; } }).filter(Boolean);
   return {
     upsertSessions(workspace, list) { const tx = db.prepare('BEGIN'); tx.run(); try { for (const s of list) statements.session.run(workspace, s.id, s.updatedAt, JSON.stringify(s)); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },
+    /** Forget specific sessions for one workspace. The pull would otherwise hand them straight back. */
+    removeSessions(workspace, ids) { db.exec('BEGIN'); try { for (const id of ids) statements.removeSession.run(workspace, id); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },
     upsertRuns(workspace, list) { db.exec('BEGIN'); try { for (const r of list) statements.run.run(workspace, r.id, r.sessionId ?? null, r.startedAt, JSON.stringify(r)); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },
     addLedger(workspace, list) { db.exec('BEGIN'); try { for (const e of list) statements.ledger.run(workspace, e.id, e.at, e.sessionId ?? null, e.model, e.tier, e.mode, e.tokens, e.credits); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },
     state(workspace) { return { sessions: parse(statements.sessions.all(workspace)), runs: parse(statements.runs.all(workspace)), ledger: statements.entries.all(workspace).map(e => ({ id: e.id, at: e.at, sessionId: e.session_id ?? undefined, model: e.model, tier: e.tier, mode: e.mode, tokens: e.tokens, credits: e.credits })) }; },

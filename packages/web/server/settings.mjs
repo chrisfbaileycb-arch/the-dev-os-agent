@@ -1,6 +1,8 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { decryptAny, encrypt, isSealed } from './secrets.mjs';
 import { PROVIDER_KEY_VARS, setAdminTiers } from './freetier.mjs';
+import { isBackendProvider } from './providerRegistry.mjs';
+import { freeOutputTokens, planLimits } from './plans.mjs';
 
 // Dashboard-managed deployment settings: provider keys, free-tier knobs, and the model tiers.
 //
@@ -24,10 +26,14 @@ export { PROVIDER_KEY_VARS };
 export const PROVIDER_META = {
   openrouter: { name: 'OpenRouter', console: 'https://openrouter.ai/keys' },
   groq: { name: 'Groq', console: 'https://console.groq.com/keys' },
+  cerebras: { name: 'Cerebras', console: 'https://cloud.cerebras.ai' },
+  meta: { name: 'Meta Muse', console: 'https://dev.meta.ai/' },
   openai: { name: 'OpenAI', console: 'https://platform.openai.com/api-keys' },
   anthropic: { name: 'Anthropic', console: 'https://console.anthropic.com/settings/keys' },
   google: { name: 'Google Gemini', console: 'https://aistudio.google.com/apikey' },
   cohere: { name: 'Cohere', console: 'https://dashboard.cohere.com/api-keys' },
+  xai: { name: 'xAI Grok', console: 'https://console.x.ai' },
+  venice: { name: 'Venice', console: 'https://venice.ai/settings/api' },
   xkiro: { name: 'xKiro', console: 'https://xkiro.com' },
   aihubmix: { name: 'AIHubMix', console: 'https://aihubmix.com' },
   huggingface: { name: 'Hugging Face', console: 'https://huggingface.co/settings/tokens' },
@@ -48,8 +54,19 @@ export const TUNABLES = {
   FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 0, max: Number.MAX_SAFE_INTEGER, label: 'Output cap on a free reply' },
   FREE_TIER_DISABLED: { kind: 'boolean', label: 'Free tier switched off' },
   FREE_TIER_ALLOW_FRONTIER: { kind: 'boolean', label: 'Allow frontier ids in the automatic free pool' },
-  CREDIT_MONTHLY_POOL: { kind: 'number', min: 0, max: 100_000_000, label: 'Paid-plan credits per workspace per month' },
-  SERVER_CREDIT_ACCESS_TOKEN: { kind: 'secret', label: 'Paid-plan access token' },
+  PLAN_STARTER_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$25 Starter: monthly credits (default 1,000)' },
+  PLAN_PREMIUM_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$50 Builder: monthly credits (default 2,500)' },
+  PLAN_PRO_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$100 Studio: monthly credits (default 6,000)' },
+  PLAN_STARTER_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Starter: reply token limit (default 16,384)' },
+  PLAN_PREMIUM_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Builder: reply token limit (default 32,768)' },
+  PLAN_PRO_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Studio: reply token limit (default 65,536)' },
+  PLAN_STARTER_ACCESS_TOKENS: { kind: 'secret', label: 'Starter subscriber tokens (comma separated, at least 16 characters each)' },
+  PLAN_PREMIUM_ACCESS_TOKENS: { kind: 'secret', label: 'Builder subscriber tokens (comma separated, at least 16 characters each)' },
+  PLAN_PRO_ACCESS_TOKENS: { kind: 'secret', label: 'Studio subscriber tokens (comma separated, at least 16 characters each)' },
+  BILLING_STARTER_URL: { kind: 'url', label: '$25 Starter checkout URL' },
+  BILLING_PREMIUM_URL: { kind: 'url', label: '$50 Builder checkout URL' },
+  BILLING_PRO_URL: { kind: 'url', label: '$100 Studio checkout URL' },
+  SERVER_CREDIT_ACCESS_TOKEN: { kind: 'secret', label: 'Legacy operator token (Starter limits)' },
   SETTINGS_OWNER_API_KEY: { kind: 'secret', label: 'Owner key (funds the OpenRouter free pool)' },
 };
 
@@ -100,7 +117,8 @@ function cleanTierEntry(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
   const provider = typeof raw.provider === 'string' ? raw.provider.trim() : '';
-  if (!id || id.length > 200 || !Object.hasOwn(PROVIDER_KEY_VARS, provider)) return null;
+  // Only the backend lane can hold a tier entry; a non-US provider here is dropped on save and on load.
+  if (!id || id.length > 200 || !Object.hasOwn(PROVIDER_KEY_VARS, provider) || !isBackendProvider(provider)) return null;
   const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim().slice(0, 80) : undefined;
   return label ? { id, provider, label } : { id, provider };
 }
@@ -133,6 +151,13 @@ export function cleanTunable(name, value) {
   }
   const text = String(value).trim();
   if (text.length > 8192 || !HEADER_SAFE.test(text)) throw new Error(`${name} contains a character that cannot go in a request header.`);
+  if (spec.kind === 'url') {
+    let url; try { url = new URL(text); } catch { throw new Error('Enter a valid HTTPS checkout URL.'); }
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('Use HTTPS with no credentials or fragment.');
+    return url.toString();
+  }
+  if (/^PLAN_(STARTER|PREMIUM|PRO)_ACCESS_TOKENS$/.test(name) && text.split(',').some(t => t.trim().length < 16))
+    throw new Error('Each subscriber token must contain at least 16 characters.');
   return text;
 }
 
@@ -321,7 +346,10 @@ export async function openSettings({ db, env = process.env, log = console.error 
       const effective = { ...base, ...overlayCache };
       return Object.entries(TUNABLES).map(([name, spec]) => {
         const stored = rows.has(TUNABLE_PREFIX + name);
-        const value = typeof effective[name] === 'string' ? effective[name] : '';
+        const rawValue = typeof effective[name] === 'string' ? effective[name] : '';
+        const planOutput = name.match(/^PLAN_(STARTER|PREMIUM|PRO)_MAX_OUTPUT_TOKENS$/);
+        const value = name === 'FREE_MAX_OUTPUT_TOKENS' ? String(freeOutputTokens(effective))
+          : planOutput ? String(planLimits(planOutput[1].toLowerCase(), effective).maxOutputTokens) : rawValue;
         const source = stored && name in overlayCache ? 'dashboard' : value ? 'environment' : 'none';
         return { name, kind: spec.kind, label: spec.label, source, value: spec.kind === 'secret' ? (value ? hint(value) : '') : value, unreadable: unreadable.has(name) };
       });

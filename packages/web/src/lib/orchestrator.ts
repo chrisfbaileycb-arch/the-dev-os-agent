@@ -2,12 +2,12 @@ import { Agent } from '../vendor/ruflo/agent';
 import { Task } from '../vendor/ruflo/task';
 import type { AgentRole } from '../vendor/ruflo/agent';
 import { complete, ProviderError, validateConnection } from './provider';
-import { PromptCache, retrieve } from './memory';
+import { PromptCache, retrieve, selectMemories } from './memory';
 import { composePrompt, personaById, skills } from './roster';
 import { modelForStage, stageModelsFor } from './stageModels';
 import type { Completion, Run, StageModels, StartMessage, Workflow } from './types';
 
-// Stage roles come from the Hey Buddy roster; `roles` keeps the old shape for callers and tests.
+// Stage roles come from the Signal Forge OS roster; `roles` keeps the old shape for callers and tests.
 export const roles: { name: string; role: AgentRole; capabilities: string[]; instruction: string }[] = skills.map(s => ({ name: s.name, role: s.role, capabilities: s.capabilities, instruction: s.prompt }));
 const specifications: Record<Workflow, { title: string; type: string; deps: number[] }[]> = {
   build: [{ title: 'Plan the work', type: 'planning', deps: [] }, { title: 'Analyze requirements', type: 'research', deps: [0] }, { title: 'Design the solution', type: 'design', deps: [0] }, { title: 'Review & challenge', type: 'review', deps: [1, 2] }, { title: 'Produce the deliverable', type: 'synthesis', deps: [0, 1, 2, 3] }],
@@ -27,7 +27,24 @@ export function wait(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => { signal.throwIfAborted(); const abort = () => { clearTimeout(timer); reject(signal.reason); }; const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, ms); signal.addEventListener('abort', abort, { once: true }); });
 }
 export type CompleteFn = typeof complete;
-export async function executeRun(message: StartMessage, signal: AbortSignal, emit: (run: Run) => void, call: CompleteFn = complete): Promise<Run> {
+/**
+ * Resolves when the person approves the next phase. Cancelling the run aborts `signal`, which the
+ * caller's gate is expected to reject on — see swarm.worker.ts.
+ */
+export type ApprovalGate = (run: Run) => Promise<void>;
+
+/**
+ * How many phases a workflow has: tasks grouped by dependency depth, which is exactly how the loop
+ * below batches them. Build is plan → research + design → review → deliverable, so four.
+ */
+export function phaseDepths(workflow: Workflow): number[] {
+  const depth: number[] = [];
+  specifications[workflow].forEach((spec, i) => { depth[i] = spec.deps.length ? Math.max(...spec.deps.map(d => depth[d])) + 1 : 0; });
+  return depth;
+}
+export const phaseCount = (workflow: Workflow): number => Math.max(...phaseDepths(workflow)) + 1;
+
+export async function executeRun(message: StartMessage, signal: AbortSignal, emit: (run: Run) => void, call: CompleteFn = complete, gate?: ApprovalGate): Promise<Run> {
   const { goal, workflow, connection } = message;
   // The lead as sent, falling back to a lookup by id. A custom agent arrives whole because the
   // worker has no localStorage to resolve it from.
@@ -40,13 +57,16 @@ export async function executeRun(message: StartMessage, signal: AbortSignal, emi
   const attachments = (message.attachments ?? []).map(a => ({ id: `attachment-${a.name}`, title: a.name, content: a.content, createdAt: '' }));
   validateConnection(connection);
   if (!goal.trim() || goal.length > 12_000) throw new Error('Enter a goal between 1 and 12,000 characters.');
-  const context = [...attachments, ...retrieve(goal, message.knowledge)];
+  // Memories ride along as reference notes, and only the ones matching the goal.
+  const recalled = selectMemories(goal, message.memories ?? []).map(m => ({ id: `memory-${m.id}`, title: `memory: ${m.kind}`, content: m.text, createdAt: m.createdAt }));
+  const context = [...attachments, ...recalled, ...retrieve(goal, message.knowledge)];
+  const phases = phaseCount(workflow); const depths = phaseDepths(workflow); let phase = 0;
   const agents = roles.map(r => Agent.create({ name: r.name, role: r.role, capabilities: r.capabilities, domain: 'browser', maxConcurrentTasks: 1 }));
   agents.forEach(a => a.start());
   const partial = new Map<string, string>(); const streamedAt = new Map<string, number>();
   const tasks = makeTasks(workflow); const cache = new PromptCache();
   const run: Run = { id: message.runId, goal, workflow, mode: connection.mode, model: connection.model, status: 'running', startedAt: new Date().toISOString(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: context.map(d => d.title), sessionId: message.sessionId, persona: message.persona };
-  const snapshot = () => { run.steps = tasks.map(t => { const model = modelForStage(stageModels, t.type, connection.model); return { id: t.id, title: t.title, agent: agents.find(a => a.id === t.assignedAgentId)?.name ?? roles.find(r => r.capabilities.includes(t.type))?.name ?? 'Agent', status: t.status, output: typeof t.output === 'string' ? t.output : partial.get(t.id), error: t.error, attempts: t.retryCount, ...(model !== connection.model ? { model } : {}) }; }); emit(structuredClone(run)); };
+  const snapshot = () => { run.steps = tasks.map((t, index) => { const model = modelForStage(stageModels, t.type, connection.model); return { id: t.id, title: t.title, agent: agents.find(a => a.id === t.assignedAgentId)?.name ?? roles.find(r => r.capabilities.includes(t.type))?.name ?? 'Agent', status: t.status, output: typeof t.output === 'string' ? t.output : partial.get(t.id), error: t.error, attempts: t.retryCount, phase: depths[index], ...(model !== connection.model ? { model } : {}) }; }); emit(structuredClone(run)); };
   async function runTask(task: Task): Promise<void> {
     while (true) {
       signal.throwIfAborted(); const agent = selectAgent(agents, task); if (!agent) throw new Error('No agent available for task.');
@@ -85,6 +105,18 @@ export async function executeRun(message: StartMessage, signal: AbortSignal, emi
       const ready = tasks.filter(t => (t.status === 'pending' || t.status === 'queued') && t.areDependenciesSatisfied(completed)).slice(0, 2);
       if (!ready.length) throw new Error('Workflow dependencies cannot be satisfied.');
       await Promise.all(ready.map(runTask));
+      // A strict approval gate: once every task of this phase has finished, and before the next
+      // phase spends anything, the run stops and waits for the person to approve what it produced.
+      // The last phase has no gate — there is nothing left to approve spending on.
+      const phaseDone = !tasks.some(t => (t.status === 'pending' || t.status === 'queued') && t.areDependenciesSatisfied(completed));
+      if (phaseDone) phase++;
+      const remaining = tasks.some(t => t.status === 'pending' || t.status === 'queued');
+      if (message.approvalGates && gate && phaseDone && remaining && !tasks.some(t => t.status === 'failed')) {
+        run.status = 'awaiting_approval'; run.gate = { phase, phases }; snapshot();
+        await gate(structuredClone(run));
+        signal.throwIfAborted();
+        run.status = 'running'; delete run.gate; snapshot();
+      }
     }
     run.status = signal.aborted ? 'cancelled' : tasks.some(t => t.status === 'failed') ? 'failed' : 'completed';
   } catch (e) {
