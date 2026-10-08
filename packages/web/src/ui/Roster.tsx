@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Check, Plus, Trash2, X } from 'lucide-react';
-import { generalPersonas, skills, workflows, type Persona } from '../lib/roster';
+import { allSkills, generalPersonas, skills, workflows, type Persona } from '../lib/roster';
 import { MAX_NAME, MAX_PROMPT, MAX_ROLE, createCustomAgent, validateDraft, type CustomAgentDraft } from '../lib/customAgents';
 import type { Workflow } from '../lib/types';
 import { iconFor } from './icons';
@@ -68,6 +68,8 @@ export function RosterList(p: RosterListProps) {
     <CreateAgent onCreate={p.onCreate} />
     <h3 className="group-label">General <small>direct chat and code — no planning steps</small></h3>
     <div className="persona-grid">{generalPersonas.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} />)}</div>
+    <h3 className="group-label">Skills & AI Crew <small>task specialists and companions in the owner's voice</small></h3>
+    <div className="persona-grid">{allSkills.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} />)}</div>
     {p.custom.length > 0 && <>
       <h3 className="group-label">Your agents <small>saved in this browser</small></h3>
       <div className="persona-grid">{p.custom.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} onDelete={p.onDelete} />)}</div>
@@ -78,7 +80,7 @@ export function RosterList(p: RosterListProps) {
       <h3 className="group-label">Workflows</h3>
       <div className="workflow-list">{(Object.keys(workflows) as Workflow[]).map(w => <div key={w} className="workflow-row"><strong>{workflows[w].label}</strong><span>{workflows[w].description}</span></div>)}</div>
       <h3 className="group-label">Stage agents <small>used by the workflows, in this order</small></h3>
-      <div className="persona-grid">{skills.map(x => <Card key={x.id} p={x} active={false} />)}</div>
+      <div className="persona-grid">{skills.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} />)}</div>
     </details>
   </>;
 }

@@ -1,18 +1,18 @@
-import { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, CircleAlert, Download, LoaderCircle } from 'lucide-react';
-import type { Run, StepView } from '../lib/types';
+import { useState } from 'react';
+import { Check, ChevronDown, ChevronRight, CircleAlert, Download, Play, Square } from 'lucide-react';
+import type { Run } from '../lib/types';
 import { exportRun } from '../lib/store';
 import { workflows } from '../lib/roster';
+import { HourglassIcon } from './WritingStatus';
 
-// A multi-agent run, shown as a pipeline rather than a wall.
+// A Plan / Autonomous Run, shown as one calm result rather than a multi-agent control room.
 //
-// The old layout gave every stage an equal-width panel and a tall output pane, so a five-stage
-// workflow ate the screen before producing a word. Here the stages are one compact horizontal
-// strip of badges above the output: the strip reports progress at a glance, and exactly one
-// stage's text is shown underneath — the newest by default, or whichever badge you click.
-//
-// The strip scrolls sideways rather than wrapping, so the shape of a run stays the same at
-// every width, and the whole block collapses to a single line once the run finishes.
+// The engine underneath is a five-stage task graph with named agents, retries and per-stage
+// models, and none of that is what the person asked about. So the card says three things only:
+// that it is working (a pulse and a plain step name), what it needs from you (approve the phase it
+// just finished, or stop), and what it produced (the final deliverable, as the reply). The
+// intermediate phases are still here, folded under "Show working", for anyone who wants to check
+// how it got there — closed by default, and never labelled with internal agent names.
 
 function download(name: string, body: string, type = 'text/markdown') {
   const url = URL.createObjectURL(new Blob([body], { type }));
@@ -20,53 +20,39 @@ function download(name: string, body: string, type = 'text/markdown') {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const SHORT: Record<string, string> = { Dispatcher: 'Plan', Researcher: 'Research', Architect: 'Design', Reviewer: 'Review', Scribe: 'Write' };
-const shortName = (agent: string) => SHORT[agent] ?? agent.split(' ')[0];
+export interface RunCardProps { run: Run; onApprove?: () => void; onStop?: () => void; }
 
-function StageIcon({ status, index }: { status: string; index: number }) {
-  if (status === 'completed') return <Check size={11} strokeWidth={2.5} />;
-  if (status === 'running') return <LoaderCircle size={11} className="spin" />;
-  if (status === 'failed') return <CircleAlert size={11} />;
-  return <span className="stage-index">{index + 1}</span>;
-}
+export default function RunCard({ run, onApprove, onStop }: RunCardProps) {
+  const [working, setWorking] = useState(false);
+  const finished = run.steps.filter(s => s.status === 'completed');
+  const current = run.steps.find(s => s.status === 'running' || s.status === 'assigned');
+  const final = run.status === 'completed' ? finished[finished.length - 1] : undefined;
+  const failure = run.steps.find(s => s.error)?.error;
+  const label = workflows[run.workflow].label;
+  // At a gate, show everything the phase just produced: that is what is being approved.
+  const gateOutputs = run.status === 'awaiting_approval' && run.gate ? finished.filter(s => s.phase === run.gate!.phase - 1) : [];
 
-export default function RunCard({ run }: { run: Run }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
-  const active = run.steps.find(s => s.status === 'running');
-  // Follow the run while it is live; once the person clicks a badge, respect that choice.
-  const shown: StepView | undefined = run.steps.find(s => s.id === selected)
-    ?? active
-    ?? [...run.steps].reverse().find(s => s.output || s.error);
-  const done = run.steps.filter(s => s.status === 'completed').length;
-  const total = run.steps.length || 5;
-  const running = run.status === 'running';
+  return <div className={`run calm ${run.status}`}>
+    {run.status === 'running' && <p className="run-pulse" role="status"><HourglassIcon />Building… <span className="run-step">{current?.title ?? 'Starting'}</span></p>}
 
-  // A finished run folds itself away so the conversation below it stays readable.
-  useEffect(() => { if (!running && !selected) setCollapsed(true); }, [running, selected]);
-
-  return <div className={`run ${run.status}`}>
-    <div className="run-strip">
-      <button className="run-toggle" aria-expanded={!collapsed} onClick={() => setCollapsed(c => !c)} title={collapsed ? 'Show stage output' : 'Hide stage output'}>
-        {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-        <strong>{workflows[run.workflow].label}</strong>
-      </button>
-      <div className="stages" role="tablist" aria-label="Workflow stages">
-        {run.steps.map((s, i) => <button
-          key={s.id} role="tab" aria-selected={shown?.id === s.id}
-          className={`stage ${s.status}${shown?.id === s.id ? ' selected' : ''}`}
-          title={`${s.agent}: ${s.title} — ${s.status}${s.model ? ` · ${s.model}` : ''}`}
-          onClick={() => { setSelected(s.id); setCollapsed(false); }}
-        ><StageIcon status={s.status} index={i} />{shortName(s.agent)}</button>)}
-        {!run.steps.length && <span className="stage pending"><LoaderCircle size={11} className="spin" />Starting</span>}
+    {run.status === 'awaiting_approval' && <div className="run-gate" role="group" aria-label="Approval needed">
+      <p className="run-gate-head"><strong>Phase {run.gate?.phase ?? finished.length} of {run.gate?.phases ?? 4} done — approve to continue</strong><small>Nothing further is sent to the model until you approve.</small></p>
+      {gateOutputs.map(s => <div key={s.id} className="run-phase"><small>{s.title}</small><pre className="msg-body">{s.output}</pre></div>)}
+      <div className="row gap">
+        <button className="button primary small" onClick={onApprove} disabled={!onApprove}><Play size={12} />Approve and continue</button>
+        <button className="button small" onClick={onStop} disabled={!onStop}><Square size={12} />Stop here</button>
       </div>
-      <span className={`status ${run.status}`}>{running ? `${done}/${total}` : run.status}</span>
-      <button className="text-button" onClick={() => download('heybuddy-run.md', exportRun(run))} title="Export this run as Markdown"><Download size={12} /><span className="chip-label">Export</span></button>
-    </div>
-    {!collapsed && <>
-      {shown && <div className="run-stage-head"><strong>{shown.agent}</strong><small>{shown.title}</small>{shown.model && <small className="mono">· {shown.model}</small>}</div>}
-      <pre className="run-output" aria-live="polite">{shown?.output ?? shown?.error ?? 'Stages report here as they finish.'}</pre>
-    </>}
-    <small className="run-meta">{run.model} · {run.calls} request{run.calls === 1 ? '' : 's'} · {run.tokens.toLocaleString()} tokens{run.origin === 'server' ? ' · background worker' : ''}</small>
+    </div>}
+
+    {final && <pre className="msg-body">{final.output}</pre>}
+    {(run.status === 'failed' || run.status === 'interrupted') && <p className="msg-error"><CircleAlert size={12} />{run.status === 'interrupted' ? 'This run was interrupted when the page closed.' : failure ?? 'The run failed. Check your model and key in Settings.'}</p>}
+    {run.status === 'cancelled' && <p className="help">Stopped{finished.length ? ` after ${finished.length} step${finished.length === 1 ? '' : 's'}` : ''}.</p>}
+
+    {run.status !== 'running' && finished.length > 0 && <div className="run-foot">
+      <button className="text-button" aria-expanded={working} onClick={() => setWorking(w => !w)}>{working ? <ChevronDown size={12} /> : <ChevronRight size={12} />}Show working</button>
+      <button className="text-button" onClick={() => download('signal-forge-plan.md', exportRun(run))} title="Export this run as Markdown"><Download size={12} />Export</button>
+      {run.status === 'completed' && <span className="run-done"><Check size={11} />{label}</span>}
+    </div>}
+    {working && <div className="run-working">{finished.filter(s => s !== final).map(s => <div key={s.id} className="run-phase"><small>{s.title}</small><pre className="msg-body">{s.output}</pre></div>)}</div>}
   </div>;
 }

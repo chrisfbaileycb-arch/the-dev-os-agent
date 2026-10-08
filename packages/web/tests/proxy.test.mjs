@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
-import { FREE_TIER_UNAVAILABLE, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, freeOutputCapFor, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
 import { setXkiroCatalog } from '../server/freetier.mjs';
+import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
+// These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
+setBackendLaneEnforcedForTests(false);
 const NL = String.fromCharCode(10);
 const base = { provider: 'groq', apiKey: 'test-key-not-real', model: 'groq/llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hello' }] };
 // A gateway id that really is free upstream, used wherever a test needs the free tier to cover an
@@ -20,7 +23,7 @@ const chatFree = (url, body) => post(url, body, '/api/chat', { 'X-Workspace-Id':
 test('fixed routes and model namespace handling', async () => { assert.equal((await resolveTarget('openrouter')).base,'https://openrouter.ai/api/v1'); assert.equal((await resolveTarget('groq')).base,'https://api.groq.com/openai/v1'); assert.equal((await resolveTarget('cohere')).nativeCohere,true); assert.equal(normalizeModel('groq','groq/llama-3.3-70b-versatile'),'llama-3.3-70b-versatile'); assert.equal(normalizeModel('openrouter','deepseek/deepseek-r1'),'deepseek/deepseek-r1'); });
 test('server credits require explicit deployment authorization', () => { const env = { GROQ_API_KEY: 'server-secret', SERVER_CREDIT_ACCESS_TOKEN: 'access' }; assert.equal(keyFor({ provider:'groq' },env),''); assert.equal(keyFor({ provider:'groq', serverAccessToken:'wrong' },env),''); assert.equal(keyFor({ provider:'groq', serverAccessToken:'access' },env),'server-secret'); assert.equal(keyFor({ provider:'groq', apiKey:'visitor' },env),'visitor'); });
 test('custom SSRF protections and exact Ollama bridge approval', async () => { await assert.rejects(resolveTarget('custom','http://localhost:11434/v1',{})); await assert.rejects(resolveTarget('custom','https://api.example.com/v1',{})); await assert.rejects(resolveTarget('custom','https://api.example.com/v1',{ CUSTOM_API_ORIGINS:'https://api.example.com' },async () => [{address:'127.0.0.1'}])); const target = await resolveTarget('custom','https://api.example.com/v1',{ CUSTOM_API_ORIGINS:'https://api.example.com' },async () => [{ address:'8.8.8.8' }]); assert.equal(target.address,'8.8.8.8'); assert.equal((await resolveTarget('custom','http://localhost:11434/v1',{ OLLAMA_BRIDGE_URL:'http://localhost:11434/v1' })).approvedBridge,true); await assert.rejects(resolveTarget('custom','http://localhost:11434/other',{ OLLAMA_BRIDGE_URL:'http://localhost:11434/v1' })); for (const ip of ['127.0.0.1','10.0.0.1','169.254.169.254','172.16.0.1','192.168.1.1','100.64.0.1','::1','::ffff:127.0.0.1']) assert.equal(publicAddress(ip),false); });
-test('OpenRouter streams bytes and sets attribution headers', async () => { let captured; const events = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'; await withProxy({ env:{APP_ORIGIN:'https://app.example'}, transport:async (url, options) => { captured = {url,...options}; return stream(events); } },async url => { const response = await post(url,{...base, provider:'openrouter',model:'deepseek/deepseek-r1'}); assert.equal(response.status,200); assert.match(response.headers.get('content-type'),/event-stream/); assert.equal(await response.text(),events); assert.equal(captured.url,'https://openrouter.ai/api/v1/chat/completions'); assert.equal(captured.headers['HTTP-Referer'],'https://app.example'); assert.equal(captured.headers['X-Title'],'Hey Buddy'); assert.equal(JSON.parse(captured.body).stream,true); }); });
+test('OpenRouter streams bytes and sets attribution headers', async () => { let captured; const events = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'; await withProxy({ env:{APP_ORIGIN:'https://app.example'}, transport:async (url, options) => { captured = {url,...options}; return stream(events); } },async url => { const response = await post(url,{...base, provider:'openrouter',model:'deepseek/deepseek-r1'}); assert.equal(response.status,200); assert.match(response.headers.get('content-type'),/event-stream/); assert.equal(await response.text(),events); assert.equal(captured.url,'https://openrouter.ai/api/v1/chat/completions'); assert.equal(captured.headers['HTTP-Referer'],'https://app.example'); assert.equal(captured.headers['X-Title'],'Signal Forge OS'); assert.equal(JSON.parse(captured.body).stream,true); }); });
 test('Groq routing strips only the Groq prefix', async () => { await withProxy({ env:{},transport:async (url, options) => { assert.equal(url,'https://api.groq.com/openai/v1/chat/completions'); assert.equal(JSON.parse(options.body).model,'llama-3.3-70b-versatile'); return stream('data: [DONE]\n\n'); } },async url => { assert.equal((await post(url,base)).status,200); }); });
 test('Cohere streams native v2 events', async () => { await withProxy({env:{},transport:async(url,options)=>{assert.equal(url,'https://api.cohere.com/v2/chat');assert.equal(JSON.parse(options.body).stream_options,undefined);return stream('event: message-end\ndata: {"type":"message-end"}\n\n');}},async url=>{const r=await post(url,{...base,provider:'cohere',model:'command-a-03-2025'});assert.equal(r.status,200);assert.match(await r.text(),/message-end/);}); });
 test('an anonymous request is funded only for an allowlisted free model', async () => {
@@ -164,7 +167,7 @@ test('HF serverless models join the zero-config pool only when the deployment ho
   assert.equal(captured.headers.Authorization, 'Bearer server-hf-token');
   const payload = JSON.parse(captured.body);
   assert.equal(payload.model, 'Qwen/Qwen2.5-7B-Instruct');
-  assert.ok(payload.max_tokens <= 4096, 'free-tier output stays capped');
+  assert.ok(payload.max_tokens <= 16384, 'free-tier output stays capped');
 });
 
 test('Anthropic is translated to /v1/messages, headers and all', async () => {
@@ -182,7 +185,7 @@ test('Anthropic is translated to /v1/messages, headers and all', async () => {
   const payload = JSON.parse(captured.body);
   assert.equal(payload.system, 'be brief');
   assert.deepEqual(payload.messages, [{ role: 'user', content: 'hello' }]);
-  assert.equal(payload.max_tokens, 4096);
+  assert.equal(payload.max_tokens, 16384, "a request that names no limit gets the full-app default");
   assert.equal(payload.stream_options, undefined, 'an unknown field is a 400 there, not an ignored hint');
 });
 
@@ -228,10 +231,10 @@ test('a checkout URL is published only when it is one', async () => {
   }
   const none = billingStatus({});
   assert.equal(none.enabled, false);
-  assert.deepEqual(none.plans.map(p => p.checkout), [null, null]);
-  assert.deepEqual(none.plans.map(p => p.price), ['$12.90', '$24.90'], 'the price is shown even with no checkout');
+  assert.deepEqual(none.plans.map(p => p.checkout), [null, null, null]);
+  assert.deepEqual(none.plans.map(p => p.price), ['$25', '$50', '$100'], 'the price is shown even with no checkout');
 
-  const one = billingStatus({ STRIPE_STARTER_URL: 'https://buy.stripe.com/starter' });
+  const one = billingStatus({ BILLING_STARTER_URL: 'https://buy.stripe.com/starter' });
   assert.equal(one.enabled, true, 'one configured plan is enough to be selling something');
   assert.equal(one.plans.find(p => p.id === 'starter').checkout, 'https://buy.stripe.com/starter');
   assert.equal(one.plans.find(p => p.id === 'premium').checkout, null);
@@ -239,7 +242,7 @@ test('a checkout URL is published only when it is one', async () => {
 });
 
 test('/api/providers reports billing alongside the free tier', async () => {
-  await withProxy({ env: { STRIPE_PREMIUM_URL: 'https://buy.stripe.com/premium' } }, async url => {
+  await withProxy({ env: { BILLING_PREMIUM_URL: 'https://buy.stripe.com/premium' } }, async url => {
     const body = await (await fetch(url + '/api/providers')).json();
     assert.equal(body.billing.enabled, true);
     assert.equal(body.billing.plans.find(p => p.id === 'premium').checkout, 'https://buy.stripe.com/premium');
@@ -364,7 +367,7 @@ test('the provider gets told who is calling', async () => {
   await withProxy({ env: {}, transport: async (url, options) => { captured = options; return stream('data: [DONE]\n\n'); } }, async url => {
     assert.equal((await post(url, base)).status, 200);
   });
-  assert.match(captured.headers['User-Agent'], /^HeyBuddy\/[0-9.]+ \(\+https:\/\//);
+  assert.match(captured.headers['User-Agent'], /^SignalForgeOS\/[0-9.]+ \(\+https:\/\//);
   assert.match(captured.headers['User-Agent'], HEADER_SAFE);
 });
 
@@ -450,4 +453,190 @@ test('reading the error body is bounded and can never fail the request', async (
   assert.equal(await peek(Readable.from([Buffer.from('')])), '');
   const broken = new Readable({ read() { this.destroy(new Error('socket died mid-body')); } });
   assert.equal(await peek(broken), '', 'a stream that dies while being read yields nothing, not a throw');
+});
+
+test('a rejected request explains itself, without leaking credentials, while auth and 5xx stay generic', () => {
+  const said = 'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header.';
+  assert.match(clientMessage(400, said), /Provider rejected the request.*The provider said: This API key is not scoped to a workspace/);
+  assert.match(clientMessage(404, 'model: claude-x'), /not found.*The provider said: model: claude-x/);
+  assert.ok(clientMessage(400, 'bad key sk-ant-api03-abcdefghijklmnopqrstuvwx used').includes('[redacted]'));
+  assert.ok(!clientMessage(400, 'bad key sk-ant-api03-abcdefghijklmnopqrstuvwx used').includes('abcdefghijklmnop'));
+  assert.ok(clientMessage(400, 'x'.repeat(2000)).length < 400);
+  for (const status of [401, 403, 429, 500, 503]) assert.equal(clientMessage(status, 'secret body'), errorMessage(status));
+  assert.equal(clientMessage(400, ''), errorMessage(400));
+});
+
+test('plan tokens: per-subscriber tokens unlock, revoked or unknown ones do not, and no plan list means no plan access', async () => {
+  const { planHolder } = await import('../server/proxy.mjs');
+  const env = { PLAN_ACCESS_TOKENS: 'sub-token-aaaaaaaaaaaa, sub-token-bbbbbbbbbbbb', SERVER_CREDIT_ACCESS_TOKEN: 'operator-token-cccccccc' };
+  const a = planHolder('sub-token-aaaaaaaaaaaa', env), b = planHolder('sub-token-bbbbbbbbbbbb', env);
+  assert.ok(a && b && a !== b, 'each subscriber is metered separately');
+  assert.equal(planHolder('operator-token-cccccccc', env), 'plan:operator');
+  assert.equal(planHolder('sub-token-zzzzzzzzzzzz', env), null);
+  assert.equal(planHolder('sub-token-aaaaaaaaaaaa', { ...env, PLAN_ACCESS_TOKENS: 'sub-token-bbbbbbbbbbbb' }), null, 'removing a token revokes it');
+  await withProxy({ env: { GROQ_API_KEY: 'server-key', SERVER_CREDIT_ACCESS_TOKEN: 'operator-token-cccccccc' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    assert.equal((await post(url, { ...base, apiKey: undefined, serverAccessToken: 'operator-token-cccccccc' })).status, 403, 'with no paid models configured a token must not unlock every server key');
+  });
+});
+
+test('free-key providers route to their own fixed homes on the visitor key', async () => {
+  const { resolveTarget } = await import('../server/proxy.mjs');
+  const { modelsUrl, normalizeModelList } = await import('../server/models.mjs');
+  assert.equal((await resolveTarget('github')).base, 'https://models.github.ai/inference');
+  assert.equal((await resolveTarget('cerebras')).base, 'https://api.cerebras.ai/v1');
+  assert.equal(modelsUrl('github', 'https://models.github.ai/inference'), 'https://models.github.ai/catalog/models');
+  assert.deepEqual(normalizeModelList('github', [{ id: 'openai/gpt-4.1-mini', name: 'OpenAI GPT-4.1-mini' }]).map(m => m.id), ['openai/gpt-4.1-mini']);
+  let seen;
+  await withProxy({ env: {}, transport: async (url, options) => { seen = { url, auth: options.headers.Authorization }; return stream('data: [DONE]\n\n'); } }, async url => {
+    assert.equal((await post(url, { ...base, provider: 'github', model: 'openai/gpt-4.1-mini', apiKey: 'github_pat_visitor' })).status, 200);
+  });
+  assert.equal(seen.url, 'https://models.github.ai/inference/chat/completions');
+  assert.equal(seen.auth, 'Bearer github_pat_visitor');
+});
+
+test('outgoing payloads default to maximum allowable output window (16,384 for gpt-4o, 16,384 for gemini) and honor max_output_tokens', async () => {
+  const { defaultMaxTokens } = await import('../server/proxy.mjs');
+  assert.equal(defaultMaxTokens('openai', 'gpt-4o'), 16384);
+  assert.equal(defaultMaxTokens('openai', 'gpt-4.1-mini'), 16384);
+  assert.equal(defaultMaxTokens('google', 'gemini-2.5-pro'), 16384);
+  assert.equal(defaultMaxTokens('anthropic', 'claude-sonnet-4-5'), 16384);
+
+  let capturedGpt;
+  await withProxy({ env: {}, transport: async (url, options) => { capturedGpt = JSON.parse(options.body); return stream('data: [DONE]\n\n'); } }, async url => {
+    const res = await post(url, { ...base, provider: 'openai', model: 'gpt-4o' });
+    assert.equal(res.status, 200);
+  });
+  assert.equal(capturedGpt.max_tokens, 16384, 'gpt-4o gets 16,384 tokens default');
+
+  let capturedGemini;
+  await withProxy({ env: {}, transport: async (url, options) => { capturedGemini = JSON.parse(options.body); return stream('data: [DONE]\n\n'); } }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-pro' });
+    assert.equal(res.status, 200);
+  });
+  assert.equal(capturedGemini.max_tokens, 16384, 'gemini gets 16,384 tokens default');
+
+  let capturedCustom;
+  await withProxy({ env: {}, transport: async (url, options) => { capturedCustom = JSON.parse(options.body); return stream('data: [DONE]\n\n'); } }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-flash', max_output_tokens: 3000 });
+    assert.equal(res.status, 200);
+  });
+  assert.equal(capturedCustom.max_tokens, 3000, 'max_output_tokens parameter is respected');
+});
+
+test('SSE stream handler appends stream_truncated sentinel event on finish_reason: length', async () => {
+  const truncatedStream = 'data: {"id":"chat-1","choices":[{"delta":{"content":"part"},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n';
+  await withProxy({ env: {}, transport: async () => stream(truncatedStream) }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-pro' });
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.match(body, /"stream_truncated":true/);
+    assert.match(body, /"finish_reason":"length"/);
+    const sentinelIdx = body.indexOf('stream_truncated');
+    const doneIdx = body.indexOf('[DONE]');
+    assert.ok(sentinelIdx !== -1 && sentinelIdx < doneIdx, 'sentinel appears before [DONE]');
+  });
+
+  const anthropicTruncated = 'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
+  await withProxy({ env: {}, transport: async () => stream(anthropicTruncated) }, async url => {
+    const res = await post(url, { ...base, provider: 'anthropic', model: 'claude-sonnet-4-5' });
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.match(body, /"stream_truncated":true/);
+  });
+
+  const normalStream = 'data: {"id":"chat-2","choices":[{"delta":{"content":"complete"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+  await withProxy({ env: {}, transport: async () => stream(normalStream) }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-pro' });
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.ok(!body.includes('stream_truncated'), 'normal stream does not have stream_truncated');
+  });
+});
+
+test('model catalog endpoint differentiates ready vs extended models and supports filtering', async () => {
+  const catalogPayload = JSON.stringify({
+    data: [
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+      { id: 'experimental-unverified-preview-123', name: 'Preview 123' },
+    ]
+  });
+
+  // differentiate: true
+  await withProxy({ env: {}, transport: async () => stream(catalogPayload, 200, 'application/json') }, async url => {
+    const res = await post(url, { ...base, provider: 'google', differentiate: true }, '/api/models');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(Array.isArray(body.ready), 'ready array present');
+    assert.ok(Array.isArray(body.extended), 'extended array present');
+    assert.deepEqual(body.ready.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash']);
+    assert.deepEqual(body.extended.map(m => m.id), ['experimental-unverified-preview-123']);
+    assert.equal(body.ready[0].verified, true);
+    assert.equal(body.ready[0].section, 'ready');
+    assert.equal(body.extended[0].verified, false);
+    assert.equal(body.extended[0].section, 'extended');
+  });
+
+  // filter: 'ready'
+  await withProxy({ env: {}, transport: async () => stream(catalogPayload, 200, 'application/json') }, async url => {
+    const res = await post(url, { ...base, provider: 'google', filter: 'ready' }, '/api/models');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.data.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash']);
+  });
+
+  // filter: 'extended'
+  await withProxy({ env: {}, transport: async () => stream(catalogPayload, 200, 'application/json') }, async url => {
+    const res = await post(url, { ...base, provider: 'google', filter: 'extended' }, '/api/models');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.data.map(m => m.id), ['experimental-unverified-preview-123']);
+  });
+});
+
+test('completion proxy intercepts 503 and 404 for extended catalog models and prompts fallback', async () => {
+  // 503 on extended catalog model triggers structured fallback warning
+  await withProxy({ env: {}, transport: async () => stream('Service Unavailable', 503) }, async url => {
+    const res = await post(url, { ...base, provider: 'openrouter', model: 'community/unverified-model-xyz' });
+    assert.equal(res.status, 503);
+    const data = await res.json();
+    assert.equal(data.error.code, 'model_unavailable');
+    assert.equal(data.error.suggest_fallback, true);
+    assert.equal(data.error.extended_model, 'community/unverified-model-xyz');
+    assert.ok(data.error.fallback_model, 'fallback_model specified');
+    assert.match(data.error.message, /Switch to active default model/);
+  });
+
+  // 404 on extended catalog model triggers structured fallback warning
+  await withProxy({ env: {}, transport: async () => stream('Model Not Found', 404) }, async url => {
+    const res = await post(url, { ...base, provider: 'openrouter', model: 'random/nonexistent-model' });
+    assert.equal(res.status, 404);
+    const data = await res.json();
+    assert.equal(data.error.code, 'model_unavailable');
+    assert.equal(data.error.suggest_fallback, true);
+    assert.equal(data.error.extended_model, 'random/nonexistent-model');
+  });
+
+  // 503 on verified model does NOT intercept as model_unavailable; passes standard error
+  await withProxy({ env: {}, transport: async () => stream('Overloaded', 503) }, async url => {
+    const res = await post(url, { ...base, provider: 'google', model: 'gemini-2.5-flash' });
+    assert.equal(res.status, 503);
+    const data = await res.json();
+    assert.equal(data.error.code, undefined);
+    assert.equal(data.error.suggest_fallback, undefined);
+    assert.match(data.error.message, /Provider is temporarily unavailable/);
+  });
+});
+
+test('the free-reply cap is the operator\'s number up to the ceiling, with a 16,384 default', () => {
+  assert.equal(freeOutputCapFor({}), 16384, 'unset');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '10000' }), 10000, 'a 10,000 setting is no longer clamped to 4,096');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '999999' }), 65536, 'capped at the ceiling every request is allowed');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '10' }), 64, 'and never below a useful floor');
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: 'banana' }), 16384, 'a bad value falls back to the default');
+});
+
+test('a photo sent to a text-only model is explained, not reported as a schema error', () => {
+  assert.match(clientMessage(400, 'messages[1].content must be a string'), /can only read text.*photo/i);
+  assert.doesNotMatch(clientMessage(400, 'messages[1].content must be a string'), /must be a string/);
 });

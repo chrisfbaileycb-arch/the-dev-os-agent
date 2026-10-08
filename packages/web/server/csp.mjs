@@ -12,7 +12,19 @@
 // the live-preview bundler. It runs esbuild-wasm in a same-origin worker to compile a generated
 // project and fetches its npm imports from esm.sh at build time. Nothing else on this app needed
 // either grant; both are as narrow as the feature requires.
-export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://esm.sh; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+//
+// connect-src also reaches https://api.github.com for the GitHub Repository Sync drawer
+// (src/lib/githubSync.ts), which pulls and pushes one file through the Contents API directly from
+// the browser with the visitor's own token. The token never touches this server, so the request
+// has to leave from the page, and this is the one host it needs.
+//
+// And connect-src reaches the default ports of two local model servers on this machine's loopback
+// addresses, for the local model pipe (src/lib/pipes.ts): Ollama on 11434 and LM Studio on 1234. A
+// hosted server cannot reach a visitor's localhost, so a local model is only usable if the page
+// calls it directly. Only the loopback names on those two ports are allowed — nothing else on the
+// local network — and the server itself must also allow this app's origin before it answers:
+// OLLAMA_ORIGINS for Ollama, the CORS option in LM Studio's server settings.
+export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://esm.sh https://api.github.com http://localhost:11434 http://127.0.0.1:11434 http://localhost:1234 http://127.0.0.1:1234; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 /**
  * The policy for the generated-app sandbox, and the reasoning behind how open it is.
@@ -34,8 +46,14 @@ export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; st
  * anywhere is data the model wrote into it. So the grants below are wide on purpose. 'unsafe-eval'
  * is there for the libraries that need it (in-browser Babel, template compilers); 'self' is absent
  * because an opaque origin has no self to match.
+ *
+ * The leading `sandbox` directive is what makes that promise hold. The iframe attribute only
+ * applies when this app embeds the page; anyone could open /sandbox.html directly, or frame it
+ * from their own site, and post HTML into it — and without this directive that document ran with
+ * this app's real origin, able to read every visitor's saved provider keys. With it, the browser
+ * gives the document an opaque origin however it is loaded.
  */
-export const SANDBOX_CSP = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; connect-src https: wss:; media-src data: blob: https:; worker-src blob:; frame-src https:; object-src 'none'; base-uri 'none'; form-action 'none'";
+export const SANDBOX_CSP = "sandbox allow-scripts allow-modals allow-forms allow-popups; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; connect-src https: wss:; media-src data: blob: https:; worker-src blob:; frame-src https:; object-src 'none'; base-uri 'none'; form-action 'none'";
 
 /** Which policy a given served file gets. `root` is the absolute path to the dist directory. */
 export function cspFor(file, root) {

@@ -1,25 +1,29 @@
-import type { Knowledge, Run } from './types';
-import { creditsFor, DEFAULT_FREE_POOL, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tier } from './catalog';
+import type { Knowledge, MemoryEntry, Run, Workflow } from './types';
+import type { WorkMode } from './roster';
+import { creditsFor, creditsForUsage, DEFAULT_FREE_POOL, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tier, type Usage } from './catalog';
 
 // Local-first workspace store. IndexedDB is the source of truth for the open tab; the server
 // keeps a copy in SQLite keyed by an anonymous workspace id so sessions and credit balances
-// survive a refresh, a reinstall, or a cleared cache. Knowledge notes stay local only.
+// survive a refresh, a reinstall, or a cleared cache. Knowledge notes and memories stay local only.
 
 export interface Attachment { name: string; chars: number; }
 export interface ToolTrace { tool: string; args: Record<string, unknown>; summary: string; ok: boolean; }
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; at: string; persona?: string; model?: string; tokens?: number; latencyMs?: number; tokensPerSecond?: number; tools?: ToolTrace[]; runId?: string; attachments?: Attachment[]; photos?: { name: string; thumb: string }[]; error?: string; }
-export interface Session { id: string; title: string; persona: string; createdAt: string; updatedAt: string; messages: ChatMessage[]; }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; at: string; persona?: string; model?: string; tokens?: number; latencyMs?: number; tokensPerSecond?: number; tools?: ToolTrace[]; runId?: string; attachments?: Attachment[]; photos?: { name: string; thumb: string }[]; error?: string; truncated?: boolean; }
+/** `mode` and `plan` remember how the person was working in this session (see WORK_MODES in lib/roster.ts). */
+export interface Session { id: string; title: string; persona: string; createdAt: string; updatedAt: string; messages: ChatMessage[]; mode?: WorkMode; plan?: Workflow; }
 export interface LedgerEntry { id: string; at: string; sessionId: string; model: string; tier: Tier; mode: InferenceMode; tokens: number; credits: number; }
 export interface Balance { pool: number; used: number; remaining: number; month: string; source: 'server' | 'local'; }
 /** What the deployment will fund for a visitor with no key. Read from /api/providers and /api/state. */
-export interface FreeTier { enabled: boolean; models: string[]; providers: Record<string, string>; /** Names the operator gave dashboard-chosen entries. */ labels: Record<string, string>; monthlyCredits: number; perHour: number; }
+export interface FreeTier { enabled: boolean; models: string[]; providers: Record<string, string>; /** Names the operator gave dashboard-chosen entries. */ labels: Record<string, string>; monthlyCredits: number; perHour: number; maxOutputTokens?: number; }
 export interface Workspace { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; knowledge: Knowledge[]; balance: Balance; freeBalance: Balance; serverReachable: boolean; }
 
 // Kept at the original name on purpose: renaming the database would orphan the sessions,
 // runs, and notes of anyone who already has data in this browser.
 const DB = 'freetoken-web-v1';
-type Store = 'runs' | 'knowledge' | 'sessions' | 'ledger';
-const STORES: Store[] = ['runs', 'knowledge', 'sessions', 'ledger'];
+type Store = 'runs' | 'knowledge' | 'sessions' | 'ledger' | 'memory';
+const STORES: Store[] = ['runs', 'knowledge', 'sessions', 'ledger', 'memory'];
+/** Version 3 added the `memory` store; the upgrade only ever creates missing stores, so older data is untouched. */
+const DB_VERSION = 3;
 
 export function workspaceId(): string {
   try { const existing = localStorage.getItem('hb-workspace-id'); if (existing && /^[0-9a-f-]{36}$/.test(existing)) return existing; const id = crypto.randomUUID(); localStorage.setItem('hb-workspace-id', id); return id; }
@@ -32,10 +36,10 @@ export function setWorkspaceId(id: string): void {
 
 async function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB, 2);
+    const request = indexedDB.open(DB, DB_VERSION);
     request.onupgradeneeded = () => { for (const name of STORES) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: 'id' }); };
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(new Error('Browser storage is unavailable. Your workspace may not persist.'));
-    request.onblocked = () => reject(new Error('Close other Hey Buddy tabs to unlock workspace storage.'));
+    request.onblocked = () => reject(new Error('Close other Signal Forge OS tabs to unlock workspace storage.'));
   });
 }
 async function transaction<T>(store: Store, mode: IDBTransactionMode, action: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
@@ -52,16 +56,20 @@ export const storage = {
   knowledge: () => transaction<Knowledge[]>('knowledge', 'readonly', s => s.getAll()),
   sessions: () => transaction<Session[]>('sessions', 'readonly', s => s.getAll()),
   ledger: () => transaction<LedgerEntry[]>('ledger', 'readonly', s => s.getAll()),
+  memory: () => transaction<MemoryEntry[]>('memory', 'readonly', s => s.getAll()),
   saveRun: (run: Run) => transaction('runs', 'readwrite', s => s.put(run)),
   saveKnowledge: (doc: Knowledge) => transaction('knowledge', 'readwrite', s => s.put(doc)),
   saveSession: (session: Session) => transaction('sessions', 'readwrite', s => s.put(session)),
   saveLedger: (entry: LedgerEntry) => transaction('ledger', 'readwrite', s => s.put(entry)),
+  saveMemory: (entry: MemoryEntry) => transaction('memory', 'readwrite', s => s.put(entry)),
+  removeMemory: (id: string) => transaction('memory', 'readwrite', s => s.delete(id)),
   removeKnowledge: (id: string) => transaction('knowledge', 'readwrite', s => s.delete(id)),
   removeSession: (id: string) => transaction('sessions', 'readwrite', s => s.delete(id)),
   clearRuns: () => transaction('runs', 'readwrite', s => s.clear()),
   clearKnowledge: () => transaction('knowledge', 'readwrite', s => s.clear()),
   clearSessions: () => transaction('sessions', 'readwrite', s => s.clear()),
   clearLedger: () => transaction('ledger', 'readwrite', s => s.clear()),
+  clearMemory: () => transaction('memory', 'readwrite', s => s.clear()),
 };
 
 export const monthKey = (date = new Date()) => date.toISOString().slice(0, 7);
@@ -75,14 +83,24 @@ export function serverBalance(pool: number, used: number, month = monthKey()): B
   const spent = Math.round(Math.max(0, used) * 100) / 100;
   return { pool, used: spent, remaining: Math.max(0, Math.round((pool - spent) * 100) / 100), month, source: 'server' };
 }
-export function makeEntry(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number }): LedgerEntry {
-  return { id: crypto.randomUUID(), at: new Date().toISOString(), sessionId: input.sessionId, model: input.model, tier: tierFor(input.model), mode: input.mode, tokens: Math.max(0, Math.round(input.tokens)), credits: creditsFor(input.model, input.tokens, input.mode) };
+/**
+ * A ledger row. When the provider reported input and output separately the credits are priced by
+ * direction; any tokens beyond that split (a recovery call, say) are priced at the blended rate.
+ * The row itself keeps its existing shape: total tokens and the credits they cost.
+ */
+export function makeEntry(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number; usage?: Usage }): LedgerEntry {
+  const split = input.usage ? input.usage.input + input.usage.output : 0;
+  const credits = input.usage && split > 0
+    ? Math.round((creditsForUsage(input.model, input.usage, input.mode) + creditsFor(input.model, Math.max(0, input.tokens - split), input.mode)) * 100) / 100
+    : creditsFor(input.model, input.tokens, input.mode);
+  return { id: crypto.randomUUID(), at: new Date().toISOString(), sessionId: input.sessionId, model: input.model, tier: tierFor(input.model), mode: input.mode, tokens: Math.max(0, Math.round(input.tokens)), credits };
 }
 
 // Server sync. Failures are silent: the tab keeps working from IndexedDB and retries on next load.
 interface Budget { pool: number; freePool: number; freeUsed: number; free: FreeTier; }
 interface ServerState extends Budget { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; }
 export interface UsageReading extends Budget { used: number; entry: LedgerEntry | null; }
+export interface PlanReading { plan: { id: string; name: string; price: string; monthlyCredits: number; maxOutputTokens: number }; pool: number; used: number; entry: LedgerEntry | null; }
 async function api<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T | null> {
   try {
     const response = await fetch(path, { ...init, credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(15_000)]), headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId(), ...(init.headers ?? {}) } });
@@ -98,9 +116,34 @@ export const sync = {
   pull: (signal?: AbortSignal) => api<ServerState>('/api/state', {}, signal),
   /** Re-read the server's own meter after a zero-config turn; cheap enough to call every message. */
   usage: (signal?: AbortSignal) => api<UsageReading>('/api/state/usage', {}, signal),
+  plan: (token: string, signal?: AbortSignal) => api<PlanReading>('/api/state/plan', { method: 'POST', body: JSON.stringify({ token }) }, signal),
   push: (payload: { sessions?: Session[]; runs?: Run[]; ledger?: LedgerEntry[] }) => api<{ ok: true }>('/api/state', { method: 'POST', body: JSON.stringify(payload) }),
   clear: () => api<{ ok: true }>('/api/state/clear', { method: 'POST', body: '{}' }),
+  remove: (ids: string[]) => api<{ ok: true }>('/api/state/delete', { method: 'POST', body: JSON.stringify({ sessions: ids }) }),
 };
+
+// Sessions deleted here that the server may still hold. The merge below unions the server's copy
+// back in on every load, so a delete that only reached IndexedDB was undone by the next refresh.
+// The ids wait in localStorage until the server confirms, which also covers a delete made offline.
+const TOMBSTONES_KEY = 'sf-deleted-sessions';
+function readTombstones(): string[] {
+  try { const v = JSON.parse(localStorage.getItem(TOMBSTONES_KEY) || '[]'); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(-200) : []; } catch { return []; }
+}
+function writeTombstones(ids: string[]): void {
+  try { if (ids.length) localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(ids.slice(-200))); else localStorage.removeItem(TOMBSTONES_KEY); } catch { /* storage unavailable */ }
+}
+/** Tell the server about every delete it has not confirmed yet; ids stay queued if it does not answer. */
+export async function flushDeletes(): Promise<void> {
+  const ids = readTombstones();
+  if (!ids.length) return;
+  if (await sync.remove(ids)) writeTombstones(readTombstones().filter(id => !ids.includes(id)));
+}
+/** Delete a session from this browser and, once reachable, from the server. */
+export async function removeSessionEverywhere(id: string): Promise<void> {
+  await storage.removeSession(id);
+  writeTombstones([...readTombstones().filter(x => x !== id), id]);
+  await flushDeletes();
+}
 
 const byId = <T extends { id: string }>(list: T[]) => new Map(list.map(item => [item.id, item]));
 /** Merge local and server copies: newest session wins by updatedAt; runs and ledger entries are unioned. */
@@ -116,9 +159,11 @@ export function merge(local: { sessions: Session[]; runs: Run[]; ledger: LedgerE
 /** Load everything for the tab: local first, then reconcile with the server if it answers. */
 export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
   const [runs, knowledge, sessions, ledger] = await Promise.all([storage.runs(), storage.knowledge(), storage.sessions(), storage.ledger()]);
-  const fixedRuns = runs.map(r => r.status === 'running' ? { ...r, status: 'interrupted' as const, steps: r.steps.map(s => ['pending', 'queued', 'assigned', 'running'].includes(s.status) ? { ...s, status: 'cancelled' } : s) } : r);
+  const fixedRuns = runs.map(r => r.status === 'running' || r.status === 'awaiting_approval' ? { ...r, status: 'interrupted' as const, steps: r.steps.map(s => ['pending', 'queued', 'assigned', 'running'].includes(s.status) ? { ...s, status: 'cancelled' } : s) } : r);
   const server = await sync.pull(signal);
-  const merged = merge({ sessions, runs: fixedRuns, ledger }, server);
+  const dead = new Set(readTombstones());
+  const merged = merge({ sessions: sessions.filter(s => !dead.has(s.id)), runs: fixedRuns, ledger }, server ? { ...server, sessions: server.sessions.filter(s => !dead.has(s.id)) } : server);
+  if (dead.size) void flushDeletes();
   await Promise.all([...merged.sessions.filter(s => !sessions.find(l => l.id === s.id && l.updatedAt >= s.updatedAt)).map(storage.saveSession), ...merged.runs.filter(r => !runs.find(l => l.id === r.id) || fixedRuns.find(l => l.id === r.id)?.status === 'interrupted').map(storage.saveRun), ...merged.ledger.filter(e => !ledger.find(l => l.id === e.id)).map(storage.saveLedger)]);
   if (server && (merged.toPush.sessions.length || merged.toPush.runs.length || merged.toPush.ledger.length)) void sync.push(merged.toPush);
   const pool = server?.pool ?? DEFAULT_MONTHLY_POOL;
@@ -127,17 +172,18 @@ export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
 }
 
 export async function persistSession(session: Session): Promise<void> { await storage.saveSession(session); void sync.push({ sessions: [session] }); }
-export async function persistRun(run: Run): Promise<void> { await storage.saveRun(run); if (run.status !== 'running') void sync.push({ runs: [run] }); }
-export async function recordUsage(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number }): Promise<LedgerEntry> {
+/** Only a finished run is pushed to the server copy; one that is live or waiting at a gate stays local. */
+export async function persistRun(run: Run): Promise<void> { await storage.saveRun(run); if (run.status !== 'running' && run.status !== 'awaiting_approval') void sync.push({ runs: [run] }); }
+export async function recordUsage(input: { sessionId: string; model: string; mode: InferenceMode; tokens: number; usage?: Usage }): Promise<LedgerEntry> {
   const entry = makeEntry(input); await storage.saveLedger(entry); void sync.push({ ledger: [entry] }); return entry;
 }
 export async function clearWorkspaceData(): Promise<void> {
-  await Promise.all([storage.clearRuns(), storage.clearKnowledge(), storage.clearSessions(), storage.clearLedger()]);
+  await Promise.all([storage.clearRuns(), storage.clearKnowledge(), storage.clearSessions(), storage.clearLedger(), storage.clearMemory()]);
   await sync.clear();
 }
 
 export function exportRun(run: Run): string {
-  return `# Hey Buddy — ${run.workflow}\n\nMode: Hosted inference\nModel: ${run.model}\nStatus: ${run.status}\nStarted: ${run.startedAt}\n\n## Goal\n${run.goal}\n\n${run.steps.map(s => `## ${s.agent}: ${s.title}\nStatus: ${s.status}\n\n${s.output ?? s.error ?? 'No output.'}`).join('\n\n')}\n\n---\nReported tokens: ${run.tokens} (0 may mean usage was not reported)\nProvider requests: ${run.calls}\nRetrieved notes: ${run.contextTitles.join(', ') || 'none'}\n`;
+  return `# Signal Forge OS — ${run.workflow}\n\nMode: Hosted inference\nModel: ${run.model}\nStatus: ${run.status}\nStarted: ${run.startedAt}\n\n## Goal\n${run.goal}\n\n${run.steps.map(s => `## ${s.agent}: ${s.title}\nStatus: ${s.status}\n\n${s.output ?? s.error ?? 'No output.'}`).join('\n\n')}\n\n---\nReported tokens: ${run.tokens} (0 may mean usage was not reported)\nProvider requests: ${run.calls}\nRetrieved notes: ${run.contextTitles.join(', ') || 'none'}\n`;
 }
 export function exportSession(session: Session): string {
   return `# ${session.title}\n\nAgent: ${session.persona}\nStarted: ${session.createdAt}\n\n${session.messages.map(m => `## ${m.role === 'user' ? 'You' : (m.persona ?? 'Agent')} · ${new Date(m.at).toLocaleString()}\n\n${m.content}${m.tools?.length ? `\n\nTools: ${m.tools.map(t => `${t.tool} ${JSON.stringify(t.args)} (${t.ok ? 'ok' : 'failed'})`).join('; ')}` : ''}`).join('\n\n')}\n`;

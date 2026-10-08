@@ -1,6 +1,6 @@
 {
-  "name": "Hey Buddy",
-  "short_name": "Hey Buddy",
+  "name": "Signal Forge OS",
+  "short_name": "Signal Forge OS",
   "description": "Your AI crew in a browser tab. A privacy-first multi-agent workspace that runs on a Chromebook or any computer with a modern browser, with your own keys and no account.",
   "id": "./",
   "start_url": "./?source=pwa",

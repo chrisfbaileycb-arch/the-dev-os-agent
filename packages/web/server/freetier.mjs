@@ -1,3 +1,4 @@
+import { hasPlanAccess, freeOutputTokens } from './plans.mjs';
 // The zero-config tier: what a visitor with no API key is allowed to run on this deployment's
 // own provider keys. Everything here is a hard server-side boundary. The browser may ask for a
 // free model, but only this module decides whether the request is funded, and at what price.
@@ -12,6 +13,7 @@
 // browser is told the resulting list by /api/providers and renders exactly that, so there is one
 // source of truth and nothing for a UI catalogue to drift away from.
 
+import { isBackendLaneEnforced, isBackendProvider } from './providerRegistry.mjs';
 /** Credits per 1,000 tokens. Mirrors CREDIT_WEIGHTS.fast in src/lib/catalog.ts. */
 export const FREE_WEIGHT = 0.5;
 
@@ -124,11 +126,16 @@ export function xkiroPool(env = process.env, discovered = discoveredXkiro) {
 }
 
 /**
- * OmniRoute, self-hosted. Where the deployment's install lives is the operator's to say, so it is
- * configured exactly like XKIRO_BASE_URL: an HTTPS origin, no credentials or query, validated and
- * defaulted rather than trusted blind — a typo should surface as a clear message in Settings, not
- * as a puzzling network error. Unlike xKiro there is no public default to fall back to, so an
- * unset variable resolves to '' and the provider simply does not resolve until it is configured.
+ * FreeLLMAPI (the OmniRoute adapter), self-hosted. Where the deployment's install lives is the
+ * operator's to say, so it is configured exactly like XKIRO_BASE_URL: an HTTPS origin, no
+ * credentials or query, validated and defaulted rather than trusted blind — a typo should surface
+ * as a clear message in Settings, not as a puzzling network error. Unlike xKiro there is no public
+ * default to fall back to, so an unset variable resolves to '' and the provider simply does not
+ * resolve until it is configured.
+ *
+ * https://github.com/tashfeenahmed/freellmapi — an MIT-licensed router that aggregates the free
+ * tiers of dozens of providers behind one OpenAI-compatible `/v1` endpoint. One install, one
+ * unified key, and the hundreds of free model endpoints behind it become reachable from here.
  */
 export const OMNIROUTE_DEFAULT_BASE = '';
 export function omnirouteBase(env = process.env) {
@@ -142,15 +149,31 @@ export function omnirouteBase(env = process.env) {
 }
 
 /**
- * The OmniRoute ids this deployment offers free.
+ * Whether this deployment serves a FreeLLMAPI install at all.
+ *
+ * Funding and routing both hinge on this: an unconfigured adapter must refuse cleanly rather than
+ * send a request to an empty base URL. Two variables make it live — the install's address and its
+ * unified key (`freellmapi-…` bearer token) — and either one missing means off.
+ */
+export function omnirouteEnabled(env = process.env) {
+  return Boolean(omnirouteBase(env)) && Boolean(cleanKeySafe(env.OMNIROUTE_API_KEY));
+}
+const cleanKeySafe = value => typeof value === 'string' && value.trim() ? value.trim() : '';
+
+/**
+ * The FreeLLMAPI ids this deployment offers free.
  *
  * Deliberately a plain allowlist, without the discovered-catalogue intersection XKIRO_FREE_MODELS
  * was corrected into. That intersection exists because the xKiro gateway publishes a price and a
  * tier per id, so the server can check the operator's list against what the gateway actually gives
- * away. OmniRoute's /v1/models is the plain OpenAI shape — no pricing block, no access_tier — and
+ * away. FreeLLMAPI's /v1/models is the plain OpenAI shape — no pricing block, no access_tier — and
  * whether a run costs anything depends on which providers the operator connected to their own
  * install, which is knowledge only they have. There is nothing upstream to check a claimed id
  * against, so the operator naming it is the whole decision, and the list is taken verbatim.
+ *
+ * `auto` is always available on a FreeLLMAPI install and costs whatever the models it picks cost,
+ * so it is worth adding to this list once the operator has decided the router may spend their
+ * stacked free tiers on the deployment's behalf.
  */
 export function omniRoutePool(env = process.env) {
   return [...new Set((env.OMNIROUTE_FREE_MODELS || '').split(',').map(s => s.trim()).filter(id => id && id.length <= 200))];
@@ -235,15 +258,19 @@ export function resetKeyRotation() { poolCursor.clear(); }
  * the free tier (which key funds an entry), the paid tier (which key funds a plan model), the
  * credits branch of the proxy, and the admin dashboard (which key is being entered). The
  * dashboard lays its stored keys over the process environment under these same names, so nothing
- * downstream needs to know whether a key came from Render's dashboard or Hey Buddy's.
+ * downstream needs to know whether a key came from Render's dashboard or Signal Forge OS's.
  */
 export const PROVIDER_KEY_VARS = {
   openrouter: 'OPENROUTER_API_KEY',
   groq: 'GROQ_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
+  meta: 'META_API_KEY',
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   google: 'GOOGLE_API_KEY',
   cohere: 'COHERE_API_KEY',
+  xai: 'XAI_API_KEY',
+  venice: 'VENICE_API_KEY',
   xkiro: 'XKIRO_API_KEY',
   aihubmix: 'AIHUBMIX_API_KEY',
   huggingface: 'HF_TOKEN',
@@ -338,11 +365,27 @@ const STATIC_FREE = [
  * price, which is a stronger claim than any pattern — so they are taken as discovered, and
  * FREE_TIER_ALLOW_FRONTIER no longer has anything to unlock among them.
  */
+/**
+ * What this deployment may fund on its own account is the backend lane in the provider registry
+ * (Anthropic, OpenAI, Google, xAI, plus Meta, Azure and Bedrock once integrated). Everything else —
+ * gateways, relays, other countries, even other US hosts — is reachable only with a key the visitor
+ * brings, in the browser's own-key dropdown. See providerRegistry.mjs.
+ */
 export function freeModels(env = process.env, discovered = discoveredXkiro, tiers = adminTiers) {
+  // Not an option: the backend lane is the architecture, not a launch setting. It applies to the
+  // operator's own dashboard entries too, so a non-lane entry is dropped rather than quietly funded.
+  return allFreeModels(env, discovered, tiers).filter(m => isBackendProvider(m.provider));
+}
+
+function allFreeModels(env, discovered, tiers) {
   // The operator's own free list, first: an entry they wrote is theirs to fund, so it carries no
   // FRONTIER guard — the dashboard warns about the cost instead of refusing. In manual mode it is
-  // the whole pool.
-  const chosen = tiers.free.map(m => ({ ...m }));
+  // the whole pool. One exception: a FreeLLMAPI entry stays only while the adapter is configured
+  // end to end. Its base URL has no public default, so promoting one of its ids from the dashboard
+  // before OMNIROUTE_BASE_URL and OMNIROUTE_API_KEY are both set would advertise a model that can
+  // never be reached — the exact "warming up" lie this file exists to avoid.
+  const chosen = tiers.free.map(m => ({ ...m }))
+    .filter(m => m.provider !== 'omniroute' || omnirouteEnabled(env));
   if (tiers.mode === 'manual') return chosen;
   const liveOpenRouter = openRouterPool(env, discoveredOpenRouter);
   // `openrouter/auto` is the cycling entry: OpenRouter is asked to try the first id and fall back
@@ -411,7 +454,7 @@ export function openRouterPool(env = process.env, discovered = discoveredOpenRou
  * would be a locked door with nothing behind it.
  */
 export function paidModels(env = process.env, tiers = adminTiers) {
-  return tiers.paid.filter(m => Boolean(freeKey(m, env).key));
+  return tiers.paid.filter(m => isBackendProvider(m.provider) && Boolean(freeKey(m, env).key));
 }
 export function paidModel(id, env = process.env, tiers = adminTiers) {
   if (typeof id !== 'string') return undefined;
@@ -423,7 +466,7 @@ export function paidTierStatus(env = process.env, tiers = adminTiers) {
   return {
     // Reachable only when there is a token for a subscriber to hold; without one the tier is
     // configured but not yet open, and the browser says so rather than selling it.
-    enabled: models.length > 0 && Boolean(cleanCredential(env.SERVER_CREDIT_ACCESS_TOKEN)),
+    enabled: models.length > 0 && hasPlanAccess(env),
     configured: tiers.paid.length > 0,
     models: models.map(m => m.id),
     providers: Object.fromEntries(models.map(m => [m.id, m.provider])),
@@ -465,6 +508,7 @@ export function freeTierStatus(env = process.env, discovered = discoveredXkiro) 
     // Labels the operator gave dashboard-chosen entries, so the dropdown can name them.
     labels: Object.fromEntries(funded.filter(m => m.label).map(m => [m.id, m.label])),
     monthlyCredits: monthlyPool(env),
+    maxOutputTokens: freeOutputTokens(env),
     perHour: burstLimit(env),
     weight: FREE_WEIGHT,
   };

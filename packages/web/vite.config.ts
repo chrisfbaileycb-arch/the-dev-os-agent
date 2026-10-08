@@ -1,4 +1,7 @@
 import { defineConfig, type Plugin } from 'vitest/config';
+import { loadEnv } from 'vite';
+// Shared JavaScript helper, also used by the client gate and the tests (typed by betaHash.d.mts).
+import { BETA_DEV_PASSCODE, deriveBetaHash } from './src/lib/betaHash.mjs';
 // @ts-expect-error Server module is JavaScript and intentionally excluded from client bundles.
 import { createProxy } from './server/proxy.mjs';
 // @ts-expect-error Server modules are JavaScript.
@@ -23,7 +26,7 @@ import { createFetcher } from './server/fetch.mjs';
 import { createGithub } from './server/github.mjs';
 // @ts-expect-error Server modules are JavaScript.
 import { createJobs, openJobs } from './server/jobs.mjs';
-const api: Plugin = { name: 'heybuddy-api', async configureServer(server) { const db = openDatabase('data/dev.sqlite'); const settings = await openSettings({ db }); const auth = createAuth({ db }); const handlers = [auth, createAdmin({ db, settings }), createProxy({ db, settings }), createState({ db, settings }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs: openJobs(db.raw()) })]; server.middlewares.use((req: { url?: string }, res, next) => { if (new URL(req.url ?? '/', 'http://dev').pathname === '/admin') req.url = '/'; void (async () => { for (const handle of handlers) if (await handle(req, res)) return; next(); })().catch(next); }); } };
+const api: Plugin = { name: 'signal-forge-api', async configureServer(server) { const db = openDatabase('data/dev.sqlite'); const settings = await openSettings({ db }); const auth = createAuth({ db }); const handlers = [auth, createAdmin({ db, settings }), createProxy({ db, settings }), createState({ db, settings }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs: openJobs(db.raw()) })]; server.middlewares.use((req: { url?: string }, res, next) => { if (new URL(req.url ?? '/', 'http://dev').pathname === '/admin') req.url = '/'; void (async () => { for (const handle of handlers) if (await handle(req, res)) return; next(); })().catch(next); }); } };
 // Emits dist/sw.js with the precache list taken from the real bundle, so the offline shell always matches the build.
 const shellWorker: Plugin = { name: 'shell-worker', apply: 'build', generateBundle(_options, bundle) { const { source } = buildShellWorker(Object.keys(bundle)); this.emitFile({ type: 'asset', fileName: 'sw.js', source }); } };
 

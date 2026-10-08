@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, Download, KeyRound, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
+import { CircleAlert, CircleCheck, Download, KeyRound, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
 import Rail, { type Page } from './ui/Rail';
 import Dock, { type Attached, type RunMode } from './ui/Dock';
 import RunCard from './ui/RunCard';
+import WritingStatus from './ui/WritingStatus';
 import RosterDrawer, { RosterList } from './ui/Roster';
 import KnowledgeHub from './ui/Knowledge';
 import Settings from './ui/Settings';
 import Connectors, { type ConnectorTab } from './ui/Connectors';
+import GithubPullDialog from './ui/GithubPullDialog';
+import type { SyncToast } from './ui/GithubSyncDrawer';
 import { usePaneResize } from './ui/SplitPane';
 import OutputPanel from './ui/OutputPanel';
 import Pricing from './ui/Pricing';
@@ -17,15 +20,20 @@ import { iconFor } from './ui/icons';
 import { chatTurn } from './lib/chat';
 import { estimateTokens, findModel, tierFor, DEFAULT_MONTHLY_POOL, DEFAULT_FREE_POOL, type CatalogModel, type InferenceMode } from './lib/catalog';
 import { DEFAULT_SPLIT_PERCENT, clampSplit, normalizeStoredSplit } from './lib/split';
-import { retrieve } from './lib/memory';
+import { failureText, MemoryRejected, projectText, rememberRequest, retrieve } from './lib/memory';
+import { loadMemories, removeMemory, saveMemory, touchMemories } from './lib/memoryStore';
+import { clearPipes, loadPipes, savePipes, type PipeSettings } from './lib/pipes';
+import { latestPreviewReply, parseProject } from './lib/project';
+import { ensureRunnableBuild, expectsRunnablePreview, isContinuationRequest, needsPreviewRecovery } from './lib/buildPreview';
 import { listModels, ProviderError, validateConnection } from './lib/provider';
-import { clearProviderStorage, defaultConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, zeroConfigConnection, type Keyring, type Provider } from './lib/providers';
+import { clearProviderStorage, defaultConnection, requestConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, effectiveOutputLimit, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
-import { defaultModel, modelChoices, type ModelChoice } from './lib/modelChoices';
-import { clearDiscovered, isFresh, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
-import { defaultPersonaId, personaById, workflows, type Persona } from './lib/roster';
+import { modelChoices, preferredModel, type ModelChoice } from './lib/modelChoices';
+import { firstHealthyFree } from './lib/freeHealth';
+import { clearDiscovered, isFresh, keyFingerprint, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
+import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
-import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type Session } from './lib/store';
+import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type PlanReading, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
@@ -39,26 +47,35 @@ const now = () => new Date().toISOString();
 type Recognition = { lang: string; interimResults: boolean; continuous: boolean; start(): void; stop(): void; onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
 const recognitionCtor = () => (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => Recognition }).webkitSpeechRecognition;
 // Openers that show the range of what agents can do — code, analysis, and general questions.
-const starters: { text: string; persona: string; mode: RunMode }[] = [
-  { text: 'Write a TypeScript function that retries a fetch with exponential backoff and a hard timeout. Include the types and one usage example.', persona: 'coder', mode: 'chat' },
-  { text: 'Explain the difference between a database index and a materialised view, with one example where the wrong choice hurts.', persona: 'assistant', mode: 'chat' },
+const starters: { text: string; persona: string; workMode: WorkMode }[] = [
+  { text: 'Write a TypeScript function that retries a fetch with exponential backoff and a hard timeout. Include the types and one usage example.', persona: 'coder', workMode: 'build' },
+  { text: 'Explain the difference between a database index and a materialised view, with one example where the wrong choice hurts.', persona: 'assistant', workMode: 'chat' },
 ];
-/**
- * The connection as it goes over the wire. A zero-config run carries no secret at all — the
- * server funds it from its own key — so both the visitor's key and the deployment token are
- * stripped before the request leaves the tab.
- */
-const requestConnection = (c: Connection): Connection =>
-  c.inference === 'free' ? { ...c, token: '', serverAccessToken: '' }
-    : c.inference === 'credits' ? { ...c, token: '' }
-      : { ...c, serverAccessToken: '' };
+
+function AssistantReply({ content, working }: { content: string; working: boolean }) {
+  if (!content) return working ? <WritingStatus content="" working /> : <pre className="msg-body" />;
+  const fence = content.indexOf('```');
+  const bareHtml = content.search(/<!doctype\s+html|<html\b/i);
+  const start = fence < 0 ? bareHtml : bareHtml < 0 ? fence : Math.min(fence, bareHtml);
+  if (start < 0) return <><pre className="msg-body">{content}</pre><WritingStatus content={content} working={working} /></>;
+  const explanation = content.slice(0, start).trim();
+  return <div className="generated-reply">
+    {explanation && <pre className="msg-body">{explanation}</pre>}
+    <details className="generated-source">
+      <summary>Generated code {working ? '· writing…' : '· show source'}</summary>
+      <pre className="msg-body">{content.slice(start)}</pre>
+    </details>
+    <WritingStatus content={content} working={working} code />
+  </div>;
+}
+
 
 async function readTextFile(file: File): Promise<Attached> {
   if (!/\.(txt|md|csv|json|html)$/i.test(file.name) || file.size > 200_000) throw new Error(`${file.name}: attach text, Markdown, CSV, JSON, or HTML files under 200 KB.`);
   return { name: file.name.slice(0, 80), content: (await file.text()).slice(0, 60_000) };
 }
 
-export default function App() {
+export default function App({ onLock }: { onLock?: () => void } = {}) {
   // /admin is the operator dashboard, a view inside this same app; the URL is kept in step below.
   const [page, setPage] = useState<Page>(() => location.pathname === '/admin' ? 'admin' : 'workspace');
   const [adminActive, setAdminActive] = useState(false);
@@ -83,6 +100,9 @@ export default function App() {
   const [discovered, setDiscovered] = useState<Discovered>(loadDiscovered);
   const [discovering, setDiscovering] = useState<Set<Provider>>(() => new Set());
   /** A paid-plan model the visitor picked without a plan token. */
+  const [verifiedPlan, setVerifiedPlan] = useState<{ token: string; reading: PlanReading } | null>(null);
+  const [planChecking, setPlanChecking] = useState(false);
+  const [planError, setPlanError] = useState('');
   const [planPrompt, setPlanPrompt] = useState<ModelChoice | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]); const sessionsRef = useRef<Session[]>([]);
   const [runs, setRuns] = useState<Run[]>([]); const runsRef = useRef<Run[]>([]);
@@ -93,14 +113,23 @@ export default function App() {
   const [serverReachable, setServerReachable] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [personaId, setPersonaId] = useState(defaultPersonaId);
-  const [draft, setDraft] = useState(''); const [mode, setMode] = useState<RunMode>('chat'); const [attachments, setAttachments] = useState<Attached[]>([]);
+  const [draft, setDraft] = useState(''); const [attachments, setAttachments] = useState<Attached[]>([]);
+  /** How the person is working — Chat, Build, or Plan — and which kind of plan. Saved per session. */
+  const [workMode, setWorkModeState] = useState<WorkMode>('chat'); const [plan, setPlanState] = useState<Workflow>('build');
+  /** Persistent memory, held in IndexedDB; only the matching few go with any prompt. */
+  const [memories, setMemories] = useState<MemoryEntry[]>([]); const memoriesRef = useRef<MemoryEntry[]>([]);
+  /** Which provider groups the model picker shows, and where a local Ollama lives. */
+  const [pipes, setPipesState] = useState<PipeSettings>(loadPipes);
   const [busy, setBusy] = useState(false); const [ready, setReady] = useState(false); const [notice, setNotice] = useState('');
+  const [writingReplyId, setWritingReplyId] = useState<string | null>(null);
+  const [modelFallback, setModelFallback] = useState<{ extended: string; fallback: string } | null>(null);
   const [rosterOpen, setRosterOpen] = useState(false); const [confirm, setConfirm] = useState<'run' | 'clear' | null>(null);
   /** A premium model the visitor picked that nothing here can pay for, awaiting their own key. */
   const [keyPrompt, setKeyPrompt] = useState<CatalogModel | null>(null);
   // Agents the user wrote. Held here because the drawer creates them and the dock displays them.
   const [custom, setCustom] = useState<Persona[]>(customAgents);
   const [photos, setPhotos] = useState<Photo[]>([]);
+  const [githubPullOpen, setGithubPullOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
   const [previewOpen, setPreviewOpen] = useState(false);
   /**
@@ -129,13 +158,38 @@ export default function App() {
   const [googleEnabled, setGoogleEnabled] = useState(false);
   const abortRef = useRef<AbortController | null>(null); const worker = useRef<Worker | null>(null); const recognition = useRef<Recognition | null>(null);
   const approvedRuns = useRef(false); const endRef = useRef<HTMLDivElement>(null);
+  const attemptedPreviewRecovery = useRef(new Set<string>());
 
   const setMcp = (list: McpConnection[]) => { saveConnections(list); setMcpState(list); };
   const setSettings = (next: ConnectorSettings) => { saveSettings(next); setSettingsState(next); };
+  const [toast, setToast] = useState<SyncToast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = (next: SyncToast) => {
+    setToast(next);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), next.tone === 'error' ? 7000 : 4000);
+  };
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
   const active = sessions.find(s => s.id === activeId) ?? null;
-  const persona = personaById(active?.persona ?? personaId);
+  // Keep the most recent runnable artifact on the canvas while the next reply is still streaming.
+  const previewContent = useMemo(() => latestPreviewReply(active?.messages ?? []), [active?.messages]);
+  const lastAssistant = active?.messages.filter(m => m.role === 'assistant' && !m.runId).at(-1);
+  const lastTruncated = Boolean(lastAssistant?.truncated && !busy);
+  const lastRequest = active?.messages.filter(m => m.role === 'user').at(-1);
+  const previewNeedsFinish = Boolean(!busy && lastAssistant?.content && needsPreviewRecovery(lastAssistant.content,
+    active?.mode === 'build' && expectsRunnablePreview(lastRequest?.content ?? '', Boolean(parseProject(previewContent))), lastAssistant.truncated));
+  const previewIssue = previewNeedsFinish ? lastAssistant?.error ?? 'This build still needs code to finish its preview.' : undefined;
+  // Build binds the Coder / Builder agent; Chat and Plan use the agent the person chose.
+  const persona = workMode === 'build' ? personaById(BUILDER_PERSONA_ID) : personaById(active?.persona ?? personaId);
+  const mode: RunMode = workMode === 'plan' ? plan : 'chat';
+  const setPipes = (next: PipeSettings) => { savePipes(next); setPipesState(next); if (next.ollamaUrl !== pipes.ollamaUrl) setConnection(c => c.provider === 'ollama' ? { ...c, endpoint: next.ollamaUrl } : c); };
+  const commitMemories = (next: MemoryEntry[]) => { memoriesRef.current = next; setMemories(next); };
   const inference = connection.inference ?? 'byok';
+  const planToken = connection.serverAccessToken?.trim() ?? '';
+  const subscription = verifiedPlan?.token === planToken ? verifiedPlan.reading : null;
+  const outputCap = inference === 'free' ? deployment.free.maxOutputTokens ?? 16384 : inference === 'credits' ? subscription?.plan.maxOutputTokens ?? 16384 : 65536;
+  const effectiveOutput = effectiveOutputLimit(connection, outputCap);
   // Gateway labels, so a discovered id reads as a model name everywhere it is shown.
   const labels = useMemo(() => labelsFrom(deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, ...Object.values(discovered).map(d => Object.fromEntries((d?.models ?? []).map(m => [m.id, m.label])))), [deployment.gatewayCatalog, deployment.free.labels, deployment.paid.labels, discovered]);
   const label = modelLabel(connection.model, labels);
@@ -143,7 +197,12 @@ export default function App() {
   // What can be paid for right now, from the keyring rather than from the active connection alone.
   // A plan token in hand opens the plan tier whatever mode is current: picking a plan model is
   // what switches the mode, so the token cannot wait on a mode it is the only route into.
-  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: Boolean(connection.serverAccessToken?.trim()) }), [deployment.free, keys, connection.token, connection.provider, connection.serverAccessToken]);
+  const reach: Reach = useMemo(() => ({ free: deployment.free, keys, token: connection.token, provider: connection.provider, credits: Boolean(subscription), keyless: pipes.ollamaEnabled ? ['ollama' as Provider] : [] }), [deployment.free, keys, connection.token, connection.provider, subscription, pipes.ollamaEnabled]);
+  /**
+   * Every credential this visitor holds, matched exactly by the secret scanner: nothing on this
+   * list is ever written to memory, and it is redacted from any ZIP or commit.
+   */
+  const knownSecrets = useMemo(() => [...Object.values(keys), connection.token, connection.serverAccessToken ?? '', settings.github.token, loadSyncSettings().token, ...mcp.map(c => c.token)].filter(k => k && k.trim().length >= 8), [keys, connection.token, connection.serverAccessToken, settings.github.token, mcp]);
   const keyed = useMemo(() => keyedProviders(reach), [reach]);
   const connectorCount = activeCount(settings, mcp);
   // The credit meter tracks whichever budget the current run actually draws from.
@@ -185,6 +244,19 @@ export default function App() {
         }
         return c;
       });
+      // The first funded model is only a placeholder until one has been seen to answer.
+      if (d.free.enabled && d.free.models.length) {
+        void firstHealthyFree(d.free.models, id => d.free.providers[id], controller.signal).then(id => {
+          if (controller.signal.aborted) return;
+          if (!id) { setNotice('The free models are not answering right now. Get a free key in Settings (Google, GitHub, Groq or Cerebras) and keep going.'); return; }
+          const served = d.free.providers[id];
+          setConnection(c => {
+            if (c.inference !== 'free' || c.model === id) return c;
+            const chosen = (served && Object.hasOwn(providers, served) ? served : c.provider ?? 'xkiro') as Provider;
+            return { ...c, model: id, provider: chosen, endpoint: providers[chosen].endpoint };
+          });
+        });
+      }
       if (!d.free.enabled && d.reachable) setNotice(FREE_TIER_WARMING);
       else if (!d.reachable) setNotice('Could not reach this deployment, so no model is selected yet. Reload to try again, or add your own key in Settings.');
       else setNotice('');
@@ -192,16 +264,32 @@ export default function App() {
     // Whether a Render background worker is deployed alongside this web service. Workflows run
     // in the browser either way; this only reports that the heavier path exists.
     void loadWorkerStatus(controller.signal).then(w => { if (!controller.signal.aborted) setBackgroundWorker(w.worker); });
+    void loadMemories().then(list => { if (!controller.signal.aborted) commitMemories(list); });
     loadWorkspace(controller.signal).then(ws => {
       if (controller.signal.aborted) return;
       commitSessions(ws.sessions); runsRef.current = ws.runs; setRuns(ws.runs); ledgerRef.current = ws.ledger; setLedger(ws.ledger);
-      setKnowledge(ws.knowledge); setBalance(ws.balance); setFreeBalance(ws.freeBalance); setServerReachable(ws.serverReachable);
-      setActiveId(ws.sessions[0]?.id ?? null); if (ws.sessions[0]) setPersonaId(ws.sessions[0].persona);
+      setKnowledge(ws.knowledge); if (!connection.serverAccessToken?.trim()) setBalance(ws.balance); setFreeBalance(ws.freeBalance); setServerReachable(ws.serverReachable);
+      setActiveId(ws.sessions[0]?.id ?? null); if (ws.sessions[0]) { setPersonaId(ws.sessions[0].persona); setWorkModeState(ws.sessions[0].mode ?? 'chat'); setPlanState(ws.sessions[0].plan ?? 'build'); }
     })
       .catch(e => { if (!controller.signal.aborted) setNotice(errorText(e)); })
       .finally(() => { if (!controller.signal.aborted) setReady(true); });
     return () => { controller.abort(); worker.current?.terminate(); };
   }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    setVerifiedPlan(null); setPlanError('');
+    if (!planToken) { setPlanChecking(false); return; }
+    setPlanChecking(true);
+    const timer = setTimeout(() => {
+      void sync.plan(planToken, controller.signal).then(reading => {
+        if (controller.signal.aborted) return;
+        if (reading) { setVerifiedPlan({ token: planToken, reading }); setBalance(serverBalance(reading.pool, reading.used)); setConnection(c => c.inference === 'credits' && !c.customOutputLimit ? { ...c, maxTokens: reading.plan.maxOutputTokens } : c); }
+        else { setPlanError('Could not verify this token. Check the token and server connection.'); setBalance(serverBalance(0, 0)); }
+        setPlanChecking(false);
+      });
+    }, 400);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [planToken]);
   useEffect(() => { if (!busy) return; const onLeave = (e: BeforeUnloadEvent) => { e.preventDefault(); }; window.addEventListener('beforeunload', onLeave); return () => window.removeEventListener('beforeunload', onLeave); }, [busy]);
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [active?.messages, runs]);
 
@@ -213,10 +301,75 @@ export default function App() {
   function patchMessage(sessionId: string, messageId: string, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>), persist = false) {
     patchSession(sessionId, s => ({ ...s, messages: s.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === 'function' ? patch(m) : patch) } : m) }), persist);
   }
-  function newSession(): Session { const s: Session = { id: crypto.randomUUID(), title: 'New session', persona: persona.id, createdAt: now(), updatedAt: now(), messages: [] }; commitSessions([s, ...sessionsRef.current]); setActiveId(s.id); setPage('workspace'); return s; }
+  function newSession(): Session { const s: Session = { id: crypto.randomUUID(), title: 'New session', persona: workMode === 'build' ? personaId : persona.id, createdAt: now(), updatedAt: now(), messages: [], mode: workMode, plan }; commitSessions([s, ...sessionsRef.current]); setActiveId(s.id); setPage('workspace'); return s; }
+  /** Open a session and return to how the person was working in it. */
+  function openSession(s: Session) { setActiveId(s.id); setPersonaId(s.persona); setWorkModeState(s.mode ?? 'chat'); setPlanState(s.plan ?? 'build'); }
+
+  /** Pull a whole repository into the workspace, hydrating IndexedDB and opening the preview. */
+  function importProjectToWorkspace(project: { owner: string; repo: string; branch: string; files: { path: string; content: string }[] }) {
+    const title = `${project.owner}/${project.repo}`;
+    const fencedFiles = project.files.map(f => `\`\`\`${f.path}\n${f.content}\n\`\`\``).join('\n\n');
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: `Imported repository ${title} (branch ${project.branch}) with ${project.files.length} file${project.files.length === 1 ? '' : 's'}.`,
+      at: now(),
+    };
+    const assistantMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: `I've imported **${title}** on branch \`${project.branch}\` with ${project.files.length} file${project.files.length === 1 ? '' : 's'}:\n\n${fencedFiles}`,
+      at: now(),
+      persona: BUILDER_PERSONA_ID,
+    };
+    const session: Session = {
+      id: crypto.randomUUID(),
+      title: `${title} (${project.branch})`,
+      persona: BUILDER_PERSONA_ID,
+      createdAt: now(),
+      updatedAt: now(),
+      messages: [userMsg, assistantMsg],
+      mode: 'build',
+      plan: 'build',
+    };
+    commitSessions([session, ...sessionsRef.current]);
+    setActiveId(session.id);
+    setPersonaId(BUILDER_PERSONA_ID);
+    setWorkModeState('build');
+    setPreviewOpen(true);
+    resetSplit();
+    setPage('workspace');
+    void persistSession(session).catch(e => setNotice(errorText(e)));
+  }
+  /** The mode toggle, bound to the active session so switching sessions restores it. */
+  function chooseWorkMode(next: WorkMode) {
+    setWorkModeState(next);
+    if (next === 'chat' && personaId === BUILDER_PERSONA_ID) setPersonaId(defaultPersonaId);
+    if (active) patchSession(active.id, s => ({ ...s, mode: next, ...(next === 'chat' && s.persona === BUILDER_PERSONA_ID ? { persona: defaultPersonaId } : {}) }), true);
+    if (next === 'build' && !previewOpen) { setPreviewOpen(true); resetSplit(); }
+  }
+  function choosePlan(next: Workflow) { setPlanState(next); if (active) patchSession(active.id, s => ({ ...s, plan: next }), true); }
+  /** Save a memory through the secret check; a refusal is said plainly and nothing is written. */
+  async function remember(kind: MemoryKind, text: string, announce = false): Promise<boolean> {
+    try {
+      commitMemories(await saveMemory(kind, text, memoriesRef.current, knownSecrets));
+      if (announce) setNotice(`Remembered: ${text.slice(0, 120)}`);
+      return true;
+    } catch (e) {
+      if (e instanceof MemoryRejected) { if (announce || kind === 'preference') setNotice(e.message); return false; }
+      if (announce) setNotice(errorText(e));
+      return false;
+    }
+  }
   function ensureSession(): Session { return active ?? newSession(); }
-  async function deleteSession(id: string) { try { await storage.removeSession(id); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
-  function choosePersona(id: string) { setPersonaId(id); if (active) patchSession(active.id, s => ({ ...s, persona: id }), true); }
+  async function deleteSession(id: string) { try { await removeSessionEverywhere(id); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
+  /** Picking any agent other than the builder while in Build returns to Chat, since Build binds its own agent. */
+  function choosePersona(id: string) {
+    setPersonaId(id);
+    const leaveBuild = workMode === 'build' && id !== BUILDER_PERSONA_ID;
+    if (leaveBuild) setWorkModeState('chat');
+    if (active) patchSession(active.id, s => ({ ...s, persona: id, ...(leaveBuild ? { mode: 'chat' as const } : {}) }), true);
+  }
   /** A newly written agent is selected straight away: whoever just wrote it means to use it. */
   function addCustomAgent(created: Persona) { setCustom(customAgents()); choosePersona(created.id); setNotice(`${created.name} is ready. It is saved in this browser and appears in the agent drawer.`); }
   /** Deleting the agent in use falls back to the default rather than leaving a dangling id. */
@@ -246,7 +399,9 @@ export default function App() {
       const provider = known && Object.hasOwn(providers, known) ? known : c.provider ?? 'openrouter';
       // `mode` is the group the visitor picked from, which is a statement of intent and is taken
       // as one. Without it, inferenceFor decides — and now leaves a deliberate choice alone.
-      return { ...c, mode: 'remote', model: id, provider, endpoint: providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models) };
+      // A different provider never inherits the previous provider's key.
+      const token = provider === c.provider ? c.token : (keys[provider] ?? '');
+      return { ...c, mode: 'remote', model: id, provider, token, endpoint: provider === 'ollama' ? pipes.ollamaUrl : providers[provider].endpoint, inference: mode ?? inferenceFor(id, c.inference, deployment.free.models), maxTokens: mode === 'credits' && c.inference !== 'credits' ? subscription?.plan.maxOutputTokens ?? 16384 : c.maxTokens };
     });
     setNotice('');
   }
@@ -261,11 +416,12 @@ export default function App() {
    * the browser re-reads that number instead of inventing a second one; every other mode writes
    * its own ledger row locally and syncs it.
    */
-  async function charge(sessionId: string, count: number) {
-    if (inference === 'free') {
-      const reading = await sync.usage();
+  async function charge(sessionId: string, count: number, usage?: { input: number; output: number }) {
+    if (inference === 'free' || inference === 'credits') {
+      const reading = inference === 'credits' ? await sync.plan(planToken) : await sync.usage();
       if (!reading) return;
-      setFreeBalance(serverBalance(reading.freePool, reading.freeUsed));
+      if ('plan' in reading) { setVerifiedPlan({ token: planToken, reading }); setBalance(serverBalance(reading.pool, reading.used)); }
+      else setFreeBalance(serverBalance(reading.freePool, reading.freeUsed));
       if (reading.entry && !ledgerRef.current.some(e => e.id === reading.entry!.id)) {
         const next = [reading.entry, ...ledgerRef.current]; ledgerRef.current = next; setLedger(next);
         void storage.saveLedger(reading.entry).catch(() => { /* display-only; the server holds the record */ });
@@ -273,7 +429,7 @@ export default function App() {
       return;
     }
     try {
-      const entry = await recordUsage({ sessionId, model: connection.model, mode: inference, tokens: count });
+      const entry = await recordUsage({ sessionId, model: connection.model, mode: inference, tokens: count, usage });
       const next = [entry, ...ledgerRef.current]; ledgerRef.current = next; setLedger(next);
       setBalance(b => computeBalance(next, b.pool, b.source));
     } catch (e) { setNotice(errorText(e)); }
@@ -290,7 +446,8 @@ export default function App() {
   }
   function preflight(): string | null {
     try { validateConnection(connection); } catch (e) { return errorText(e); }
-    if (!online) return 'You are offline. Hosted models need a connection.';
+    if (connection.provider === 'ollama' && !pipes.ollamaEnabled) return 'Enable the local model connection in Settings first.';
+    if (!online && connection.provider !== 'ollama') return 'You are offline. Hosted models need a connection.';
     if (inference === 'free') {
       if (!deployment.free.enabled) return FREE_TIER_WARMING;
       if (!deployment.free.models.includes(connection.model)) return `${connection.model || 'No model'} is not on this deployment's free list. Pick a free model from the dropdown.`;
@@ -298,13 +455,13 @@ export default function App() {
       return null;
     }
     if (inference === 'credits') {
-      if (!connection.serverAccessToken) return 'Platform credits need the deployment access token. Add it in Settings, or switch to your own key.';
+      if (!subscription) return planChecking ? 'Verifying your plan token. Try again in a moment.' : 'Verify your plan access token in Settings, or use your own key or local model.';
       if (balance.remaining <= 0) return `Platform credits for ${balance.month} are used up. Switch to your own key or wait for the monthly reset.`;
       return null;
     }
     // The key that matters is the one for the model's own provider, which may have been typed into
     // the keyring without the connection's own token field ever being touched.
-    if (!connection.token && !keys[connection.provider ?? 'custom']?.trim() && connection.provider !== 'custom') return `Add a ${providers[connection.provider ?? 'custom'].name} key in Settings, or pick a free model from the dropdown.`;
+    if (!connection.token && !keys[connection.provider ?? 'custom']?.trim() && connection.provider !== 'custom' && !providers[connection.provider ?? 'custom'].keyless) return `Add a ${providers[connection.provider ?? 'custom'].name} key in Settings, or pick a free model from the dropdown.`;
     return null;
   }
 
@@ -339,42 +496,111 @@ export default function App() {
     recognition.current = r; try { r.start(); setListening(true); } catch { setNotice('Voice input could not start in this browser.'); }
   }
 
-  function send() {
-    const text = draft.trim(); if (!text || busy || !ready) return;
+  function send(overrideText?: string) {
+    const text = (typeof overrideText === 'string' ? overrideText : draft).trim(); if (!text || busy || !ready) return;
     const problem = preflight(); if (problem) { setNotice(problem); return; }
+    if (mode === 'chat' && lastAssistant && isContinuationRequest(text) && needsPreviewRecovery(lastAssistant.content, false, lastAssistant.truncated)) {
+      setDraft(''); void finishExistingPreview(); return;
+    }
+    // "remember that …" saves a preference as well as going to the agent as usual.
+    const preference = rememberRequest(text);
+    if (preference) void remember('preference', preference, true);
     if (mode !== 'chat' && photos.length) { setNotice('Photos go with chat messages. Workflows work from text; remove the photo or switch to Chat.'); return; }
     // A workflow is five requests, so a BYOK visitor is asked once per session before it spends.
     if (mode !== 'chat' && inference === 'byok' && !approvedRuns.current) { setConfirm('run'); return; }
-    const session = ensureSession(); const files = attachments; const shots = photos;
+    const session = ensureSession(); const files = typeof overrideText === 'string' ? [] : attachments; const shots = typeof overrideText === 'string' ? [] : photos;
     const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, at: now(), attachments: files.map(a => ({ name: a.name, chars: a.content.length })), photos: shots.map(ph => ({ name: ph.name, thumb: ph.thumb })) };
     const title = session.messages.length ? session.title : text.replace(/\s+/g, ' ').slice(0, 60);
-    setDraft(''); setAttachments([]); setPhotos([]); setNotice(''); setBusy(true); setPage('workspace');
+    setDraft(''); setAttachments([]); setPhotos([]); if (!preference) setNotice(''); setBusy(true); setPage('workspace');
+    if (workMode === 'build' && !previewOpen) { setPreviewOpen(true); resetSplit(); }
     if (mode === 'chat') void runChat(session, user, text, files, shots, title); else startWorkflow(session, user, text, files, title, mode);
   }
 
   async function runChat(session: Session, user: ChatMessage, text: string, files: Attached[], shots: Photo[], title: string) {
     const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: persona.name, model: label };
+    setWritingReplyId(reply.id);
     patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
     const controller = new AbortController(); abortRef.current = controller; const traces: ChatMessage['tools'] = [];
+    const previous = latestPreviewReply(session.messages);
+    const previewExpected = workMode === 'build' && expectsRunnablePreview(text, Boolean(parseProject(previous)));
+    const turnConnection = { ...requestConnection(connection, keys), maxTokens: effectiveOutput };
     try {
       const result = await chatTurn({
-        connection: requestConnection(connection), personaId: persona.id, history: session.messages, input: text,
+        connection: turnConnection, personaId: persona.id, history: session.messages, input: text,
+        buildPreview: previewExpected,
         attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })),
         tools: activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools }),
-        knowledge, signal: controller.signal,
+        knowledge, memories: memoriesRef.current, signal: controller.signal,
         onDelta: t => patchMessage(session.id, reply.id, { content: t }),
         onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); },
       });
-      patchMessage(session.id, reply.id, { content: result.text, tokens: result.tokens, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools }, true);
-      setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens: result.tokens });
-      await charge(session.id, result.tokens);
+      let content = result.text; let tokens = result.tokens; let usage = result.usage; let truncated = result.truncated; let previewError: string | undefined;
+      if (needsPreviewRecovery(content, previewExpected, truncated)) {
+        setNotice('Continuing the generated code to finish the preview…');
+        const completed = await ensureRunnableBuild({ goal: text, draft: content, truncated, previous: parseProject(previous) ? previous : undefined, connection: turnConnection, signal: controller.signal,
+          onDelta: partial => patchMessage(session.id, reply.id, { content: partial }) });
+        content = completed.text; tokens += completed.tokens; previewError = completed.issue;
+        usage = usage && completed.usage ? { input: usage.input + completed.usage.input, output: usage.output + completed.usage.output } : undefined;
+        truncated = completed.truncated;
+        setNotice(previewError ?? '');
+      }
+      patchMessage(session.id, reply.id, { content, tokens, error: previewError, latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tools: result.tools, truncated }, true);
+      setStats({ latencyMs: result.latencyMs, tokensPerSecond: result.tokensPerSecond, tokens });
+      if (result.memoriesUsed.length) void touchMemories(result.memoriesUsed, memoriesRef.current).then(commitMemories).catch(() => { /* bookkeeping only */ });
+      // A build that produced runnable files leaves one line of project context behind.
+      const built = parseProject(content);
+      if (built) void remember('project', projectText({ request: text, files: built.files.map(f => f.path) }));
+      await charge(session.id, tokens, usage);
     } catch (e) {
       const stopped = controller.signal.aborted;
       const message = freeTierMessage(e);
-      patchMessage(session.id, reply.id, m => stopped ? { content: `${m.content}${m.content ? '\n\n' : ''}(stopped)` } : { error: message }, true);
-      if (!stopped) setNotice(message);
-    } finally { abortRef.current = null; setBusy(false); }
+      patchMessage(session.id, reply.id, m => stopped ? { error: 'Stopped. Your generated output is saved.', truncated: needsPreviewRecovery(m.content) || undefined } : { error: message, truncated: needsPreviewRecovery(m.content, false, true) || undefined }, true);
+      if (!stopped) {
+        setNotice(message);
+        void remember('failure', failureText({ model: label, error: message, request: text }));
+        if (e instanceof ProviderError && e.fallbackModel) {
+          setModelFallback({ extended: connection.model, fallback: e.fallbackModel });
+        }
+      }
+    } finally { abortRef.current = null; setWritingReplyId(null); setBusy(false); }
   }
+
+  /** Recover a build saved before automatic completion was added, using its original request. */
+  async function finishExistingPreview() {
+    if (!active || !lastAssistant || !lastRequest || busy || !needsPreviewRecovery(lastAssistant.content, true, lastAssistant.truncated)) return;
+    const problem = preflight(); if (problem) { setNotice(problem); return; }
+    const controller = new AbortController(); abortRef.current = controller; setWritingReplyId(lastAssistant.id); setBusy(true);
+    setNotice('Finishing the saved build for the live preview…');
+    try {
+      const earlier = latestPreviewReply(active.messages.filter(m => m.id !== lastAssistant.id));
+      const goal = active.messages.filter(m => m.role === 'user' && !isContinuationRequest(m.content)).at(-1)?.content ?? lastRequest.content;
+      const recovery = await ensureRunnableBuild({ goal, draft: lastAssistant.content, truncated: lastAssistant.truncated, previous: parseProject(earlier) ? earlier : undefined, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, signal: controller.signal,
+        onDelta: partial => patchMessage(active.id, lastAssistant.id, { content: partial, error: undefined }) });
+      patchMessage(active.id, lastAssistant.id, { content: recovery.text, tokens: (lastAssistant.tokens ?? 0) + recovery.tokens, error: recovery.issue, truncated: recovery.truncated }, true);
+      setNotice(recovery.issue ?? '');
+      if (recovery.tokens) await charge(active.id, recovery.tokens, recovery.usage);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setNotice(errorText(error));
+        if (error instanceof ProviderError && error.fallbackModel) {
+          setModelFallback({ extended: connection.model, fallback: error.fallbackModel });
+        }
+      }
+    }
+    finally { abortRef.current = null; setWritingReplyId(null); setBusy(false); }
+  }
+
+  // Older sessions may contain a CSS-only Build reply from before automatic completion existed.
+  // Recover each saved reply once when its canvas is opened; a failed provider call must not loop.
+  useEffect(() => {
+    if (!ready || !previewOpen || !previewNeedsFinish || !active || !lastAssistant || !lastRequest || busy || lastAssistant.error) return;
+    const key = `${active.id}:${lastAssistant.id}`;
+    if (attemptedPreviewRecovery.current.has(key)) return;
+    attemptedPreviewRecovery.current.add(key);
+    void finishExistingPreview();
+    // The key, rather than callback identity, controls retries across session changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, previewOpen, previewNeedsFinish, active?.id, lastAssistant?.id, lastAssistant?.error, busy]);
 
   function startWorkflow(session: Session, user: ChatMessage, text: string, files: Attached[], title: string, workflow: Exclude<RunMode, 'chat'>) {
     const runId = crypto.randomUUID();
@@ -383,6 +609,7 @@ export default function App() {
     updateRun({ id: runId, goal: text, workflow, mode: connection.mode, model: connection.model, status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id, origin: 'browser' });
     const fail = (message: string) => {
       worker.current?.terminate(); worker.current = null; setBusy(false); setNotice(message);
+      void remember('failure', failureText({ model: label, error: message, request: text }));
       const current = runsRef.current.find(r => r.id === runId);
       if (current) { const failed: Run = { ...current, status: 'failed', completedAt: now(), steps: current.steps.map(s => ['running', 'assigned', 'queued', 'pending'].includes(s.status) ? { ...s, status: 'cancelled' } : s) }; updateRun(failed); void persistRun(failed).catch(e => setNotice(errorText(e))); }
     };
@@ -395,7 +622,7 @@ export default function App() {
         if (event.data.type === 'done') {
           const done = event.data.run;
           void persistRun(done).catch(e => setNotice(errorText(e)));
-          if (done.status === 'failed') setNotice(done.steps.find(s => s.error)?.error || 'The run failed. Check your model and key in Settings.');
+          if (done.status === 'failed') { const why = done.steps.find(s => s.error)?.error || 'The run failed. Check your model and key in Settings.'; setNotice(why); void remember('failure', failureText({ model: label, error: why, request: text })); }
           setBusy(false); worker.current?.terminate(); worker.current = null;
           setStats(s => ({ latencyMs: s?.latencyMs ?? 0, tokensPerSecond: s?.tokensPerSecond ?? 0, tokens: done.tokens }));
           void charge(session.id, done.tokens); patchMessage(session.id, reply.id, { tokens: done.tokens }, true);
@@ -406,11 +633,13 @@ export default function App() {
       // stage-candidate list is the deployment's funded ids only when the visitor is actually on
       // the free tier — a BYOK run stays on the visitor's own model for every stage.
       const stageCandidates = inference === 'free' ? deployment.free.models : [];
-      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: requestConnection(connection), knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates });
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, approvalGates: true });
     } catch (e) { fail(errorText(e)); }
   }
 
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
+  /** Release the plan's current approval gate so the next phase runs. */
+  function approveRun() { worker.current?.postMessage({ type: 'approve' }); }
   /**
    * Read what one provider's key reaches and remember it for the dock and Settings alike.
    *
@@ -420,15 +649,18 @@ export default function App() {
    */
   async function discover(provider: Provider, quiet = false) {
     const key = provider === connection.provider && connection.token?.trim() ? connection.token : keys[provider];
-    if (!key?.trim() && provider !== 'openrouter') return;
+    const keyless = Boolean(providers[provider].keyless);
+    if (!key?.trim() && provider !== 'openrouter' && !keyless) return;
     setDiscovering(d => new Set(d).add(provider));
     try {
-      const found = await listModels({ ...defaultConnection(provider), token: key ?? '', inference: 'byok' }, new AbortController().signal);
+      const found = await listModels({ ...defaultConnection(provider), ...(provider === 'ollama' ? { endpoint: pipes.ollamaUrl } : {}), token: key ?? '', inference: 'byok' }, new AbortController().signal);
       const models = modelChoices(found);
-      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now() } }; saveDiscovered(next); return next; });
+      setDiscovered(d => { const next = { ...d, [provider]: { models, at: Date.now(), key: keyFingerprint(provider === 'ollama' ? pipes.ollamaUrl + (key ?? '') : key) } }; saveDiscovered(next); return next; });
+      // A key registered without choosing a model lands on the provider's flagship, or the
+      // strongest model it reaches — quiet discoveries included, so nobody has to pick one first.
+      const ids = models.map(m => m.id);
+      if (ids.length && connection.inference === 'byok' && provider === connection.provider && !ids.includes(connection.model)) setConnection(c => c.inference === 'byok' && c.provider === provider && !ids.includes(c.model) ? { ...c, model: preferredModel(models, providers[provider].flagship) ?? ids[0] } : c);
       if (!quiet) {
-        const ids = models.map(m => m.id);
-        if (ids.length && provider === connection.provider && !ids.includes(connection.model)) setConnection(c => ({ ...c, model: defaultModel(c.model, ids, deployment.free.models) ?? ids[0] }));
         setNotice(ids.length ? `${providers[provider].name}: ${ids.length.toLocaleString()} model${ids.length === 1 ? '' : 's'} on your key. They are in the dropdown now.` : 'The endpoint returned no models.');
       }
     } catch (e) {
@@ -439,12 +671,12 @@ export default function App() {
   // A key, saved or being typed, lists its models by itself: the dropdown should show what the
   // key reaches without a trip to Settings. Debounced so a key being pasted asks once.
   useEffect(() => {
-    const due = [...keyed].filter(id => !isFresh(discovered[id]) && !discovering.has(id));
+    const due = [...keyed].filter(id => !isFresh(discovered[id], Date.now(), keyFingerprint(id === 'ollama' ? pipes.ollamaUrl + (keys.ollama ?? '') : id === connection.provider && connection.token?.trim() ? connection.token : keys[id])) && !discovering.has(id));
     if (!due.length) return;
     const timer = setTimeout(() => { for (const id of due) void discover(id, true); }, 700);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyed, connection.token]);
+  }, [keyed, connection.token, pipes.ollamaUrl]);
   // Keep the address bar honest about which view is open.
   useEffect(() => {
     const want = page === 'admin' ? '/admin' : '/';
@@ -468,7 +700,7 @@ export default function App() {
   async function clearAll() {
     setConfirm(null);
     try {
-      await clearWorkspaceData(); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents();
+      await clearWorkspaceData(); clearPipes(); setPipesState(loadPipes()); commitMemories([]); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents();
       setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]); setCustom([]); setPersonaId(defaultPersonaId);
       runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null);
       setBalance(b => computeBalance([], b.pool, b.source)); setFreeBalance(b => computeBalance([], b.pool, 'local', undefined, 'free'));
@@ -483,25 +715,46 @@ export default function App() {
 
   const PersonaIcon = iconFor(persona.icon);
   return <div className={collapsed ? 'app rail-collapsed' : 'app'}>
-    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} admin={adminActive} />
+    <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} admin={adminActive} onLock={onLock} />
     <div className="main">
-      {(!online || notice) && <div className="notices">
+      {(!online || notice || modelFallback) && <div className="notices">
         {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. Hosted models need a connection.</span></div>}
-        {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
+        {modelFallback && (
+          <div className="notice warning" role="status">
+            <CircleAlert size={13} />
+            <span>Extended catalog model <strong>{modelFallback.extended}</strong> is unavailable. Switch to active default model <strong>{modelFallback.fallback}</strong>?</span>
+            <button
+              type="button"
+              className="notice-action"
+              onClick={() => {
+                const targetModel = modelFallback.fallback;
+                setConnection(c => ({ ...c, model: targetModel }));
+                setNotice(`Switched to active default model: ${modelLabel(targetModel, labels)}`);
+                setModelFallback(null);
+              }}
+            >
+              Switch to {modelLabel(modelFallback.fallback, labels)}
+            </button>
+            <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setModelFallback(null)}>
+              <X size={13} />
+            </button>
+          </div>
+        )}
+        {notice && !modelFallback && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
       </div>}
       <div className="content">
         {page === 'workspace' && <div className={`${previewOpen ? 'workspace with-preview' : 'workspace'}${resizing ? ' resizing' : ''}`} style={previewOpen ? { gridTemplateColumns: `224px minmax(0, ${chatPercent}fr) 8px minmax(0, ${100 - chatPercent}fr)` } : undefined}>
           <aside className="sessions">
             <div className="sessions-head"><strong>Sessions</strong><button className="icon-button" aria-label="New session" title="New session" disabled={busy} onClick={newSession}><Plus size={14} /></button></div>
-            {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => { setActiveId(s.id); setPersonaId(s.persona); }}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
+            {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => openSession(s)}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
             {!sessions.length && <p className="help">No sessions yet. Your first message starts one.</p>}
           </aside>
           <section className="canvas">
             <header className="canvas-head">
-              <select className="session-select" aria-label="Session" value={activeId ?? ''} disabled={busy} onChange={e => { if (e.target.value === '__new') newSession(); else { setActiveId(e.target.value); const s = sessionsRef.current.find(x => x.id === e.target.value); if (s) setPersonaId(s.persona); } }}><option value="__new">New session</option>{sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select>
+              <select className="session-select" aria-label="Session" value={activeId ?? ''} disabled={busy} onChange={e => { if (e.target.value === '__new') newSession(); else { const s = sessionsRef.current.find(x => x.id === e.target.value); if (s) openSession(s); } }}><option value="__new">New session</option>{sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select>
               <span className="canvas-title"><PersonaIcon size={14} strokeWidth={1.75} />{active ? active.title : 'New session'}<small>{persona.name}</small></span>
               <span className="row gap">
-                {active && <><button className="icon-button" title="Export session" aria-label="Export session" onClick={() => download('heybuddy-session.md', exportSession(active))}><Download size={14} /></button><button className="icon-button" title="Delete session" aria-label="Delete session" disabled={busy} onClick={() => void deleteSession(active.id)}><Trash2 size={14} /></button></>}
+                {active && <><button className="icon-button" title="Export session" aria-label="Export session" onClick={() => download('signal-forge-session.md', exportSession(active))}><Download size={14} /></button><button className="icon-button" title="Delete session" aria-label="Delete session" disabled={busy} onClick={() => void deleteSession(active.id)}><Trash2 size={14} /></button></>}
                 <button className={previewOpen ? 'icon-button live' : 'icon-button'} title={previewOpen ? 'Hide output panel' : 'Show output panel'} aria-label={previewOpen ? 'Hide output panel' : 'Show output panel'} onClick={() => { if (previewOpen) setPreviewOpen(false); else { setPreviewOpen(true); resetSplit(); } }}>{previewOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}</button>
               </span>
             </header>
@@ -510,14 +763,14 @@ export default function App() {
                 <h1>Your AI crew. Always in your corner.</h1>
                 <p>Ask a question, paste an error, or ask for code — the Assistant answers directly, with no setup and no connectors to switch on. Drop in a file if it helps, and pick a different agent or write your own whenever you want one. {deployment.free.enabled ? 'No sign-up and no API key: your first message streams on a model this deployment funds.' : 'Add a provider key in Settings for real replies.'}</p>
                 {deployment.free.enabled && inference === 'free' && <p className="starter-badge"><Sparkles size={13} strokeWidth={2} />Running on {label} · {freeBalance.remaining.toLocaleString()} free credits left this month</p>}
-                <div className="starter-grid">{starters.map((s, i) => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={i} className="starter-card" onClick={() => { choosePersona(s.persona); setMode(s.mode); setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
+                <div className="starter-grid">{starters.map((s, i) => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={i} className="starter-card" onClick={() => { if (s.workMode === 'build') chooseWorkMode('build'); else { chooseWorkMode(s.workMode); choosePersona(s.persona); } setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
               </div>}
               {active?.messages.map(m => {
                 if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}</div>{m.photos && m.photos.length > 0 && <div className="msg-photos">{m.photos.map(ph => <img key={ph.name} src={ph.thumb} alt={ph.name} title={ph.name} />)}</div>}<pre className="msg-body">{m.content}</pre></article>;
                 const run = m.runId ? runs.find(r => r.id === m.runId) : undefined;
                 return <article key={m.id} className="msg agent">
                   <div className="msg-meta"><strong>{m.persona ?? 'Agent'}</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.model && <em>{m.model}</em>}{m.tokens ? <em>{m.tokens.toLocaleString()} tok</em> : null}{m.latencyMs ? <em>{m.latencyMs} ms</em> : null}</div>
-                  {run ? <RunCard run={run} /> : <pre className="msg-body">{m.content || (busy && !m.error ? 'Working…' : '')}</pre>}
+                  {run ? <RunCard run={run} onApprove={run.status === 'awaiting_approval' ? approveRun : undefined} onStop={run.status === 'awaiting_approval' ? stop : undefined} /> : <AssistantReply content={m.content} working={busy && m.id === writingReplyId && !m.error} />}
                   {m.tools?.map((t, i) => { const args = JSON.stringify(t.args); return <div key={i} className={t.ok ? 'tool-trace' : 'tool-trace failed'}><Wrench size={11} /><code>{t.tool} {args.length > 60 ? `${args.slice(0, 57)}...` : args}</code><span>{t.summary}</span></div>; })}
                   {m.error && <p className="msg-error"><CircleAlert size={12} />{m.error}</p>}
                 </article>;
@@ -525,26 +778,34 @@ export default function App() {
               <div ref={endRef} />
             </div>
             <Dock
-              draft={draft} setDraft={setDraft} mode={mode} setMode={setMode}
+              draft={draft} setDraft={setDraft} workMode={workMode} setWorkMode={chooseWorkMode} plan={plan} setPlan={choosePlan}
               persona={persona} openRoster={() => setRosterOpen(true)}
               attachments={attachments} photos={photos} addFiles={f => void addFiles(f)}
               removeAttachment={name => setAttachments(a => a.filter(x => x.name !== name))}
               removePhoto={name => setPhotos(ps => ps.filter(x => x.name !== name))}
-              openConnectors={() => openConnectors()} connectorCount={connectorCount}
-              model={connection.model} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
-              discovered={discovered} discovering={discovering}
+              openConnectors={() => openConnectors()} connectorCount={connectorCount} openGithubPull={() => setGithubPullOpen(true)}
+              model={connection.model} provider={connection.provider} openSettings={() => setPage('settings')} inference={inference} free={deployment.free} paid={deployment.paid} labels={labels} reach={reach} keyed={keyed}
+              discovered={discovered} discovering={discovering} pipes={pipes}
               pickModel={pickModel} modelNeedsKey={modelNeedsKey} modelNeedsPlan={setPlanPrompt} discover={id => void discover(id)}
               busy={busy} ready={ready} send={send} stop={stop}
               listening={listening} voiceSupported={Boolean(recognitionCtor())} toggleVoice={toggleVoice}
               tokens={tokens}
+              truncated={lastTruncated}
+              onContinue={() => previewNeedsFinish ? void finishExistingPreview() : send('continue from where you left off')}
             />
           </section>
           {previewOpen && <>
             <button className="pane-divider" data-pane-divider {...dividerProps}><span /></button>
             <OutputPanel
-              content={active?.messages.slice().reverse().find(m => m.role === 'assistant')?.content ?? ''}
+              key={activeId ?? 'new'}
+              content={previewContent}
+              issue={previewIssue}
+              onFinish={previewNeedsFinish ? () => void finishExistingPreview() : undefined}
               close={() => setPreviewOpen(false)}
               github={settings.github}
+              updateGithub={(patch: Partial<GithubSettings>) => setSettings({ ...settings, github: { ...settings.github, ...patch } })}
+              secrets={knownSecrets}
+              request={active?.messages.slice().reverse().find(m => m.role === 'user')?.content}
               openConnectors={() => openConnectors('github')}
               onPreviewFocus={resetSplit}
               streaming={busy}
@@ -552,20 +813,25 @@ export default function App() {
           </>}
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
-        {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
+        {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} />}
+        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} />}
         {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
       </div>
-      <StatusBar model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
+      <StatusBar outputLimit={effectiveOutput} planName={subscription?.plan.name} paymentMode={inference} localModel={connection.provider === 'ollama'} model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
     </div>
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
+    <GithubPullDialog open={githubPullOpen} close={() => setGithubPullOpen(false)} github={settings.github} addFiles={f => void addFiles(f)} openConnectors={() => openConnectors('github')} notify={setNotice} notifyToast={showToast} onImportProject={importProjectToWorkspace} />
     <Connectors
       open={connectorsOpen} close={() => setConnectorsOpen(false)} tab={connectorTab} setTab={setConnectorTab}
       settings={settings} setSettings={setSettings} mcp={mcp} setMcp={setMcp}
       knowledge={knowledge} addDocuments={f => void addDocuments(f)}
       removeDocument={id => { void storage.removeKnowledge(id).then(() => setKnowledge(k => k.filter(x => x.id !== id))).catch(e => setNotice(errorText(e))); }}
       notify={setNotice}
+      pipes={pipes} setPipes={setPipes}
+      keys={keys} setKeys={setKeys}
+      saveKeys={next => { saveKeyring(next); }}
+      discovered={discovered} discovering={discovering} discover={id => void discover(id)}
     />
     {planPrompt && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="plan-title">
       <h2 id="plan-title">{planPrompt.label} is on the paid plan.</h2>
@@ -581,7 +847,7 @@ export default function App() {
       <p><strong>{keyPrompt.label}</strong> runs on your {providers[keyPrompt.provider].name} account, so it needs a key this deployment does not hold. Add it in Settings and the model unlocks the moment you type it — the key stays in this browser and is never bundled into the app.</p>
       <div className="row gap end">
         <button className="button small" autoFocus onClick={() => setKeyPrompt(null)}>Not now</button>
-        <button className="button primary small" onClick={() => { const m = keyPrompt; setKeyPrompt(null); setPage('settings'); setNotice(`${m.label} needs a ${providers[m.provider].name} key. Add it below and it unlocks straight away — you do not have to save first, and no other provider is affected.`); }}><KeyRound size={13} />Add key in Settings</button>
+        <button className="button primary small" onClick={() => { const m = keyPrompt; setKeyPrompt(null); setConnection(c => ({ ...switchProvider(c, m.provider), mode: 'remote', inference: 'byok', model: m.id, saveKey: c.saveKey || Object.values(keys).some(k => k.trim()) })); setPage('settings'); setNotice(`${m.label} needs a ${providers[m.provider].name} key. Paste it below — the model is already selected, and the rest of the ${providers[m.provider].name} catalog loads by itself.`); }}><KeyRound size={13} />Add key in Settings</button>
       </div>
     </section></div>}
     {confirm && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -591,5 +857,10 @@ export default function App() {
         : <p>This removes sessions, runs, the ledger, notes, connectors, and saved connection details from this browser and from the server copy. Export anything you want to keep first.</p>}
       <div className="row gap end"><button className="button small" autoFocus onClick={() => setConfirm(null)}>Cancel</button><button className={confirm === 'run' ? 'button primary small' : 'button danger small'} onClick={() => { if (confirm === 'run') { approvedRuns.current = true; setConfirm(null); send(); } else void clearAll(); }}>{confirm === 'run' ? 'Approve and run' : 'Delete everything'}</button></div>
     </section></div>}
+    {toast && <div className={`toast ${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
+      {toast.tone === 'error' ? <CircleAlert size={14} /> : <CircleCheck size={14} />}
+      <span><strong>{toast.title}</strong>{toast.message}</span>
+      <button className="icon-button" aria-label="Dismiss" onClick={() => setToast(null)}><X size={12} /></button>
+    </div>}
   </div>;
 }

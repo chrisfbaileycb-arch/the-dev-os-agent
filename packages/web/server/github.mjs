@@ -45,8 +45,8 @@ const pushPath = v => { const value = String(v ?? ''); if (!PUSH_PATH.test(value
 export const OPERATIONS = {
   repo: p => `/repos/${owner(p.owner)}/${owner(p.repo)}`,
   readme: p => `/repos/${owner(p.owner)}/${owner(p.repo)}/readme`,
-  tree: p => `/repos/${owner(p.owner)}/${owner(p.repo)}/git/trees/${owner(p.ref || 'HEAD')}?recursive=1`,
-  file: p => `/repos/${owner(p.owner)}/${owner(p.repo)}/contents/${repoPath(p.path).split('/').map(encodeURIComponent).join('/')}${p.ref ? `?ref=${encodeURIComponent(owner(p.ref))}` : ''}`,
+  tree: p => `/repos/${owner(p.owner)}/${owner(p.repo)}/git/trees/${branchName(p.ref || 'HEAD')}?recursive=1`,
+  file: p => `/repos/${owner(p.owner)}/${owner(p.repo)}/contents/${repoPath(p.path).split('/').map(encodeURIComponent).join('/')}${p.ref ? `?ref=${encodeURIComponent(branchName(p.ref))}` : ''}`,
   issues: p => `/repos/${owner(p.owner)}/${owner(p.repo)}/issues?state=${['open', 'closed', 'all'].includes(p.state) ? p.state : 'open'}&per_page=${count(p.limit, 30, 100)}&sort=updated`,
   issue: p => `/repos/${owner(p.owner)}/${owner(p.repo)}/issues/${issueNumber(p.number)}`,
   comments: p => `/repos/${owner(p.owner)}/${owner(p.repo)}/issues/${issueNumber(p.number)}/comments?per_page=${count(p.limit, 30, 100)}`,
@@ -96,7 +96,7 @@ export function createGithub({ env = process.env, fetchImpl = fetch } = {}) {
     try {
       response = await fetchImpl(url, {
         method: 'GET', redirect: 'error', signal: controller.signal,
-        headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'HeyBuddyGitHubConnector/0.1', ...(authorization ? { Authorization: `Bearer ${authorization}` } : {}) },
+        headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'SignalForgeOSGitHubConnector/0.1', ...(authorization ? { Authorization: `Bearer ${authorization}` } : {}) },
       });
     } catch { throw new HttpError(502, controller.signal.aborted ? 'GitHub took too long to answer.' : 'Could not reach GitHub.'); }
     finally { clearTimeout(timer); }
@@ -123,7 +123,7 @@ export function createGithub({ env = process.env, fetchImpl = fetch } = {}) {
     try {
       response = await fetchImpl(API + path, {
         method, redirect: 'error', signal: controller.signal,
-        headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'HeyBuddyGitHubConnector/0.1', Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'SignalForgeOSGitHubConnector/0.1', Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch { throw new HttpError(502, controller.signal.aborted ? 'GitHub took too long to answer.' : 'Could not reach GitHub.'); }
@@ -133,10 +133,15 @@ export function createGithub({ env = process.env, fetchImpl = fetch } = {}) {
     let data = {}; if (text) { try { data = JSON.parse(text); } catch { throw new HttpError(502, 'GitHub did not return JSON.'); } }
     if (!response.ok) {
       if (response.status === 401) throw new HttpError(401, 'GitHub rejected that token.');
-      if (response.status === 403) throw new HttpError(403, 'GitHub refused the request — the token needs write access (Contents: write) to this repository.');
+      if (response.status === 403) {
+        const remaining = response.headers.get('x-ratelimit-remaining');
+        if (remaining === '0') throw new HttpError(429, 'GitHub rate limit reached. Try again later.');
+        throw new HttpError(403, 'GitHub refused the request — the token needs write access (Contents: write) to this repository.');
+      }
       if (response.status === 404) throw new HttpError(404, 'GitHub found nothing there. Check the owner, repository, and branch.');
       if (response.status === 409) throw new HttpError(409, 'The branch moved while pushing. Try again.');
       if (response.status === 422) throw new HttpError(422, data.message || 'GitHub rejected the request as malformed.');
+      if (response.status === 429) throw new HttpError(429, 'GitHub rate limit reached (HTTP 429). Try again later.');
       throw new HttpError(502, `GitHub answered HTTP ${response.status}.`);
     }
     return data;
@@ -151,7 +156,7 @@ export function createGithub({ env = process.env, fetchImpl = fetch } = {}) {
     if (!token) throw new HttpError(400, 'A GitHub token with write access is required to push. Add one in Connectors → GitHub.');
     spend(pushWindows, pushBudget, workspace, 'GitHub push');
     const repoOwner = owner(params?.owner); const repoName = owner(params?.repo);
-    const message = String(params?.message ?? '').trim().slice(0, 500) || 'Add generated app from Hey Buddy';
+    const message = String(params?.message ?? '').trim().slice(0, 4000) || 'Add generated app from Signal Forge OS';
     const files = Array.isArray(params?.files) ? params.files : [];
     if (!files.length) throw new HttpError(400, 'Nothing to push — the project has no files.');
     if (files.length > MAX_PUSH_FILES) throw new HttpError(400, `A push is limited to ${MAX_PUSH_FILES} files.`);
@@ -170,15 +175,17 @@ export function createGithub({ env = process.env, fetchImpl = fetch } = {}) {
     const branch = params?.branch ? branchName(params.branch) : repo.default_branch;
     const createBranch = Boolean(params?.createBranch);
 
-    let baseSha;
-    if (createBranch) {
-      const base = await raw('GET', `/repos/${repoOwner}/${repoName}/git/ref/heads/${encodeURIComponent(repo.default_branch)}`, token);
-      baseSha = base.object.sha;
-    } else {
-      const ref = await raw('GET', `/repos/${repoOwner}/${repoName}/git/ref/heads/${encodeURIComponent(branch)}`, token);
-      baseSha = ref.object.sha;
-    }
-    const baseCommit = await raw('GET', `/repos/${repoOwner}/${repoName}/git/commits/${baseSha}`, token);
+    // A repository created a moment ago has no commits at all, and GitHub answers a ref lookup on
+    // it with 409 "Git Repository is empty". That is the common case for "push my new app", so it
+    // becomes the first commit on the branch rather than a failure: no base tree, no parent, and
+    // the ref is created instead of moved.
+    const refFor = async name => {
+      try { return (await raw('GET', `/repos/${repoOwner}/${repoName}/git/ref/heads/${encodeURIComponent(name)}`, token)).object.sha; }
+      catch (e) { if (e instanceof HttpError && e.status === 409) return null; throw e; }
+    };
+    const baseSha = await refFor(createBranch ? repo.default_branch : branch);
+    const emptyRepo = baseSha === null;
+    const baseCommit = emptyRepo ? null : await raw('GET', `/repos/${repoOwner}/${repoName}/git/commits/${baseSha}`, token);
 
     const blobs = new Array(clean.length);
     let cursor = 0;
@@ -191,12 +198,108 @@ export function createGithub({ env = process.env, fetchImpl = fetch } = {}) {
     }
     await Promise.all(Array.from({ length: Math.min(PUSH_CONCURRENCY, clean.length) }, worker));
 
-    const tree = await raw('POST', `/repos/${repoOwner}/${repoName}/git/trees`, token, { base_tree: baseCommit.tree.sha, tree: blobs });
-    const commit = await raw('POST', `/repos/${repoOwner}/${repoName}/git/commits`, token, { message, tree: tree.sha, parents: [baseSha] });
-    if (createBranch) await raw('POST', `/repos/${repoOwner}/${repoName}/git/refs`, token, { ref: `refs/heads/${branch}`, sha: commit.sha });
+    const tree = await raw('POST', `/repos/${repoOwner}/${repoName}/git/trees`, token, { ...(baseCommit ? { base_tree: baseCommit.tree.sha } : {}), tree: blobs });
+    const commit = await raw('POST', `/repos/${repoOwner}/${repoName}/git/commits`, token, { message, tree: tree.sha, parents: baseSha ? [baseSha] : [] });
+    if (createBranch || emptyRepo) await raw('POST', `/repos/${repoOwner}/${repoName}/git/refs`, token, { ref: `refs/heads/${branch}`, sha: commit.sha });
     else await raw('PATCH', `/repos/${repoOwner}/${repoName}/git/refs/heads/${encodeURIComponent(branch)}`, token, { sha: commit.sha, force: false });
 
-    return { commitSha: commit.sha, branch, url: `https://github.com/${repoOwner}/${repoName}/commit/${commit.sha}`, filesPushed: clean.length };
+    return { commitSha: commit.sha, branch, url: `https://github.com/${repoOwner}/${repoName}/commit/${commit.sha}`, filesPushed: clean.length, createdRepoHistory: emptyRepo };
+  }
+
+  /**
+   * The visitor's own repositories, for the push dialog's picker. Their token only: the deployment's
+   * GITHUB_TOKEN funds anonymous reads elsewhere, but "list my repositories" with the operator's
+   * token would list the operator's, so there is no fallback here at all.
+   */
+  async function repos(token, workspace) {
+    if (!token) throw new HttpError(400, 'Add a GitHub token to list your repositories.');
+    spend(windows, budget, workspace, 'GitHub');
+    const data = await raw('GET', '/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member', token);
+    return { repos: (Array.isArray(data) ? data : []).map(r => ({ fullName: r.full_name, defaultBranch: r.default_branch || 'main', private: Boolean(r.private), canPush: r.permissions ? Boolean(r.permissions.push) : true, empty: r.size === 0 })).slice(0, 100) };
+  }
+
+  /** One repository's default branch, for prefilling the branch field. The visitor's token when given. */
+  async function repoInfo(params, token, workspace) {
+    const result = await call('repo', params, token, workspace);
+    return { defaultBranch: result.defaultBranch || 'main' };
+  }
+
+  const MAX_PULL_FILES = 50;
+  const TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|json|html|htm|css|scss|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|h|cpp|sh|yml|yaml|toml|xml|sql|env\.example|svg)$/i;
+  const TEXT_NAMES = /^(Dockerfile|Makefile|LICENSE|README|package\.json|tsconfig\.json|vite\.config\.[a-z]+)$/i;
+
+  function isReadableCodePath(p) {
+    const base = p.split('/').pop() || '';
+    if (base.startsWith('.')) return false;
+    if (p.includes('node_modules/') || p.includes('dist/') || p.includes('build/') || p.includes('.next/') || p.includes('package-lock.json')) return false;
+    return TEXT_EXTENSIONS.test(p) || TEXT_NAMES.test(base);
+  }
+
+  /**
+   * Pull an entire repository branch into a project bundle.
+   * Traverses the git tree, selects readable text/code files, and retrieves their content.
+   */
+  async function pullRepo(params, token, workspace) {
+    spend(windows, budget, workspace, 'GitHub');
+    const repoOwner = owner(params?.owner);
+    const repoName = owner(params?.repo);
+    let branch = params?.branch ? branchName(params.branch) : '';
+    if (!branch) {
+      const repo = await call('repo', { owner: repoOwner, repo: repoName }, token, workspace);
+      branch = repo.defaultBranch || 'main';
+    }
+    const treeData = await call('tree', { owner: repoOwner, repo: repoName, ref: branch }, token, workspace);
+    const candidates = (treeData.files || [])
+      .filter(f => isReadableCodePath(f.path) && f.size <= MAX_FILE_BYTES)
+      .slice(0, MAX_PULL_FILES);
+
+    if (!candidates.length) {
+      throw new HttpError(404, `No readable code or text files found in ${repoOwner}/${repoName} on branch ${branch}.`);
+    }
+
+    const files = [];
+    let cursor = 0;
+    async function worker() {
+      while (cursor < candidates.length) {
+        const item = candidates[cursor++];
+        try {
+          const fileResult = await call('file', { owner: repoOwner, repo: repoName, path: item.path, ref: branch }, token, workspace);
+          if (fileResult && typeof fileResult.text === 'string') {
+            files.push({ path: item.path, content: fileResult.text });
+          }
+        } catch {
+          // If reading an individual file fails, omit it gracefully
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PUSH_CONCURRENCY, candidates.length) }, worker));
+    files.sort((a, b) => a.path.localeCompare(b.path));
+
+    return {
+      owner: repoOwner,
+      repo: repoName,
+      branch,
+      files,
+      truncated: Boolean(treeData.truncated) || treeData.files.length > MAX_PULL_FILES,
+    };
+  }
+
+  function extractToken(req, body) {
+    if (typeof body?.token === 'string' && body.token.length <= 512 && !/[\r\n]/.test(body.token) && body.token.trim()) {
+      return body.token.trim();
+    }
+    const headerToken = req.headers['x-github-token'];
+    if (typeof headerToken === 'string' && headerToken.length <= 512 && !/[\r\n]/.test(headerToken) && headerToken.trim()) {
+      return headerToken.trim();
+    }
+    const authHeader = req.headers['authorization'];
+    if (typeof authHeader === 'string') {
+      const match = authHeader.match(/^(?:Bearer|token)\s+([^\r\n]+)$/i);
+      if (match && match[1] && match[1].length <= 512) {
+        return match[1].trim();
+      }
+    }
+    return '';
   }
 
   async function handler(req, res) {
@@ -212,14 +315,26 @@ export function createGithub({ env = process.env, fetchImpl = fetch } = {}) {
       let size = 0; const chunks = [];
       for await (const chunk of req) { size += chunk.length; if (size > MAX_PUSH_BYTES + 100_000) throw new HttpError(413, 'Request is too large.'); chunks.push(chunk); }
       let body; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'Invalid JSON body.'); }
-      const token = typeof body?.token === 'string' && body.token.length <= 512 && !/[\r\n]/.test(body.token) ? body.token.trim() : '';
-      const workspace = typeof req.headers['x-workspace-id'] === 'string' ? req.headers['x-workspace-id'] : (req.socket.remoteAddress || 'unknown');
-      const result = body?.operation === 'push' ? await push(body?.params, token, workspace) : await call(body?.operation, body?.params, token, workspace);
+      const token = extractToken(req, body);
+      // Rate limits are keyed on the network address: a browser-supplied workspace header can be
+      // changed on every request, which made each request its own fresh budget.
+      const workspace = req.socket.remoteAddress || 'unknown';
+      const result = body?.operation === 'push' ? await push(body?.params, token, workspace)
+        : body?.operation === 'repos' ? await repos(token, workspace)
+          : body?.operation === 'repo_info' ? await repoInfo(body?.params, token, workspace)
+            : body?.operation === 'pull_repo' ? await pullRepo(body?.params, token, workspace)
+              : await call(body?.operation, body?.params, token, workspace);
       json(200, { result });
       return true;
-    } catch (error) { json(error instanceof HttpError ? error.status : 500, { error: { message: error instanceof HttpError ? error.message : 'GitHub request failed.' } }); return true; }
+    } catch (error) {
+      const status = error instanceof HttpError ? error.status : 500;
+      json(status, { error: { message: error instanceof HttpError ? error.message : 'GitHub request failed.', status } });
+      return true;
+    }
   }
   handler.call = call;
   handler.push = push;
+  handler.repos = repos;
+  handler.pullRepo = pullRepo;
   return handler;
 }

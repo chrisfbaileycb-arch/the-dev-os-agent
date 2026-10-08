@@ -28,7 +28,7 @@ import { setOpenRouterCatalog, setXkiroCatalog, xkiroBase } from './freetier.mjs
  * and a request carrying none is the shape a bot filter in front of an API is likeliest to
  * refuse — which surfaces as a 403 that looks like a rejected key and is not one.
  */
-export const USER_AGENT = 'HeyBuddy/1.0 (+https://github.com/chrisfbaileycb-arch/the-dev-os-agent)';
+export const USER_AGENT = 'SignalForgeOS/1.0 (+https://github.com/chrisfbaileycb-arch/the-dev-os-agent)';
 
 /** How long a good catalogue is trusted. Model tiers move on the order of weeks, not seconds. */
 export const CATALOG_TTL_MS = 3_600_000;

@@ -10,13 +10,13 @@ import type { FreeTier } from './store';
 // fabricating a response or silently switching execution modes.
 
 /**
- * Hey Buddy's own paid plans, as this deployment reports them.
+ * Signal Forge OS's own paid plans, as this deployment reports them.
  *
  * `checkout` is null until the operator sets the plan's checkout URL in the environment, and the
  * Plans page renders that honestly rather than putting a Subscribe button over a dead link. It
  * is a deployment setting, not a build-time constant, so opening checkout is a dashboard edit.
  */
-export interface BillingPlan { id: string; name: string; price: string; cadence: string; checkout: string | null; }
+export interface BillingPlan { id: string; name: string; price: string; cadence: string; checkout: string | null; monthlyCredits?: number; maxOutputTokens?: number; }
 export interface Billing { enabled: boolean; plans: BillingPlan[]; }
 
 /**
@@ -129,6 +129,8 @@ function billingFrom(raw: unknown): Billing {
       id: p.id, name: p.name,
       price: typeof p.price === 'string' ? p.price : '',
       cadence: typeof p.cadence === 'string' ? p.cadence : '',
+      monthlyCredits: Number.isFinite(p.monthlyCredits) ? Math.max(0, Number(p.monthlyCredits)) : undefined,
+      maxOutputTokens: Number.isFinite(p.maxOutputTokens) ? Math.max(64, Number(p.maxOutputTokens)) : undefined,
       checkout: typeof p.checkout === 'string' && /^https:\/\//.test(p.checkout) && !/[@#]/.test(p.checkout) ? p.checkout : null,
     }));
   return { enabled: clean.some(p => p.checkout), plans: clean };
@@ -209,6 +211,7 @@ async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): 
         providers: providerMap(free.providers),
         labels: providerMap(free.labels),
         monthlyCredits: Number.isFinite(free.monthlyCredits) ? Number(free.monthlyCredits) : DEFAULT_FREE_POOL,
+        maxOutputTokens: Number.isFinite(free.maxOutputTokens) ? Number(free.maxOutputTokens) : 16384,
         perHour: Number.isFinite(free.perHour) ? Number(free.perHour) : 0,
       },
     };

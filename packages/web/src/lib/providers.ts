@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -10,39 +10,91 @@ export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google'
 // `endpoint` is what the browser displays and sends, but the server does not take it on trust —
 // resolveTarget maps every named provider to a fixed base URL of its own and only a `custom`
 // provider is allowed to steer the destination, and then only to an approved origin.
-export const providers: Record<Provider, { name: string; tier: string; endpoint: string; models: string[] }> = {
-  openrouter: { name: 'OpenRouter', tier: 'Universal', endpoint: 'https://openrouter.ai/api/v1', models: ['meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-nemo:free', 'qwen/qwen-2.5-72b-instruct:free', 'deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'anthropic/claude-3.5-haiku', 'openai/gpt-4o'] },
+/**
+ * `flagship` is the model a freshly registered key lands on, so adding a key never needs a model
+ * chosen first; Discover then replaces the seed list with what the key actually reaches.
+ * `keyless` providers run with no credential at all, and `direct` ones are called straight from
+ * the browser instead of through /api/chat — which is only true of a model server on this
+ * machine, because the hosted proxy cannot reach a visitor's localhost.
+ */
+export interface ProviderInfo { name: string; tier: string; endpoint: string; models: string[]; flagship?: string; keyless?: boolean; direct?: boolean; }
+export const providers: Record<Provider, ProviderInfo> = {
+  openrouter: { name: 'OpenRouter', tier: 'Universal', endpoint: 'https://openrouter.ai/api/v1', flagship: 'anthropic/claude-3.5-sonnet', models: ['meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-nemo:free', 'qwen/qwen-2.5-72b-instruct:free', 'deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'anthropic/claude-3.5-haiku', 'openai/gpt-4o'] },
   // A subsidized gateway: 27+ models whose ids end in -free run at no cost against a normal
   // AIHubMix account key, frontier ones included. Seeds from their published free list; Discover
   // reads the live catalogue and the model field accepts anything typed, as everywhere else.
-  aihubmix: { name: 'AIHubMix', tier: 'Free gateway', endpoint: 'https://aihubmix.com/v1', models: ['gpt-5.5-free', 'gpt-4.1-free', 'gemini-3-flash-preview-free', 'coding-glm-5.1-free', 'kimi-for-coding-free', 'k2.6-code-preview-free', 'xiaomi-mimo-v2.5-free', 'coding-minimax-m2.7-free'] },
+  aihubmix: { name: 'AIHubMix', tier: 'Free gateway', endpoint: 'https://aihubmix.com/v1', flagship: 'gpt-5.5-free', models: ['gpt-5.5-free', 'gpt-4.1-free', 'gemini-3-flash-preview-free', 'coding-glm-5.1-free', 'kimi-for-coding-free', 'k2.6-code-preview-free', 'xiaomi-mimo-v2.5-free', 'coding-minimax-m2.7-free'] },
   // Hugging Face's Inference Providers router: hundreds of open models behind one OpenAI-compatible
   // chat surface at a fixed home. One HF token pays every underlying provider, accounts carry a
   // small monthly inference credit, and a `:fastest` / `:cheapest` suffix on the model id chooses
   // how the router routes. Seeds from their documented open-weights roster; Discover reads the
   // live list from /v1/models and the model field accepts anything typed, as everywhere else.
+  // No flagship on purpose: HF's free credit is small, so a new token starts on the first,
+  // low-compute seed rather than on the strongest model it could reach.
   huggingface: { name: 'Hugging Face', tier: 'Open models', endpoint: 'https://router.huggingface.co/v1', models: ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Llama-3.1-8B-Instruct', 'openai/gpt-oss-120b', 'deepseek-ai/DeepSeek-R1:auto', 'Qwen/Qwen2.5-Coder-32B-Instruct', 'zai-org/GLM-4.5', 'moonshotai/Kimi-K2-Instruct'] },
   // Managed hosted route. The endpoint is intentionally empty in the browser: the server pins
   // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.
   'cheaper-inference': { name: 'Managed inference', tier: 'Orator managed', endpoint: '', models: [] },
 
-  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', models: ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant'] },
-  openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
+  groq: { name: 'Groq', tier: 'Ultra-fast', endpoint: 'https://api.groq.com/openai/v1', flagship: 'openai/gpt-oss-120b', models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'] },
+  openai: { name: 'OpenAI', tier: 'Frontier', endpoint: 'https://api.openai.com/v1', flagship: 'gpt-4o', models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'] },
   // Anthropic speaks its own /v1/messages protocol rather than the OpenAI one. The proxy
   // translates in both directions; from here it is just another provider with a key.
-  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5'] },
+  anthropic: { name: 'Anthropic', tier: 'Frontier', endpoint: 'https://api.anthropic.com/v1', flagship: 'claude-sonnet-5-5', models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5-20251001'] },
   // Google publishes an OpenAI-compatible surface for Gemini, so it needs no translation.
-  google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
-  cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
+  // The first three run on a free Google AI Studio key; the free key is the flagship's reason for being first.
+  google: { name: 'Google Gemini', tier: 'Frontier', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', flagship: 'gemini-3-flash-preview', models: ['gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash', 'gemini-2.5-pro'] },
+  cohere: { name: 'Cohere', tier: 'Enterprise', endpoint: 'https://api.cohere.com/v2', flagship: 'command-a-03-2025', models: ['command-a-03-2025', 'command-r-plus-08-2024'] },
+  // xAI's API is OpenAI-compatible at a fixed home; the key is an xai-… key from console.x.ai.
+  xai: { name: 'xAI Grok', tier: 'Frontier', endpoint: 'https://api.x.ai/v1', flagship: 'grok-4', models: ['grok-4', 'grok-3', 'grok-3-mini', 'grok-code-fast-1'] },
+  // Venice: OpenAI-compatible, privacy-first open-model host. Seeds only; Discover reads the live list.
+  venice: { name: 'Venice', tier: 'Private', endpoint: 'https://api.venice.ai/api/v1', flagship: 'llama-3.3-70b', models: ['llama-3.3-70b', 'qwen-2.5-coder-32b', 'mistral-31-24b', 'llama-3.2-3b'] },
+  // A model server on this machine. No key, no seeds — whatever `ollama pull` installed is the
+  // list — and called from the browser directly (see lib/pipes.ts for the localhost-only rule).
+  ollama: { name: 'Local model (LM Studio or Ollama)', tier: 'Local', endpoint: 'http://localhost:11434/v1', models: [], keyless: true, direct: true },
+  // Free with a GitHub account: a fine-grained token with the models:read permission. Rate-limited
+  // for prototyping, which is exactly right for one person building on their own free key.
+  github: { name: 'GitHub Models', tier: 'Free key', endpoint: 'https://models.github.ai/inference', flagship: 'openai/gpt-4.1-mini', models: ['openai/gpt-4.1-mini', 'openai/gpt-4.1', 'openai/gpt-4.1-nano'] },
+  // US-hosted open-weight models, including OpenAI's gpt-oss, on a free account with no card.
+  cerebras: { name: 'Cerebras', tier: 'Free key', endpoint: 'https://api.cerebras.ai/v1', flagship: 'gpt-oss-120b', models: ['gpt-oss-120b'] },
   xkiro: { name: 'xKiro', tier: 'Gateway', endpoint: 'https://api.xkiro.com/v1', models: [] },
+  // Meta's Muse, through its Model API (OpenAI-compatible). Operator-funded only: it is configured in the
+  // admin dashboard and its models reach visitors as free or plan models, so it is not in Settings' list.
+  // No seed ids on purpose: names a provider retires are how the picker once offered models that 404.
+  meta: { name: 'Meta Muse', tier: 'Frontier', endpoint: 'https://api.meta.ai/v1', models: [] },
+  // Vercel AI Gateway: one OpenAI-compatible endpoint, one key, many providers behind it. Discover lists the roster.
+  vercel: { name: 'Vercel AI Gateway', tier: 'Gateway', endpoint: 'https://ai-gateway.vercel.sh/v1', models: [] },
   // Optional future adapter only. It is deliberately not configured, discovered, or shown to
   // customers in this phase; hosted Cheaper Inference is the initial managed route.
   omniroute: { name: 'Optional self-hosted route', tier: 'Future adapter', endpoint: '', models: [] },
   custom: { name: 'Custom endpoint', tier: 'Custom', endpoint: '', models: [] },
 };
+/**
+ * How long one reply may run, in tokens. The default used to be 1,024 with no control to raise it,
+ * which cut a complete app off partway through and made the preview fail. The default now gives
+ * builds 16,384 tokens, with continuation available when a project needs more than one reply.
+ * Saved legacy defaults (1,024 or less, and 8,192) are upgraded on load.
+ */
+export const OUTPUT_LIMITS = [2048, 4096, 8192, 16384, 32000, 32768, 64000, 65536];
+export const DEFAULT_OUTPUT_TOKENS = 16384;
+
+/** Keep in step with the backend's modelOutputCeiling; plan capacity can exceed a model's. */
+export function modelOutputCeiling(model: string): number {
+  if (/(?:^|\/)gpt-4o(?:-|$)/i.test(model)) return 16384;
+  if (/(?:^|\/)gpt-4\.1(?:-|$)/i.test(model)) return 32768;
+  return 65536;
+}
+
+/** Managed defaults follow the backend; an explicitly chosen shorter reply stays a preference. */
+export function effectiveOutputLimit(c: Connection, tierCap: number): number {
+  const requested = c.inference && c.inference !== 'byok' && !c.customOutputLimit ? tierCap : c.maxTokens;
+  return Math.min(requested, tierCap, modelOutputCeiling(c.model));
+}
 const profiles = new Map<Provider, Connection>();
 const MODES: InferenceMode[] = ['free', 'credits', 'byok'];
-export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: providers[provider].models[0] || '', token: '', maxTokens: 1024, saveKey: false }; }
+export function defaultConnection(provider: Provider = 'openrouter'): Connection { return { mode: 'remote', provider, inference: 'byok', endpoint: providers[provider].endpoint, model: flagshipFor(provider), token: '', maxTokens: DEFAULT_OUTPUT_TOKENS, customOutputLimit: false, saveKey: false }; }
+/** The model a new key for this provider starts on: its flagship, else its first seed, else nothing. */
+export function flagshipFor(provider: Provider): string { return providers[provider].flagship ?? providers[provider].models[0] ?? ''; }
 
 /**
  * How a given model gets paid for, when the app has to decide for itself.
@@ -89,7 +141,11 @@ export function loadConnection(provider: Provider): Connection {
     const model = typeof stored.model === 'string' ? stored.model : base.model;
     const inference = MODES.includes(stored.inference) ? stored.inference as InferenceMode : 'byok';
     // The funded list is unknown here, so the stored mode is kept as saved rather than re-derived.
-    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens: [512,1024,2048,4096].includes(stored.maxTokens) ? stored.maxTokens : 1024, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
+    const validLimit = Number.isInteger(stored.maxTokens) && stored.maxTokens >= 64 && stored.maxTokens <= 65536
+      && (OUTPUT_LIMITS.includes(stored.maxTokens) || stored.customOutputLimit === true);
+    const customOutputLimit = validLimit && (typeof stored.customOutputLimit === 'boolean' ? stored.customOutputLimit : ![1024, 8192, 16384].includes(stored.maxTokens));
+    const maxTokens = validLimit && (customOutputLimit || stored.maxTokens > 1024 && stored.maxTokens !== 8192) ? stored.maxTokens : DEFAULT_OUTPUT_TOKENS;
+    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens, customOutputLimit, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
   } catch { return base; }
 }
 /**
@@ -104,7 +160,7 @@ export function initialProvider(): Connection {
 export function switchProvider(current: Connection, provider: Provider): Connection { profiles.set(current.provider || 'custom', { ...current }); return { ...loadConnection(provider), mode: 'remote' }; }
 export function persistConnection(c: Connection): void {
   const provider = c.provider || 'custom';
-  localStorage.setItem(`ft-provider-${provider}`, JSON.stringify({ endpoint: c.endpoint, model: c.model, maxTokens: c.maxTokens, inference: MODES.includes(c.inference as InferenceMode) ? c.inference : 'byok', saveKey: Boolean(c.saveKey), ...(c.saveKey ? { token: c.token } : {}) }));
+  localStorage.setItem(`ft-provider-${provider}`, JSON.stringify({ endpoint: c.endpoint, model: c.model, maxTokens: c.maxTokens, customOutputLimit: Boolean(c.customOutputLimit), inference: MODES.includes(c.inference as InferenceMode) ? c.inference : 'byok', saveKey: Boolean(c.saveKey), ...(c.saveKey ? { token: c.token } : {}) }));
   localStorage.setItem('ft-active-provider', provider); profiles.set(provider, { ...c });
 }
 export function forgetKeys(): void {
@@ -150,3 +206,21 @@ export function saveKeyring(ring: Partial<Keyring>): void {
 }
 
 export function clearProviderStorage(): void { profiles.clear(); for (const p of Object.keys(providers)) localStorage.removeItem(`ft-provider-${p}`); localStorage.removeItem('ft-active-provider'); }
+
+/**
+ * The connection as it goes over the wire. A zero-config run carries no secret at all — the
+ * server funds it from its own key — so both the visitor's key and the deployment token are
+ * stripped before the request leaves the tab.
+ */
+export const requestConnection = (c: Connection, keys?: Partial<Keyring>): Connection => {
+  if (c.inference === 'free') return { ...c, token: '', serverAccessToken: '' };
+  if (c.inference === 'credits') return { ...c, token: '' };
+  // Your own key: always the key saved for the provider this request goes to. The keyring and the
+  // active connection used to be separate, so picking a model from another provider kept the old
+  // provider's key on the connection and sent it along — the wrong provider got your key, and the
+  // right one got none. The keyring entry for this provider wins; the connection's own token is
+  // used only when nothing is saved for it.
+  const provider = c.provider ?? 'custom';
+  const saved = keys?.[provider]?.trim();
+  return { ...c, token: saved || c.token || '', serverAccessToken: '' };
+};

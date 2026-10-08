@@ -44,6 +44,10 @@ export async function openPostgresDb(connectionString) {
         await c.query('COMMIT');
       } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
     },
+    async removeSessions(workspace, ids) {
+      if (!ids.length) return;
+      await pool.query('DELETE FROM sessions WHERE workspace_id=$1 AND id = ANY($2::text[])', [workspace, ids]);
+    },
     async upsertRuns(workspace, list) {
       if (!list.length) return;
       const c = await pool.connect();

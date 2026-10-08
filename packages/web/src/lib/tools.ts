@@ -17,10 +17,14 @@ export function parseToolCall(text: string, specs: ToolSpec[]): ToolCall | null 
   if (!line.startsWith('TOOL ')) return null;
   try {
     const parsed = JSON.parse(line.slice(5)) as Record<string, unknown>;
-    if (typeof parsed.tool !== 'string' || !specs.some(s => s.name === parsed.tool)) return null;
+    if (typeof parsed.tool !== 'string') return null;
+    const target = parsed.tool;
+    const norm = (s: string) => s.replace(/[:._]/g, '.').toLowerCase();
+    const match = specs.find(s => s.name === target) || specs.find(s => norm(s.name) === norm(target));
+    if (!match) return null;
     const { tool, args, ...rest } = parsed;
     const finalArgs = args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : rest;
-    return { tool, args: finalArgs };
+    return { tool: match.name, args: finalArgs };
   } catch { return null; }
 }
 

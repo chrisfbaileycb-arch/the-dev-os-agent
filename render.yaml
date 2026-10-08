@@ -1,4 +1,4 @@
-# Render Blueprint for the Hey Buddy web edition.
+# Render Blueprint for the Signal Forge OS web edition.
 # Create it from the dashboard: New > Blueprint, pick this repo, branch main.
 #
 # ONE standard Node web service. No Docker, no persistent disk, no background worker — this
@@ -62,6 +62,13 @@ services:
       - key: DATA_FILE
         value: /tmp/heybuddy.sqlite
 
+      # --- Private beta gate -------------------------------------------------------------
+      # The passcode visitors enter before the workspace loads. Vite reads it during the BUILD
+      # and bakes in only a salted hash, so change it here and redeploy. Left unset, a production
+      # build locks everyone out rather than opening. It is a front-end curtain, not server auth.
+      - key: VITE_BETA_ACCESS_KEY
+        sync: false
+
       # --- Admin dashboard ---------------------------------------------------------------
       # One token opens /admin, where provider keys, the free and paid model tiers, and the
       # free-tier limits are managed live without a redeploy. Generate one (openssl rand -hex 24)
@@ -105,25 +112,43 @@ services:
       - key: FREE_MAX_PER_HOUR
         value: "40"
       - key: FREE_MAX_OUTPUT_TOKENS
-        value: "1024"
+        value: "16384"
+      # There is no longer a switch for US-only funding: the server funds only the backend lane
+      # (Anthropic, OpenAI, Google, xAI, Groq, Cerebras; see server/providerRegistry.mjs). Add those keys, and pick
+      # which of their models are free or paid, in the admin dashboard. Every other provider is
+      # used with a key the visitor types into the browser.
       # "true" switches the tier off without removing the provider keys.
       - key: FREE_TIER_DISABLED
         value: "false"
 
-      # --- Platform credits (separate budget, administrator-gated) -----------------------
-      - key: CREDIT_MONTHLY_POOL
-        value: "100000"
-
+      # --- Monthly subscriptions: limits are enforced per individual access token -------
+      - key: PLAN_STARTER_CREDITS
+        value: "1000"
+      - key: PLAN_PREMIUM_CREDITS
+        value: "2500"
+      - key: PLAN_PRO_CREDITS
+        value: "6000"
+      - key: PLAN_STARTER_MAX_OUTPUT_TOKENS
+        value: "16384"
+      - key: PLAN_PREMIUM_MAX_OUTPUT_TOKENS
+        value: "32768"
+      - key: PLAN_PRO_MAX_OUTPUT_TOKENS
+        value: "65536"
+      # Unique subscriber tokens and new-price checkout URLs can be entered in Admin.
+      # Old $12.90/$24.90 STRIPE_* links are intentionally not reused.
+      - key: PLAN_STARTER_ACCESS_TOKENS
+        sync: false
+      - key: PLAN_PREMIUM_ACCESS_TOKENS
+        sync: false
+      - key: PLAN_PRO_ACCESS_TOKENS
+        sync: false
+      - key: BILLING_STARTER_URL
+        sync: false
+      - key: BILLING_PREMIUM_URL
+        sync: false
+      - key: BILLING_PRO_URL
+        sync: false
       # --- Connectors ------------------------------------------------------------------
-      # Hey Buddy's own paid plans. A hosted checkout URL per plan — a Stripe Payment Link is the
-      # simplest thing that works. Until one is set the Plans page keeps the price and the feature
-      # list but says checkout is not open, rather than putting a Subscribe button over a dead
-      # link. These are public URLs by design; the processor's secret key never reaches this
-      # server. Setting them here is a dashboard edit and a restart, never a rebuild.
-      - key: STRIPE_STARTER_URL
-        sync: false
-      - key: STRIPE_PREMIUM_URL
-        sync: false
       # URL crawler (/api/fetch): a plain GET converted to text server-side, so the browser can
       # read external pages despite CORS. Open to any public host; set a list to narrow it.
       - key: FETCH_ALLOWED_HOSTS

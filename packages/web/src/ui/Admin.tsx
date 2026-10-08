@@ -43,6 +43,7 @@ export default function Admin(p: AdminProps) {
   const [catalogs, setCatalogs] = useState<Record<string, ModelChoice[]>>({});
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [queries, setQueries] = useState<Record<string, string>>({});
+  const [manualIds, setManualIds] = useState<Record<string, string>>({});
   const [tiers, setTiers] = useState<Tiers | null>(null);
   const [dirty, setDirty] = useState(false);
 
@@ -67,7 +68,7 @@ export default function Admin(p: AdminProps) {
   function saveKey(provider: string) { void run(() => api<Config>('/api/admin/keys', { method: 'PUT', body: JSON.stringify({ provider, key: drafts[provider] ?? '' }) }), c => { applyConfig(c); setDrafts(d => ({ ...d, [provider]: '' })); p.notify(`${c.providers.find(x => x.provider === provider)?.name ?? provider} key saved on the server. It funds the next request without a restart.`); }); }
   function removeKey(provider: string) { void run(() => api<Config>('/api/admin/keys', { method: 'PUT', body: JSON.stringify({ provider, key: '' }) }), c => { applyConfig(c); p.notify('Key removed. Any environment value for it applies again.'); }); }
   function saveTunable(name: string) { void run(() => api<Config>('/api/admin/tunables', { method: 'PUT', body: JSON.stringify({ name, value: tunableDrafts[name] ?? '' }) }), c => { applyConfig(c); setTunableDrafts(d => { const { [name]: _drop, ...rest } = d; void _drop; return rest; }); }); }
-  function saveTiers() { if (!tiers) return; void run(() => api<Config>('/api/admin/tiers', { method: 'PUT', body: JSON.stringify({ mode: tiers.mode, free: tiers.free, paid: tiers.paid }) }), c => { setConfig(c); setTiers(c.tiers); setDirty(false); p.notify(`Tiers saved: ${c.published.free.models.length} free, ${c.published.paid.models.length} on the paid plan, live for visitors now.`); }); }
+  function saveTiers() { if (!tiers) return; void run(() => api<Config>('/api/admin/tiers', { method: 'PUT', body: JSON.stringify({ mode: 'manual', free: tiers.free, paid: tiers.paid }) }), c => { setConfig(c); setTiers(c.tiers); setDirty(false); p.notify(`Tiers saved: ${c.published.free.models.length} free, ${c.published.paid.models.length} on the paid plan, live for visitors now.`); }); }
   function discover(provider: string) {
     setLoading(l => new Set(l).add(provider));
     api<{ models: ModelChoice[] }>('/api/admin/discover', { method: 'POST', body: JSON.stringify({ provider }) })
@@ -146,15 +147,17 @@ export default function Admin(p: AdminProps) {
           <td className="row gap"><button className="button primary small" disabled={busy || !(drafts[r.provider] ?? '').trim()} onClick={() => saveKey(r.provider)}><Check size={12} />Save</button>{r.source === 'dashboard' && <button className="button small" title="Remove the stored key" aria-label={`Remove ${r.name} key`} disabled={busy} onClick={() => removeKey(r.provider)}><Trash2 size={12} /></button>}</td>
         </tr>)}
       </tbody></table></div>
+      {config.planned.length > 0 && <p className="help"><CircleAlert size={12} /> Decided for the US backend but not routable yet, so there is no key field: {config.planned.map(r => r.name).join('; ')}.</p>}
+      {config.retired.length > 0 && <div className="notice"><TriangleAlert size={13} /><span>
+        Keys stored here before the split, for providers outside the US backend. Nothing is funded from them any more; remove them.
+        {config.retired.map(r => <span key={r.provider} className="row gap"><strong>{r.name}</strong><small className="mono">{r.env}</small><button className="button small" disabled={busy} aria-label={`Remove ${r.name} key`} onClick={() => removeKey(r.provider)}><Trash2 size={12} />Remove</button></span>)}
+      </span></div>}
     </section>
 
     <section className="panel">
       <div className="panel-head"><h2><Sparkles size={15} strokeWidth={1.75} /> Model tiers</h2><span className="row gap">{dirty && <span className="pill warn">Unsaved changes</span>}<button className="button primary small" disabled={busy || !dirty} onClick={saveTiers}><Check size={12} />Save tiers</button></span></div>
       <p className="help"><strong>Free</strong> models run for any visitor with no key, on this deployment's keys, metered against the free allowance. <strong>Paid plan</strong> models run for subscribers who hold the plan access token, on this deployment's keys, against the plan allowance. Everything else stays bring-your-own-key. Load a provider's live list and sort it.</p>
-      <div className="mode-picker two">
-        <button className={tiers.mode === 'auto' ? 'mode selected' : 'mode'} aria-pressed={tiers.mode === 'auto'} onClick={() => { setTiers({ ...tiers, mode: 'auto' }); setDirty(true); }}><strong>Automatic + your picks</strong><small>The built-in free pool (gateway free models, Groq and OpenRouter free ids) plus whatever you mark free here.</small></button>
-        <button className={tiers.mode === 'manual' ? 'mode selected' : 'mode'} aria-pressed={tiers.mode === 'manual'} onClick={() => { setTiers({ ...tiers, mode: 'manual' }); setDirty(true); }}><strong>Only your picks</strong><small>The free tier is exactly the models you mark free. Nothing is added automatically.</small></button>
-      </div>
+      <p className="help"><strong>The front end lists exactly the models you mark Free or Paid here, and nothing else.</strong> Nothing is added automatically, so a model name that a provider has retired can never show up in the chat dropdown. A provider's live list below is what its key can actually reach.</p>
       <div className="tier-summary">
         <div><h3><Sparkles size={12} /> Free ({tiers.free.length})</h3><div className="chips">{tiers.free.map(m => <span key={m.id} className={frontier.has(m.id) ? 'chip warn' : 'chip'} title={frontier.has(m.id) ? 'A frontier or reasoning model: expensive per token on your key.' : m.id}>{frontier.has(m.id) && <TriangleAlert size={10} />}{m.label ?? m.id}<small>{m.provider}</small><button aria-label={`Remove ${m.id} from free`} onClick={() => setTier(m, 'off')}>×</button></span>)}{!tiers.free.length && <small className="help">No manual free picks yet.</small>}</div></div>
         <div><h3><CreditCard size={12} /> Paid plan ({tiers.paid.length})</h3><div className="chips">{tiers.paid.map(m => <span key={m.id} className="chip" title={m.id}>{m.label ?? m.id}<small>{m.provider}</small><button aria-label={`Remove ${m.id} from paid`} onClick={() => setTier(m, 'off')}>×</button></span>)}{!tiers.paid.length && <small className="help">No paid-plan models yet.</small>}</div></div>
@@ -167,6 +170,10 @@ export default function Admin(p: AdminProps) {
         const isLoading = loading.has(r.provider);
         return <div key={r.provider} className="tier">
           <div className="panel-head"><h3>{r.name}<small>{all ? `${all.length.toLocaleString()} models on this key` : 'Live list not loaded'}</small></h3><span className="row gap">{all && <label className="row gap admin-filter"><Search size={12} /><input type="search" placeholder="Filter" value={queries[r.provider] ?? ''} onChange={e => setQueries(q => ({ ...q, [r.provider]: e.target.value }))} /></label>}<button className="button small" disabled={isLoading} onClick={() => discover(r.provider)}>{isLoading ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}{all ? 'Reload' : 'Load models'}</button></span></div>
+          <form className="row gap admin-add" onSubmit={e => { e.preventDefault(); const id = (manualIds[r.provider] ?? '').trim(); if (!id || id.length > 200) return; setCatalogs(c => ({ ...c, [r.provider]: [{ id, label: id }, ...(c[r.provider] ?? []).filter(m => m.id !== id)] })); setManualIds(m => ({ ...m, [r.provider]: '' })); }}>
+            <input aria-label={`Add a ${r.name} model ID`} placeholder="Not in the list? Type a model ID" value={manualIds[r.provider] ?? ''} onChange={e => setManualIds(m => ({ ...m, [r.provider]: e.target.value }))} />
+            <button type="submit" className="button small" disabled={!(manualIds[r.provider] ?? '').trim()}>Add model ID</button>
+          </form>
           {all && <div className="ledger-wrap"><table className="ledger tier-table"><tbody>
             {list.slice(0, 80).map(m => { const t = tierOf(m.id); const entry: TierEntry = { id: m.id, provider: r.provider, ...(m.label !== m.id ? { label: m.label } : {}) }; return <tr key={m.id}>
               <td><strong>{m.label}</strong>{m.label !== m.id && <><br /><small className="mono">{m.id}</small></>}{m.free && <em className="model-badge included"> free at provider</em>}</td>
@@ -179,13 +186,14 @@ export default function Admin(p: AdminProps) {
     </section>
 
     <section className="panel">
-      <h2>Free-tier limits and plan settings</h2>
+      <h2>Free-tier limits and $25 / $50 / $100 plans</h2>
+      <p className="help">Each plan includes the same published US provider models, personal keys, connectors, and local models. Give each subscriber a unique token in their tier’s list; remove it to revoke access. Credits are weighted usage units, not dollars. New checkout URLs must charge the displayed prices; old checkout links are not reused.</p>
       <p className="help">Numbers apply on the next request. A blank value removes the dashboard setting and the environment (or the built-in default) applies again.</p>
       <div className="form-grid">
         {config.tunables.map(t => <label key={t.name}>{t.label}<span className="row gap">
           {t.kind === 'boolean'
             ? <select value={tunableDrafts[t.name] ?? t.value ?? ''} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))}><option value="">default (false)</option><option value="true">true</option><option value="false">false</option></select>
-            : <input type={t.kind === 'secret' ? 'password' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}
+            : <input type={t.kind === 'secret' ? 'password' : t.kind === 'url' ? 'url' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}
           <button className="button small" disabled={busy || !(t.name in tunableDrafts)} onClick={() => saveTunable(t.name)}><Check size={12} /></button>
         </span><small className="help">{t.unreadable ? 'Re-enter: sealed under an old secret.' : `${sourceLabel[t.source]} · ${t.name}`}</small></label>)}
       </div>

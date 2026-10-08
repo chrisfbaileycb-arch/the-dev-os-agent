@@ -33,6 +33,7 @@ export interface WorkflowMeta {
 export const PERSONA_IDS = [
   'assistant', 'coder', 'chat',
   'operator', 'auditor', 'reputation', 'browser',
+  'the-drill', 'drill', 'haven', 'the-ledger', 'ledger', 'coach', 'first-responder', 'the-oracle', 'oracle', 'translator',
   'dispatcher', 'researcher', 'architect', 'reviewer', 'scribe',
 ] as const;
 

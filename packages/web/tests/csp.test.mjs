@@ -58,3 +58,53 @@ test('the sandbox shell gives the page in-memory storage, since an opaque origin
   assert.match(shell, /sessionStorage/);
   assert.match(shell, /Object\.defineProperty\(window,n/);
 });
+
+test('the app policy lets the sync drawer reach api.github.com, and nothing broader', () => {
+  assert.match(CSP, /connect-src 'self' https:\/\/esm\.sh https:\/\/api\.github\.com http:\/\/localhost:11434 http:\/\/127\.0\.0\.1:11434 http:\/\/localhost:1234 http:\/\/127\.0\.0\.1:1234;/);
+  assert.doesNotMatch(CSP, /connect-src [^;]*https:(?!\/\/)/);
+  assert.doesNotMatch(CSP, /connect-src [^;]*http:(?!\/\/)/);
+});
+
+test('the only local addresses the app may reach are Ollama and LM Studio on loopback', () => {
+  const connect = CSP.match(/connect-src ([^;]*)/)[1].split(' ');
+  const local = connect.filter(src => src.startsWith('http://'));
+  assert.deepEqual(local, ['http://localhost:11434', 'http://127.0.0.1:11434', 'http://localhost:1234', 'http://127.0.0.1:1234']);
+  assert.ok(!connect.some(src => src.includes('*')));
+});
+
+test('the sandbox page is sandboxed by its own response header, not only by the embedding iframe', () => {
+  // Without this, /sandbox.html opened directly or framed by another site ran with this app's
+  // real origin and could read visitors' saved keys.
+  assert.match(SANDBOX_CSP, /^sandbox allow-scripts/);
+  assert.doesNotMatch(SANDBOX_CSP, /allow-same-origin/);
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  assert.match(shell, /event\.source !== window\.parent/, 'only the embedding app may post a page in');
+  const panel = readFileSync(new URL('../src/ui/OutputPanel.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(panel, /allow-popups-to-escape-sandbox/);
+});
+
+test('the sandbox shell reports whether the app actually ran, not just that it compiled', () => {
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  for (const state of ['"ready"', '"blank"', '"error"']) assert.ok(shell.includes(state), `reports ${state}`);
+  assert.match(shell, /type:"sf-preview"/);
+});
+
+test('the sandbox shell uses a sandboxed srcdoc bridge rather than document.write', () => {
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(shell, /document\.write/);
+  assert.match(shell, /sandbox["']?,\s*["']allow-scripts allow-modals allow-forms["']/);
+  assert.match(shell, /srcdoc/);
+});
+
+test('the preview frame in OutputPanel uses the restricted sandbox attribute without allow-popups', () => {
+  const panel = readFileSync(new URL('../src/ui/OutputPanel.tsx', import.meta.url), 'utf8');
+  assert.match(panel, /sandbox="allow-scripts allow-modals allow-forms"/);
+});
+
+test('the sandbox shell wraps client scripts with DOMContentLoaded / readyState execution guards', () => {
+  const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+  assert.match(shell, /wrapClientScripts/);
+  assert.match(shell, /document\.readyState !== ["']loading["']/);
+  assert.match(shell, /DOMContentLoaded/);
+});
+

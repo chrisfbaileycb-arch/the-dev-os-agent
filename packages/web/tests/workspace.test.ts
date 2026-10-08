@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CREDIT_WEIGHTS, catalog, creditsFor, estimateTokens, tierFor, weightFor } from '../src/lib/catalog';
 import { computeBalance, makeEntry, merge, type LedgerEntry, type Session } from '../src/lib/store';
-import { DIRECT_MODE_LABEL, SAFETY_BASELINE, composePrompt, defaultPersonaId, generalPersonas, personaById, personas, skills, workflows } from '../src/lib/roster';
+import { DIRECT_MODE_LABEL, SAFETY_BASELINE, allSkills, composePrompt, defaultPersonaId, generalPersonas, personaById, personas, skills, workflows } from '../src/lib/roster';
 import { clearCustomAgents, createCustomAgent, customAgents, removeCustomAgent, validateDraft } from '../src/lib/customAgents';
 import { inspectPageSpec, parseToolCall, summarizeReport, toolProtocol } from '../src/lib/tools';
 import { mcpToolSpecs, slug, type McpConnection } from '../src/lib/mcp';
@@ -229,6 +229,13 @@ describe('custom agents', () => {
     expect(personaById('assistant').group).toBe('general');
     expect(personaById('assistant').prompt).not.toContain('Impersonator');
   });
+  it('throws an error when saving an agent with a missing or whitespace-only name or prompt', () => {
+    const msg = 'An agent needs a name and a system prompt.';
+    expect(() => createCustomAgent({ name: '', prompt: 'Valid', role: '' })).toThrow(msg);
+    expect(() => createCustomAgent({ name: '  ', prompt: 'Valid', role: '' })).toThrow(msg);
+    expect(() => createCustomAgent({ name: 'Valid', prompt: '', role: '' })).toThrow(msg);
+    expect(() => createCustomAgent({ name: 'Valid', prompt: '  ', role: '' })).toThrow(msg);
+  });
   it('refuses a draft that is missing the two fields that matter', () => {
     expect(validateDraft({ name: '', prompt: 'x', role: '' })).toMatch(/name/);
     expect(validateDraft({ name: ' ', prompt: 'x', role: '' })).toMatch(/name/);
@@ -258,6 +265,38 @@ describe('roster', () => {
     expect(composePrompt(personaById('reviewer'), personaById('coder'))).toContain('started by the Coder');
     expect(personaById('nope').id).toBe(defaultPersonaId);
   });
+  it('supplies all twelve expanded crew skills with capability allow-lists and voice guardrails', () => {
+    expect(allSkills).toHaveLength(12);
+    const expectedSkillIds = [
+      'the-drill', 'haven', 'the-ledger', 'coach', 'first-responder', 'the-oracle',
+      'translator', 'dispatcher', 'researcher', 'architect', 'reviewer', 'scribe'
+    ];
+    expect(allSkills.map(s => s.id)).toEqual(expectedSkillIds);
+
+    // Aliases resolve properly
+    expect(personaById('drill').name).toBe('The Drill');
+    expect(personaById('the-drill').name).toBe('The Drill');
+    expect(personaById('ledger').name).toBe('The Ledger');
+    expect(personaById('the-ledger').name).toBe('The Ledger');
+    expect(personaById('oracle').name).toBe('The Oracle');
+    expect(personaById('the-oracle').name).toBe('The Oracle');
+
+    // Guardrail assertions
+    expect(personaById('haven').prompt).toMatch(/988/);
+    expect(personaById('haven').prompt).toMatch(/never diagnose/i);
+    expect(personaById('coach').prompt).toMatch(/not a doctor/i);
+    expect(personaById('the-oracle').prompt).toMatch(/never incorporate personal/i);
+    expect(personaById('the-drill').prompt).toMatch(/dates|commitments/i);
+    expect(personaById('the-ledger').prompt).toMatch(/what got in the way/i);
+    expect(personaById('first-responder').prompt).toMatch(/911/);
+    expect(personaById('translator').prompt).toMatch(/plain language/i);
+
+    // Capabilities assertions
+    expect(personaById('the-drill').capabilities).toContain('notify_user');
+    expect(personaById('the-ledger').capabilities).toContain('storage_write');
+    expect(personaById('researcher').capabilities).toContain('web_scrape');
+    expect(personaById('dispatcher').capabilities).toContain('schedule_cron');
+  });
   it('parses only the documented tool call shape', () => {
     const specs = [inspectPageSpec];
     expect(parseToolCall('TOOL {"tool":"inspect_page","url":"https://a.example"}\n', specs)).toEqual({ tool: 'inspect_page', args: { url: 'https://a.example' } });
@@ -267,7 +306,7 @@ describe('roster', () => {
     expect(summarizeReport({ url: 'u', status: 200, title: 't', description: 'd', canonical: '', robots: '', lang: 'en', h1: ['H'], headingCount: 1, og: { 'og:title': 'x' }, wordCount: 3, text: 'a b c', links: [{ href: 'h', text: '' }], elapsedMs: 5 })).toContain('(no text) -> h');
   });
   it('turns enabled MCP connections into named chat tools', () => {
-    const conn: McpConnection = { id: 'c1', name: 'Shop Orders', url: 'https://mcp.example/orders', token: '', saveToken: false, enabled: true, tools: [{ name: 'lookup_order', description: 'Find an order', inputSchema: { properties: { number: { type: 'string' } }, required: ['number'] } }] };
+    const conn: McpConnection = { id: 'c1', name: 'Shop Orders', url: 'https://mcp.example/orders', transport: 'http', token: '', saveToken: false, enabled: true, tools: [{ name: 'lookup_order', description: 'Find an order', inputSchema: { properties: { number: { type: 'string' } }, required: ['number'] } }] };
     const specs = mcpToolSpecs([conn, { ...conn, id: 'c2', enabled: false }]);
     expect(slug('Shop Orders')).toBe('shop_orders'); expect(specs).toHaveLength(1); expect(specs[0].name).toBe('shop_orders.lookup_order'); expect(specs[0].description).toContain('"number": string');
     expect(parseToolCall('TOOL {"tool":"shop_orders.lookup_order","args":{"number":"42"}}', specs)?.args).toEqual({ number: '42' });
