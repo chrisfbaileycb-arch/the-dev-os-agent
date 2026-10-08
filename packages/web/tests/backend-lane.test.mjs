@@ -9,11 +9,11 @@ import { FREE_MODELS, adminTierConfig, freeModel, freeModels, freeTierStatus, pa
 import { REGISTRY, backendProviders, isBackendProvider, isShieldEligible } from '../server/providerRegistry.mjs';
 
 // The backend lane: the operator's dashboard and everything this deployment funds are limited to
-// Anthropic, OpenAI, Google, xAI, Groq and Cerebras (plus Meta, Azure and Bedrock once integrated). This file runs with
-// the lane enforced, which is the default; the older funding-mechanics tests switch it off.
+// OpenAI, Anthropic, Google, Groq, and xAI. This file runs with the lane enforced, which is the
+// default; the older funding-mechanics tests switch it off.
 
 const TOKEN = 'a-long-admin-token-for-tests';
-const NON_LANE = ['github', 'vercel', 'openrouter', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'ollama', 'custom', 'cerebras', 'meta', 'azure', 'bedrock'];
+const NON_LANE = ['github', 'vercel', 'openrouter', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'ollama', 'custom', 'cerebras', 'meta', 'azure', 'bedrock', 'huggingface', 'nvidia'];
 
 test.afterEach(() => setAdminTiers(null));
 
@@ -29,22 +29,22 @@ async function login(url) {
   return r.headers.get('set-cookie').split(';')[0];
 }
 
-test('the registry names the key lane: the same seven providers on the dashboard and for a visitor key', () => {
-  const lane = ['anthropic', 'google', 'groq', 'huggingface', 'nvidia', 'openai', 'xai'];
+test('the registry names the key lane: the same five providers on the dashboard and for a visitor key', () => {
+  const lane = ['anthropic', 'google', 'groq', 'openai', 'xai'];
   assert.deepEqual(backendProviders().sort(), lane);
   assert.deepEqual(backendProviders({ onlyIntegrated: false }).sort(), lane);
   for (const id of lane) assert.equal(isBackendProvider(id), true, id);
   for (const id of [...NON_LANE, 'not-a-provider', '', undefined]) assert.equal(isBackendProvider(id), false, String(id));
-  // Hugging Face is on the lane by request. It is a relay, so it is not Shield-eligible.
-  for (const r of REGISTRY) if (isBackendProvider(r.id) && r.id !== 'huggingface') assert.equal(isShieldEligible(r), true, r.id);
+  for (const r of REGISTRY) if (isBackendProvider(r.id)) assert.equal(isShieldEligible(r), true, r.id);
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'huggingface')), false);
+  assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'nvidia')), true);
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'github')), true);
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'xkiro')), false);
 });
 
 test('the dashboard picks are the only funded models: the built-in Groq and OpenRouter ids are gone', () => {
   assert.deepEqual(FREE_MODELS, []);
-  const env = { GROQ_API_KEY: 'k', OPENROUTER_API_KEY: 'k', XKIRO_API_KEY: 'k', HF_TOKEN: 'k' };
+  const env = { GROQ_API_KEY: 'k', OPENROUTER_API_KEY: 'k', XKIRO_API_KEY: 'k', HF_TOKEN: 'k', FREE_CREDIT_MONTHLY_POOL: '400' };
   assert.deepEqual(freeModels(env, ['a/free']), []);
   // Groq retired these on a live key (404 "does not exist"); they must never be offered as free.
   for (const id of ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant', 'openrouter/auto', 'meta-llama/llama-3.2-3b-instruct:free', 'a/free', 'Qwen/Qwen2.5-7B-Instruct']) assert.equal(freeModel(id, env, ['a/free']), undefined, id);
@@ -91,8 +91,8 @@ test('the dashboard stores keys for the lane only, and can still clear one left 
   const flags = Object.fromEntries(settings.keyStatus({}).map(p => [p.provider, p.backend]));
   assert.equal(flags.anthropic, true);
   assert.equal(flags.groq, true);
-  assert.equal(flags.nvidia, true);
-  assert.equal(flags.huggingface, true);
+  assert.equal(flags.nvidia, false);
+  assert.equal(flags.huggingface, false);
   assert.equal(flags.cerebras, false);
   assert.equal(flags.xkiro, false);
   assert.equal(flags.openrouter, false);
@@ -107,7 +107,7 @@ test('the admin API lists the lane, parks leftover keys apart, says what is plan
   await withServer([createAdmin({ db, env, settings, log: () => {} })], async url => {
     const cookie = await login(url);
     const config = await (await call(url, '/api/admin/config', { cookie })).json();
-    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'google', 'groq', 'huggingface', 'nvidia', 'openai', 'xai']);
+    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'google', 'groq', 'openai', 'xai']);
     assert.ok(config.providers.every(p => p.backend === true));
     // Only a dashboard-stored leftover is offered for removal; an environment key has no row at all.
     assert.deepEqual(config.retired.map(p => p.provider), ['venice']);
@@ -123,18 +123,20 @@ test('the admin API lists the lane, parks leftover keys apart, says what is plan
   await assert.rejects(() => discoverForProvider('openrouter', { OPENROUTER_API_KEY: 'k' }), /US backend providers/);
 });
 
-test('NVIDIA NIM is on the key lane; Amazon Bedrock is not a key slot', async () => {
+test('NVIDIA and Hugging Face are not key slots; Amazon Bedrock is not either', async () => {
   assert.equal((await resolveTarget('nvidia', '', {})).base, 'https://integrate.api.nvidia.com/v1');
   await assert.rejects(() => resolveTarget('bedrock', '', {}), /Unsupported provider/);
   const db = openDatabase(':memory:');
   const settings = await openSettings({ db, env: { ADMIN_TOKEN: TOKEN } });
-  await settings.setKey('nvidia', 'nvapi-test-key');
-  assert.equal(settings.env().NVIDIA_API_KEY, 'nvapi-test-key');
+  await assert.rejects(() => settings.setKey('nvidia', 'nvapi-test-key'), /US backend providers/);
+  await assert.rejects(() => settings.setKey('huggingface', 'hf-test-token'), /US backend providers/);
   await assert.rejects(() => settings.setKey('bedrock', 'AKIAIOSFODNN7EXAMPLE'), /Unknown provider|US backend providers/);
   await assert.rejects(() => settings.setKey('openai', 'not-openai'), /sk-/);
   await assert.rejects(() => settings.setKey('meta', 'muse-key-for-test'), /US backend providers/);
-  const env = { PLAN_ACCESS_TOKENS: 'plan-token-0123456789', NVIDIA_API_KEY: 'nv-env', META_API_KEY: 'muse-env' };
-  assert.equal(keyFor({ provider: 'nvidia', serverAccessToken: 'plan-token-0123456789' }, env), 'nv-env');
+  const env = { PLAN_ACCESS_TOKENS: 'plan-token-0123456789', NVIDIA_API_KEY: 'nv-env', HF_TOKEN: 'hf-env', META_API_KEY: 'muse-env', GROQ_API_KEY: 'gsk-env' };
+  assert.equal(keyFor({ provider: 'nvidia', serverAccessToken: 'plan-token-0123456789' }, env), '');
+  assert.equal(keyFor({ provider: 'huggingface', serverAccessToken: 'plan-token-0123456789' }, env), '');
+  assert.equal(keyFor({ provider: 'groq', serverAccessToken: 'plan-token-0123456789' }, env), 'gsk-env');
   assert.equal(keyFor({ provider: 'meta', serverAccessToken: 'plan-token-0123456789' }, env), '');
   assert.equal(keyFor({ provider: 'bedrock', serverAccessToken: 'plan-token-0123456789' }, env), '');
 });

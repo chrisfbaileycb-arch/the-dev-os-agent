@@ -349,7 +349,7 @@ const STATIC_FREE = [
  */
 /**
  * What this deployment may fund on its own account is the key lane in the provider registry
- * (OpenAI, Anthropic, Google, Hugging Face, Groq, NVIDIA, xAI). Everything else is not a key slot.
+ * (OpenAI, Anthropic, Google, Groq, xAI). Everything else is not a key slot.
  */
 export function freeModels(env = process.env, discovered = discoveredXkiro, tiers = adminTiers) {
   // Not an option: the backend lane is the architecture, not a launch setting. It applies to the
@@ -468,7 +468,7 @@ export function freeModel(id, env = process.env, discovered = discoveredXkiro) {
 
 /** Free models this deployment can actually fund, i.e. the ones whose provider key is set. */
 export function fundedModels(env = process.env, discovered = discoveredXkiro) {
-  if (env.FREE_TIER_DISABLED === 'true') return [];
+  if (env.FREE_TIER_DISABLED === 'true' || monthlyPool(env) <= 0) return [];
   // A pool counts as funded when a credential resolves for it, which is its own provider key or,
   // for the OpenRouter pool, the owner key standing in for it.
   return freeModels(env, discovered).filter(m => Boolean(freeKey(m, env).key));
@@ -496,7 +496,7 @@ export function freeTierStatus(env = process.env, discovered = discoveredXkiro) 
   };
 }
 
-export const monthlyPool = (env = process.env) => Math.max(0, Number(env.FREE_CREDIT_MONTHLY_POOL ?? 400) || 0);
+export const monthlyPool = (env = process.env) => Math.max(0, Number(env.FREE_CREDIT_MONTHLY_POOL ?? 0) || 0);
 export const burstLimit = (env = process.env) => Math.max(1, Number(env.FREE_MAX_PER_HOUR ?? 40) || 40);
 
 /** Credits for a completed free-tier request, rounded up to two decimals like the client ledger. */

@@ -17,11 +17,10 @@ describe('model lanes', () => {
     const own = providersInLane(all, 'own');
     expect([...us, ...own].sort()).toEqual([...all].sort());
     expect(us.sort()).toEqual([...US_LANE_PROVIDERS].sort());
-    for (const id of ['github', 'vercel', 'openrouter', 'ollama', 'cohere', 'venice', 'xkiro', 'aihubmix', 'custom', 'cerebras', 'meta'] as Provider[]) {
+    for (const id of ['github', 'vercel', 'openrouter', 'ollama', 'cohere', 'venice', 'xkiro', 'aihubmix', 'custom', 'cerebras', 'meta', 'huggingface', 'nvidia'] as Provider[]) {
       expect(isUsProvider(id), id).toBe(false);
       expect(own).toContain(id);
     }
-    for (const id of ['huggingface', 'nvidia'] as Provider[]) expect(isUsProvider(id), id).toBe(true);
   });
 
   it('a server-funded run is always US; a key run follows its provider', () => {

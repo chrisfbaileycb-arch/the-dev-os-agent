@@ -26,7 +26,7 @@ export interface ModelChoice {
  * survives the filter and simply fails on send if it really wasn't chat, while wrongly hiding
  * a working model is a choice the visitor cannot recover from.
  */
-const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl/i;
+const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b|imagine|flux|sora|dream[-_ ]?machine|eleven/i;
 export function isChatModel(id: string): boolean {
   return id.trim().length > 0 && id.length <= 300 && !NON_CHAT.test(id);
 }
@@ -41,7 +41,7 @@ export function isVerifiedOperational(provider?: string, modelId?: string): bool
   const prov = String(provider || '').toLowerCase().trim();
 
   if (prov === 'ollama') return isChatModel(id);
-  const lane = ['openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
+  const lane = ['openai', 'anthropic', 'google', 'groq', 'xai'];
   if (lane.includes(prov)) return isChatModel(id);
   return false;
 }

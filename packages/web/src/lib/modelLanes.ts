@@ -3,8 +3,8 @@ import type { Provider } from './providers';
 
 // The two model dropdowns on the dock.
 //
-//   us   The seven providers the operator connects, and that a visitor may bring a key for:
-//        OpenAI, Anthropic, Google, Hugging Face, Groq, NVIDIA, and xAI.
+//   us   The five providers the operator connects, and that a visitor may bring a key for:
+//        OpenAI, Anthropic, Google, Groq, and xAI.
 //        Free and plan models live here too.
 //   own  A model running on this machine. Nothing else is a key slot.
 //
@@ -13,7 +13,7 @@ import type { Provider } from './providers';
 
 export type Lane = 'us' | 'own';
 
-export const US_LANE_PROVIDERS: readonly Provider[] = ['openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
+export const US_LANE_PROVIDERS: readonly Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 
 export const isUsProvider = (provider: Provider | string | undefined): boolean =>
   US_LANE_PROVIDERS.includes(provider as Provider);

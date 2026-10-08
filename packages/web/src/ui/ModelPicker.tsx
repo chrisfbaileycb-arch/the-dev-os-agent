@@ -22,7 +22,7 @@ import type { FreeTier } from '../lib/store';
 //
 // Every group is sorted by capability tier (lib/modelChoices.ts): flagships first, then fast
 // lightweight models, then previews and legacy releases, and each row says which tier it is in.
-// A provider whose pipe is switched off in Connectors → Model providers does not appear at all.
+// A provider whose stored pipe switch is off does not appear. Keys are entered in Settings.
 //
 // The dock renders this component twice, once per lane (lib/modelLanes.ts). The `us` lane holds the
 // deployment's free and plan groups plus the US labs; the `own` lane holds every other provider and
@@ -54,7 +54,7 @@ export interface ModelPickerProps {
   onNeedsKey: (model: CatalogModel) => void;
   onNeedsPlan: (model: ModelChoice) => void;
   onDiscover: (provider: Provider) => void;
-  /** Which provider groups are switched on (Connectors → Model providers). */
+  /** Which provider groups are switched on. Keys are entered in Settings, not here. */
   pipes: PipeSettings;
 }
 
@@ -70,7 +70,7 @@ export function payLabel(inference: InferenceMode): string {
 /** How many rows a filtered group shows before asking for a narrower filter. */
 const VISIBLE_CAP = 60;
 /** Vendors in the order their groups appear; gateways after the direct vendors. */
-const ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
+const ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'groq', 'xai'];
 const tierOf = (m: ModelChoice) => TIER_LABELS[capabilityTier(m.id, m.label)];
 
 export default function ModelPicker(p: ModelPickerProps) {
@@ -187,7 +187,7 @@ export default function ModelPicker(p: ModelPickerProps) {
 
   return <div className="model-picker" ref={root}>
     {/* The dropdown that holds the current model shows it; the other shows its own name, dimmed. */}
-    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}${holdsCurrent ? '' : ' idle'}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title={holdsCurrent ? `Choose a model — ${LANE_LABEL[p.lane]}` : managed ? 'OpenAI, Anthropic, Google, Hugging Face, Groq, NVIDIA, xAI' : 'A model running on this machine'}>
+    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}${holdsCurrent ? '' : ' idle'}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title={holdsCurrent ? `Choose a model — ${LANE_LABEL[p.lane]}` : managed ? 'OpenAI, Anthropic, Google, Groq, xAI' : 'A model running on this machine'}>
       {holdsCurrent
         ? (p.inference === 'free' ? <Sparkles size={13} strokeWidth={1.75} /> : p.inference === 'credits' ? <Wallet size={13} strokeWidth={1.75} /> : <KeyRound size={13} strokeWidth={1.75} />)
         : (managed ? <Sparkles size={13} strokeWidth={1.75} /> : <Globe size={13} strokeWidth={1.75} />)}

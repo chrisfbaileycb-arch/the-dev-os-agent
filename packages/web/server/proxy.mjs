@@ -7,7 +7,7 @@ import { planAccess, planHolder, planCredits, planRates, freeOutputTokens } from
 export { planHolder } from './plans.mjs';
 import { isBackendProvider } from './providerRegistry.mjs';
 import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeModels, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
-import { isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
+import { isChatModelId, isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
 import { accountProbe } from './keyProbe.mjs';
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
@@ -497,6 +497,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
       if (window.count > 60) throw new HttpError(429, 'Proxy request limit reached. Wait one minute.');
       const body = await readBody(req, path === '/api/chat' ? 12_000_000 : 256_000);
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Expected an object.');
+      if (path === '/api/chat' && typeof body.model === 'string' && body.model.trim() && !isChatModelId(body.model)) {
+        throw new HttpError(400, 'That model is not a text chat model. Image, video, and audio models are not sent through chat.');
+      }
       // A keyless request can only be funded from the discovered pool, so the pool has to exist
       // before the funding decision is made. A request carrying its own key never waits for this.
       if (!(typeof body.apiKey === 'string' && body.apiKey.trim())) {
@@ -563,7 +566,8 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
         if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`, 'free_tier_busy');
         const pool = monthlyPool(env);
         const used = db ? await db.usedThisMonth(workspace, new Date(), 'free') : 0;
-        if (pool <= 0 || used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own free Google AI Studio, GitHub, Groq or Cerebras key in Settings, or wait for the monthly reset.`, 'free_tier_exhausted');
+        if (pool <= 0) throw new HttpError(402, 'Free tier is off. Subscribe to a plan or add your own key in Settings.', 'free_tier_exhausted');
+        if (used >= pool) throw new HttpError(402, `This workspace has used its ${pool} free credits for the month. Add your own key in Settings, or wait for the monthly reset.`, 'free_tier_exhausted');
       }
       if (planWorkspace && path === '/api/chat') {
         if (!db) throw new HttpError(503, 'Paid plans require usage storage before managed requests can run.', 'plan_storage_required');

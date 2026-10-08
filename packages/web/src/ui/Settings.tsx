@@ -30,14 +30,12 @@ export interface SettingsProps {
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
-const BYOK_PROVIDERS: Provider[] = ['openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
+const BYOK_PROVIDERS: Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
   openai: 'sk-…',
   anthropic: 'sk-ant-…',
   google: 'Your Google AI Studio key',
-  huggingface: 'Your Hugging Face token',
   groq: 'Your Groq key',
-  nvidia: 'Your NVIDIA NIM key',
   xai: 'Your xAI key',
 };
 

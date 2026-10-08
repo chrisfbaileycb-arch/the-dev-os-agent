@@ -54,7 +54,7 @@ test('tier config is validated: unknown providers drop out and free wins over pa
 
 test('admin tiers shape the free and paid pools the proxy reads', () => {
   setAdminTiers({ mode: 'auto', free: [{ id: 'openai/gpt-4o-mini', provider: 'openrouter', label: 'GPT-4o mini' }], paid: [{ id: 'gpt-4o', provider: 'openai', label: 'GPT-4o' }, { id: 'groq/llama-3.1-8b-instant', provider: 'groq' }] });
-  const env = { OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2', OPENAI_API_KEY: 'k3', SERVER_CREDIT_ACCESS_TOKEN: 'tok' };
+  const env = { OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2', OPENAI_API_KEY: 'k3', SERVER_CREDIT_ACCESS_TOKEN: 'tok', FREE_CREDIT_MONTHLY_POOL: '400' };
   const free = freeModels(env, []);
   assert.equal(free[0].id, 'openai/gpt-4o-mini');
   assert.equal(free[0].envKey, 'OPENROUTER_API_KEY');
@@ -137,7 +137,7 @@ test('a deployment with no ADMIN_TOKEN can be set up from the page, once', async
 
 test('a stored key is sealed in the database, overlays the environment, and funds the next request', async () => {
   const db = openDatabase(':memory:');
-  const env = { ADMIN_TOKEN: TOKEN, GROQ_API_KEY: 'env-groq' };
+  const env = { ADMIN_TOKEN: TOKEN, GROQ_API_KEY: 'env-groq', FREE_CREDIT_MONTHLY_POOL: '400' };
   const settings = await openSettings({ db, env });
   let seenAuth = null;
   const proxy = createProxy({ env, settings, discover: async () => {}, discoverOpenRouter: async () => {}, transport: async (url, options) => { seenAuth = options.headers.Authorization; const { Readable } = await import('node:stream'); const s = Readable.from([Buffer.from('{"data":[{"id":"m"}]}')]); s.statusCode = 200; s.headers = { 'content-type': 'application/json' }; return s; } });

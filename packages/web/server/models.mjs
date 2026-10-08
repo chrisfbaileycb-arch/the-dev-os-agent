@@ -7,7 +7,7 @@
 // provider itself calls the model free — so that is what this module reduces each payload to.
 // Fields that are not known are omitted rather than guessed, so `{ id }` stays `{ id }`.
 
-const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b/i;
+const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b|imagine|flux|sora|dream[-_ ]?machine|eleven/i;
 
 /** A catalogue id that can take a chat turn. Embeddings, speech, and image models cannot. */
 export function isChatModelId(id) {
@@ -41,7 +41,7 @@ export function isVerifiedOperational(provider, modelId) {
   if (prov === 'ollama') return isChatModelId(id);
   // The key's own catalogue is the access list. A compiled flagship list is how the picker
   // used to offer models the key cannot call.
-  const lane = ['openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
+  const lane = ['openai', 'anthropic', 'google', 'groq', 'xai'];
   if (lane.includes(prov)) return isChatModelId(id);
   return false;
 }

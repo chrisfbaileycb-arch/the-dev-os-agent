@@ -14,6 +14,8 @@ describe('isChatModel', () => {
     expect(isChatModel('tts-1-hd')).toBe(false);
     expect(isChatModel('omni-moderation-latest')).toBe(false);
     expect(isChatModel('dall-e-3')).toBe(false);
+    expect(isChatModel('grok-imagine-image')).toBe(false);
+    expect(isChatModel('imagen-3')).toBe(false);
   });
   it('errs toward keeping an unknown id rather than hiding a working model', () => {
     expect(isChatModel('some-unknown-model-v2')).toBe(true);
@@ -96,7 +98,7 @@ describe('model verification and section grouping', () => {
 
     // OpenRouter / gateways without verified flagship status
     expect(isVerifiedOperational('openrouter', 'community/custom-model')).toBe(false);
-    expect(isVerifiedOperational('huggingface', 'meta-llama/Llama-3.1-8B-Instruct')).toBe(true);
+    expect(isVerifiedOperational('huggingface', 'meta-llama/Llama-3.1-8B-Instruct')).toBe(false);
     expect(isVerifiedOperational('google', 'text-embedding-004')).toBe(false);
   });
 

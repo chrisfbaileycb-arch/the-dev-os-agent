@@ -32,7 +32,7 @@ export interface CatalogModel { id: string; provider: Provider; label: string; t
 export const CREDIT_WEIGHTS = { fast: 0.5, standard: 3, reasoning: 15 } as const;
 export const DEFAULT_MONTHLY_POOL = 100_000;
 /** Mirrors FREE_CREDIT_MONTHLY_POOL in server/freetier.mjs; the server's number wins once it answers. */
-export const DEFAULT_FREE_POOL = 400;
+export const DEFAULT_FREE_POOL = 0;
 
 export const catalog: CatalogModel[] = [
   // Deep reasoning: needs your own key, or platform credits on a deployment that grants them.

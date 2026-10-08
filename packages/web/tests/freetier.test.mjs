@@ -31,7 +31,10 @@ async function withProxy(options, fn) {
   // Discovery is stubbed out by default: these tests assert how requests are funded and routed,
   // and reaching a live gateway to do it would make them slow, flaky, and dependent on somebody
   // else's uptime. tests/discovery.test.mjs is where the real catalogue is exercised.
-  const handler = createProxy({ discover: async () => {}, discoverOpenRouter: async () => {}, ...options });
+  // The production default pool is 0. These tests prove the funding mechanism, so they fund a pool
+  // unless the case sets its own.
+  const env = { FREE_CREDIT_MONTHLY_POOL: '400', ...(options.env ?? {}) };
+  const handler = createProxy({ discover: async () => {}, discoverOpenRouter: async () => {}, ...options, env });
   const server = createServer((req, res) => { handler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); }
@@ -72,7 +75,7 @@ test('a discovered gateway model is funded on its price, not on its name', () =>
   // $0 in and $0 out on the gateway, and `gpt-[45]` matched it, so the tier refused to serve a
   // model that costs nothing. A discovered id carries the gateway's own price, which settles the
   // question the pattern was approximating, so the pattern does not apply to it.
-  const env = { XKIRO_API_KEY: 'k' };
+  const env = { XKIRO_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' };
   assert.equal(isFrontier('openai/gpt-5.3-codex-spark'), true, 'the old pattern still matches it');
   assert.equal(freeModel('openai/gpt-5.3-codex-spark', env, DISCOVERED)?.provider, 'xkiro');
   assert.ok(freeTierStatus(env, DISCOVERED).models.includes('openai/gpt-5.3-codex-spark'));
@@ -83,7 +86,7 @@ test('a discovered gateway model is funded on its price, not on its name', () =>
 test('the funded list says which provider serves each model', () => {
   // The browser used to infer this from the id prefix and sent every non-Groq free model to
   // OpenRouter the moment a visitor added their own key.
-  const status = freeTierStatus({ GROQ_API_KEY: 'k', XKIRO_API_KEY: 'k' }, DISCOVERED);
+  const status = freeTierStatus({ GROQ_API_KEY: 'k', XKIRO_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }, DISCOVERED);
   assert.equal(status.providers['groq/llama-3.3-70b-versatile'], 'groq');
   assert.equal(status.providers['deepseek/deepseek-v4-flash'], 'xkiro');
   assert.deepEqual(Object.keys(status.providers).sort(), [...status.models].sort());
@@ -93,7 +96,7 @@ test('the discovered pool is what the gateway reported, deduplicated and bounded
   const restore = discovered(['a/one', ' a/two ', 'a/one', '', 42, null, 'x'.repeat(201)]);
   try {
     assert.deepEqual(xkiroCatalog(), ['a/one', 'a/two'], 'blank, oversized and non-string ids are dropped');
-    assert.deepEqual(freeTierStatus({ XKIRO_API_KEY: 'k' }).models, ['a/one', 'a/two'], 'module state feeds the proxy');
+    assert.deepEqual(freeTierStatus({ XKIRO_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }).models, ['a/one', 'a/two'], 'module state feeds the proxy');
   } finally { restore(); }
   assert.deepEqual(xkiroCatalog(), []);
   assert.equal(freeTierStatus({ XKIRO_API_KEY: 'k' }).enabled, false, 'no catalogue means no free tier');
@@ -104,9 +107,11 @@ test('only exact allowlist ids resolve, and only when the deployment funds them'
   assert.equal(freeModel('GROQ/LLAMA-3.3-70B-VERSATILE')?.provider, 'groq', 'case is normalised');
   for (const bad of ['groq/llama-3.3-70b', 'llama-3.3-70b-versatile', 'openai/gpt-4o', '', null, undefined, 42]) assert.equal(freeModel(bad), undefined);
   assert.equal(freeTierStatus({}).enabled, false);
-  assert.deepEqual(freeTierStatus({ GROQ_API_KEY: 'k' }, []).models, ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant']);
-  assert.equal(freeTierStatus({ GROQ_API_KEY: 'k', FREE_TIER_DISABLED: 'true' }).enabled, false);
-  assert.equal(freeTierStatus({ GROQ_API_KEY: 'k' }).monthlyCredits, 400);
+  assert.deepEqual(freeTierStatus({ GROQ_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }, []).models, ['groq/llama-3.3-70b-versatile', 'groq/llama-3.1-8b-instant']);
+  assert.equal(freeTierStatus({ GROQ_API_KEY: 'k', FREE_TIER_DISABLED: 'true', FREE_CREDIT_MONTHLY_POOL: '400' }).enabled, false);
+  assert.equal(freeTierStatus({ GROQ_API_KEY: 'k' }).enabled, false, 'an unset pool funds nothing');
+  assert.equal(freeTierStatus({ GROQ_API_KEY: 'k' }).monthlyCredits, 0);
+  assert.equal(freeTierStatus({ GROQ_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }).monthlyCredits, 400);
 });
 
 test('free routing strips the Groq namespace and fans openrouter/auto out over the free pool', () => {
@@ -307,7 +312,7 @@ test('quota and burst refusals carry codes the browser can branch on', async () 
 
 test('xKiro funds the free tier on its own, and clears the warming-up state', () => {
   // One key plus a discovered catalogue, and the tier reports enabled with the gateway's own ids.
-  const env = { XKIRO_API_KEY: 'k' };
+  const env = { XKIRO_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' };
   const status = freeTierStatus(env, DISCOVERED);
   assert.equal(status.enabled, true);
   assert.deepEqual(status.models, DISCOVERED);
@@ -331,14 +336,14 @@ test('XKIRO_FREE_MODELS narrows the discovered pool and can no longer widen it',
   // rather than treated as empty — a one-request window at boot that /api/providers waits out.
   assert.deepEqual(xkiroPool({ XKIRO_FREE_MODELS: 'a/b' }, []), ['a/b']);
 
-  const env = { XKIRO_API_KEY: 'k', XKIRO_FREE_MODELS: 'deepseek/deepseek-v4-flash' };
+  const env = { XKIRO_API_KEY: 'k', XKIRO_FREE_MODELS: 'deepseek/deepseek-v4-flash', FREE_CREDIT_MONTHLY_POOL: '400' };
   assert.equal(freeModel('deepseek/deepseek-v4-flash', env, DISCOVERED)?.provider, 'xkiro');
   assert.equal(freeModel('qwen/qwen3.8-max:free', env, DISCOVERED), undefined, 'narrowed out');
   assert.deepEqual(fundedModels(env, DISCOVERED).map(m => m.id), ['deepseek/deepseek-v4-flash']);
 });
 
 test('several provider keys stack into one pool', () => {
-  const both = freeTierStatus({ GROQ_API_KEY: 'k', XKIRO_API_KEY: 'k' }, DISCOVERED).models;
+  const both = freeTierStatus({ GROQ_API_KEY: 'k', XKIRO_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }, DISCOVERED).models;
   assert.ok(both.includes('groq/llama-3.3-70b-versatile'));
   assert.ok(both.includes('deepseek/deepseek-v4-flash'));
   assert.equal(both.length, 2 + DISCOVERED.length);
@@ -419,7 +424,7 @@ test('an owner key brings the standard free pool up without a per-provider key',
   // authenticates through their account, and a stranger can type a first message with nothing
   // pasted anywhere. Their key never reaches the browser — /api/providers reports the models it
   // unlocks, not the credential behind them.
-  const env = { OPENROUTER_OWNER_KEY: 'owner-key' };
+  const env = { OPENROUTER_OWNER_KEY: 'owner-key', FREE_CREDIT_MONTHLY_POOL: '400' };
   assert.equal(ownerKey(env), 'owner-key');
   assert.equal(ownerKeyName(env), 'OPENROUTER_OWNER_KEY');
   assert.equal(freeKey(freeModel('mistralai/mistral-nemo:free', env), env).key, 'owner-key');
@@ -436,7 +441,7 @@ test('the owner key reaches the OpenRouter pool and no other provider', () => {
   // One credential belongs to one endpoint. An OpenRouter-shaped key sent to Groq's host or the
   // Hugging Face router would trade a working free tier for a guaranteed 401, so the owner key
   // stands in for the gateway pool only; every other pool keeps needing its own provider key.
-  const env = { OPENROUTER_OWNER_KEY: 'owner-key' };
+  const env = { OPENROUTER_OWNER_KEY: 'owner-key', FREE_CREDIT_MONTHLY_POOL: '400' };
   assert.equal(freeKey(freeModel('groq/llama-3.1-8b-instant', env), env).key, '');
   assert.equal(fundedModels(env).some(m => m.provider === 'groq'), false);
   assert.equal(fundedModels(env).some(m => m.provider === 'huggingface'), false);

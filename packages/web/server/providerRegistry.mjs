@@ -49,7 +49,7 @@ export const REGISTRY = [
   // --- US inference hosts for open-weight models ---
   { id: 'groq', name: 'Groq', hq: 'US', kind: 'host', integrated: true, ...unchecked },
   { id: 'nvidia', name: 'NVIDIA NIM', hq: 'US', kind: 'host', integrated: true, ...unchecked,
-    note: 'integrate.api.nvidia.com. A key lists only the models that account can call.' },
+    note: 'integrate.api.nvidia.com. Not a key slot.' },
   { id: 'cerebras', name: 'Cerebras', hq: 'US', kind: 'host', integrated: true, ...unchecked },
 
   // --- On the visitor's machine ---
@@ -60,7 +60,7 @@ export const REGISTRY = [
   { id: 'openrouter', name: 'OpenRouter', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
     note: 'US company, but it routes to many upstream hosts, including non-US ones.' },
   { id: 'huggingface', name: 'Hugging Face', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
-    note: 'Inference Providers routes to third-party hosts.' },
+    note: 'Inference Providers routes to third-party hosts. Not a key slot.' },
   { id: 'cohere', name: 'Cohere', hq: 'CA', kind: 'direct', integrated: true, ...unchecked },
   { id: 'venice', name: 'Venice', hq: 'unknown', kind: 'direct', integrated: true, ...unchecked },
   { id: 'vercel', name: 'Vercel AI Gateway', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
@@ -89,9 +89,9 @@ export function shieldProviders({ onlyIntegrated = true } = {}) {
 export const allowedUnderShield = id => isShieldEligible(providerRecord(id));
 
 // Keys the operator connects on the backend, and the same keys a visitor may bring.
-// Identical on purpose. Hugging Face is a relay, so it is not Shield-eligible, but the operator
-// asked for it on this list anyway.
-export const KEY_LANE_IDS = ['openai', 'anthropic', 'google', 'huggingface', 'groq', 'nvidia', 'xai'];
+// OpenAI, Anthropic, Google, Groq, and xAI. Hugging Face and NVIDIA stay in the registry
+// so a key stored earlier can be removed; they are not slots.
+export const KEY_LANE_IDS = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 
 const BACKEND_IDS = KEY_LANE_IDS;
 
