@@ -103,10 +103,10 @@ services:
       # whole free pool, which is the intended setting for most deployments.
       - key: XKIRO_FREE_MODELS
         value: ""
-      # Credits per workspace per month at 0.5 credits per 1K tokens (400 ≈ 800,000 tokens).
-      # Metered on the server from the bytes that actually streamed. Resets on restart here.
+      # Free monthly credits are off. A visitor sends with a paid plan token or their own key.
+      # Raising this pool, and setting FREE_TIER_DISABLED to "false", is how an operator turns it back on.
       - key: FREE_CREDIT_MONTHLY_POOL
-        value: "400"
+        value: "0"
       # Per-IP burst cap. With no disk this is the binding constraint on free-tier spend, since
       # the workspace id is browser-minted and the monthly quota does not survive a restart.
       - key: FREE_MAX_PER_HOUR
@@ -114,12 +114,12 @@ services:
       - key: FREE_MAX_OUTPUT_TOKENS
         value: "16384"
       # There is no longer a switch for US-only funding: the server funds only the backend lane
-      # (Anthropic, OpenAI, Google, xAI, Groq, Cerebras; see server/providerRegistry.mjs). Add those keys, and pick
+      # (OpenAI, Anthropic, Google, Groq, xAI; see server/providerRegistry.mjs). Add those keys, and pick
       # which of their models are free or paid, in the admin dashboard. Every other provider is
       # used with a key the visitor types into the browser.
-      # "true" switches the tier off without removing the provider keys.
+      # "true" switches the tier off without removing the provider keys. That is the default.
       - key: FREE_TIER_DISABLED
-        value: "false"
+        value: "true"
 
       # --- Monthly subscriptions: limits are enforced per individual access token -------
       - key: PLAN_STARTER_CREDITS

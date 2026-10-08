@@ -13,8 +13,8 @@ import type { Provider } from './providers';
 // is why the address is restricted to this machine's loopback on Ollama's default port, the one
 // place the page's Content-Security-Policy allows (see server/csp.mjs).
 
-/** The pipes the Connectors hub offers switches for, in display order. */
-export const PIPE_PROVIDERS: Provider[] = ['openrouter', 'xai', 'venice', 'google', 'ollama'];
+/** Provider groups the picker can hide. Keys themselves are entered in Settings, not Connectors. */
+export const PIPE_PROVIDERS: Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 
 export interface PipeSettings { disabled: Provider[]; ollamaEnabled: boolean; ollamaUrl: string; }
 

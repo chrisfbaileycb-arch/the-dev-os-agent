@@ -20,8 +20,8 @@ const DEFAULT_CONFIG = {
   limits: {
     FREE_MAX_OUTPUT_TOKENS: 16384,
     FREE_MAX_PER_HOUR: 100,
-    FREE_CREDIT_MONTHLY_POOL: 1000000,
-    FREE_TIER_DISABLED: false
+    FREE_CREDIT_MONTHLY_POOL: 0,
+    FREE_TIER_DISABLED: true
   },
   personas: {
     activePersona: 'react_sandbox',

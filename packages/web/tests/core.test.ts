@@ -65,18 +65,17 @@ describe('Hugging Face provider', () => {
   // HF's Inference Providers router: one token pays every underlying host for hundreds of
   // open-weights models, with a small monthly credit on every HF account. Same BYOK shape
   // as AIHubMix — free on the visitor's key, never the deployment's allowance.
-  it('is registered with the router endpoint and open-model seeds', () => {
+  it('is registered with the router endpoint and no compiled model list', () => {
     expect(providers.huggingface).toBeDefined();
     expect(providers.huggingface.endpoint).toBe('https://router.huggingface.co/v1');
-    expect(providers.huggingface.models.length).toBeGreaterThan(0);
-    expect(providers.huggingface.models.every(m => m.includes('/'))).toBe(true); // HF ids are namespaced like org/model
+    expect(providers.huggingface.models).toEqual([]);
   });
 
   it('builds a default connection like any named provider', () => {
     const c = defaultConnection('huggingface');
     expect(c.provider).toBe('huggingface');
     expect(c.endpoint).toBe('https://router.huggingface.co/v1');
-    expect(c.model).toBe('Qwen/Qwen2.5-7B-Instruct'); // low-compute serverless models lead the seed
+    expect(c.model).toBe('');
   });
 
   it('carries catalog entries that resolve by id and classify sensibly', () => {

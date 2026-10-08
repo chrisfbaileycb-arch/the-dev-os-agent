@@ -2,6 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { decryptAny, encrypt, isSealed } from './secrets.mjs';
 import { PROVIDER_KEY_VARS, setAdminTiers } from './freetier.mjs';
 import { isBackendProvider } from './providerRegistry.mjs';
+import { keyShapeError } from './keyProbe.mjs';
 import { freeOutputTokens, planLimits } from './plans.mjs';
 
 // Dashboard-managed deployment settings: provider keys, free-tier knobs, and the model tiers.
@@ -37,6 +38,7 @@ export const PROVIDER_META = {
   xkiro: { name: 'xKiro', console: 'https://xkiro.com' },
   aihubmix: { name: 'AIHubMix', console: 'https://aihubmix.com' },
   huggingface: { name: 'Hugging Face', console: 'https://huggingface.co/settings/tokens' },
+  nvidia: { name: 'NVIDIA NIM', console: 'https://build.nvidia.com/' },
   'cheaper-inference': { name: 'Managed inference', console: 'https://cheaperinference.com' },
   // OmniRoute is self-hosted, so there is no vendor console page to link to; the operator's own
   // dashboard is wherever they installed it, which only they know.
@@ -289,6 +291,10 @@ export async function openSettings({ db, env = process.env, log = console.error 
       const keys = keyPool(value);
       const bad = keys.filter(k => !HEADER_SAFE.test(k));
       if (bad.length) throw new Error(`Key ${keys.indexOf(bad[0]) + 1} contains a character that cannot go in a request header.`);
+      for (const k of keys) {
+        const shape = keyShapeError(provider, k);
+        if (shape) throw new Error(shape);
+      }
       await write(KEY_PREFIX + provider, keys.join('\n'), true);
     },
     async deleteKey(provider) {

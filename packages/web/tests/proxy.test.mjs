@@ -15,7 +15,7 @@ const FREE_GATEWAY_MODEL = 'deepseek/deepseek-v4-flash';
 // Discovery is stubbed and the pool is seeded, so these tests never reach a live gateway. The real
 // catalogue is exercised in tests/discovery.test.mjs, which is the only place that should be.
 setXkiroCatalog([FREE_GATEWAY_MODEL]);
-async function withProxy(options, fn) { const handler = createProxy({ discover: async () => {}, discoverOpenRouter: async () => {}, ...options }); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
+async function withProxy(options, fn) { const env = { FREE_CREDIT_MONTHLY_POOL: '400', ...(options.env ?? {}) }; const handler = createProxy({ discover: async () => {}, discoverOpenRouter: async () => {}, ...options, env }); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); } }
 function stream(text, status = 200, type = 'text/event-stream') { const s = Readable.from([Buffer.from(text)]); s.statusCode = status; s.headers = { 'content-type': type }; return s; }
 const post = (url, body, route = '/api/chat', headers = {}) => fetch(url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
 // A keyless request, so the server funds it from its own key and the free-tier paths apply.
@@ -569,12 +569,11 @@ test('model catalog endpoint differentiates ready vs extended models and support
     const body = await res.json();
     assert.ok(Array.isArray(body.ready), 'ready array present');
     assert.ok(Array.isArray(body.extended), 'extended array present');
-    assert.deepEqual(body.ready.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash']);
-    assert.deepEqual(body.extended.map(m => m.id), ['experimental-unverified-preview-123']);
+    assert.deepEqual(body.ready.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash', 'experimental-unverified-preview-123']);
+    assert.deepEqual(body.extended.map(m => m.id), []);
     assert.equal(body.ready[0].verified, true);
     assert.equal(body.ready[0].section, 'ready');
-    assert.equal(body.extended[0].verified, false);
-    assert.equal(body.extended[0].section, 'extended');
+    assert.equal(body.extended.length, 0);
   });
 
   // filter: 'ready'
@@ -582,7 +581,7 @@ test('model catalog endpoint differentiates ready vs extended models and support
     const res = await post(url, { ...base, provider: 'google', filter: 'ready' }, '/api/models');
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body.data.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash']);
+    assert.deepEqual(body.data.map(m => m.id), ['gemini-2.5-pro', 'gemini-2.5-flash', 'experimental-unverified-preview-123']);
   });
 
   // filter: 'extended'
@@ -590,7 +589,7 @@ test('model catalog endpoint differentiates ready vs extended models and support
     const res = await post(url, { ...base, provider: 'google', filter: 'extended' }, '/api/models');
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body.data.map(m => m.id), ['experimental-unverified-preview-123']);
+    assert.deepEqual(body.data.map(m => m.id), []);
   });
 });
 

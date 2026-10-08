@@ -54,7 +54,7 @@ test('tier config is validated: unknown providers drop out and free wins over pa
 
 test('admin tiers shape the free and paid pools the proxy reads', () => {
   setAdminTiers({ mode: 'auto', free: [{ id: 'openai/gpt-4o-mini', provider: 'openrouter', label: 'GPT-4o mini' }], paid: [{ id: 'gpt-4o', provider: 'openai', label: 'GPT-4o' }, { id: 'groq/llama-3.1-8b-instant', provider: 'groq' }] });
-  const env = { OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2', OPENAI_API_KEY: 'k3', SERVER_CREDIT_ACCESS_TOKEN: 'tok' };
+  const env = { OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2', OPENAI_API_KEY: 'k3', SERVER_CREDIT_ACCESS_TOKEN: 'tok', FREE_CREDIT_MONTHLY_POOL: '400' };
   const free = freeModels(env, []);
   assert.equal(free[0].id, 'openai/gpt-4o-mini');
   assert.equal(free[0].envKey, 'OPENROUTER_API_KEY');
@@ -78,6 +78,7 @@ test('the model list normalizer keeps a plain id list plain and reads labels and
   assert.deepEqual(normalizeModelList('groq', { data: [{ id: 'llama' }] }), [{ id: 'llama' }]);
   assert.deepEqual(normalizeModelList('openrouter', { data: [{ id: 'x/y:free', name: 'Y', pricing: { prompt: '0', completion: '0' } }, { id: 'x/z', name: 'Z', pricing: { prompt: '0.1', completion: '0.2' } }] }), [{ id: 'x/y:free', label: 'Y', free: true }, { id: 'x/z', label: 'Z' }]);
   assert.deepEqual(normalizeModelList('google', { data: [{ id: 'models/gemini-2.5-flash' }] }), [{ id: 'gemini-2.5-flash' }]);
+  assert.deepEqual(normalizeModelList('google', { models: [{ name: 'models/gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] }] }), [{ id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }]);
   assert.deepEqual(normalizeModelList('cohere', { models: [{ name: 'command-a', endpoints: ['chat'] }, { name: 'embed-v4', endpoints: ['embed'] }] }), [{ id: 'command-a' }]);
   assert.equal(normalizeModelList('openai', { nope: [] }), null);
 });
@@ -136,7 +137,7 @@ test('a deployment with no ADMIN_TOKEN can be set up from the page, once', async
 
 test('a stored key is sealed in the database, overlays the environment, and funds the next request', async () => {
   const db = openDatabase(':memory:');
-  const env = { ADMIN_TOKEN: TOKEN, GROQ_API_KEY: 'env-groq' };
+  const env = { ADMIN_TOKEN: TOKEN, GROQ_API_KEY: 'env-groq', FREE_CREDIT_MONTHLY_POOL: '400' };
   const settings = await openSettings({ db, env });
   let seenAuth = null;
   const proxy = createProxy({ env, settings, discover: async () => {}, discoverOpenRouter: async () => {}, transport: async (url, options) => { seenAuth = options.headers.Authorization; const { Readable } = await import('node:stream'); const s = Readable.from([Buffer.from('{"data":[{"id":"m"}]}')]); s.statusCode = 200; s.headers = { 'content-type': 'application/json' }; return s; } });
@@ -146,25 +147,25 @@ test('a stored key is sealed in the database, overlays the environment, and fund
     const groq = config.providers.find(p => p.provider === 'groq');
     assert.equal(groq.source, 'environment');
     assert.equal(groq.hint, '…groq');
-    const r = await call(url, '/api/admin/keys', { method: 'PUT', body: { provider: 'openrouter', key: 'sk-or-dashboard-key\n' }, cookie, origin: url });
+    const r = await call(url, '/api/admin/keys', { method: 'PUT', body: { provider: 'openai', key: 'sk-dashboard-key\n' }, cookie, origin: url });
     assert.equal(r.status, 200);
     config = await r.json();
-    const or = config.providers.find(p => p.provider === 'openrouter');
-    assert.equal(or.source, 'dashboard');
-    assert.equal(or.hint, '…-key');
+    const saved = config.providers.find(p => p.provider === 'openai');
+    assert.equal(saved.source, 'dashboard');
+    assert.equal(saved.hint, '…-key');
     // Sealed at rest: the plaintext is nowhere in the database.
-    const row = db.getSetting('key:openrouter');
+    const row = db.getSetting('key:openai');
     assert.match(row, /^v1:/);
     assert.ok(!row.includes('dashboard-key'));
-    assert.equal(settings.env().OPENROUTER_API_KEY, 'sk-or-dashboard-key');
+    assert.equal(settings.env().OPENAI_API_KEY, 'sk-dashboard-key');
     // And the proxy uses it for a credits-mode request without a restart.
     await settings.setTunable('SERVER_CREDIT_ACCESS_TOKEN', 'plan-token');
-    const m = await fetch(url + '/api/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: 'openrouter', serverAccessToken: 'plan-token' }) });
+    const m = await fetch(url + '/api/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: 'openai', serverAccessToken: 'plan-token' }) });
     assert.equal(m.status, 200);
-    assert.equal(seenAuth, 'Bearer sk-or-dashboard-key');
+    assert.equal(seenAuth, 'Bearer sk-dashboard-key');
     // Deleting it falls back to nothing (there was no environment value).
-    await call(url, '/api/admin/keys', { method: 'PUT', body: { provider: 'openrouter', key: '' }, cookie, origin: url });
-    assert.equal(settings.env().OPENROUTER_API_KEY, undefined);
+    await call(url, '/api/admin/keys', { method: 'PUT', body: { provider: 'openai', key: '' }, cookie, origin: url });
+    assert.equal(settings.env().OPENAI_API_KEY, undefined);
     // A second open of the same database reads the stored settings back.
     await settings.setKey('groq', 'dash-groq');
     const again = await openSettings({ db, env });

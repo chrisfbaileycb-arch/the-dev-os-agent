@@ -8,6 +8,7 @@ import { modelsUrl, normalizeModelList } from './models.mjs';
 import { PROVIDER_META, TUNABLES } from './settings.mjs';
 import { loadVault, saveVault, getClientConfig } from './vault.mjs';
 import { REGISTRY, isBackendProvider } from './providerRegistry.mjs';
+import { accountProbe, keyShapeError } from './keyProbe.mjs';
 
 // The operator's dashboard: /api/admin/*.
 //
@@ -66,10 +67,22 @@ const cookieHeader = (req, value, maxAge) => `${COOKIE}=${encodeURIComponent(val
  */
 export async function discoverForProvider(provider, env, fetchImpl = fetch) {
   if (!Object.hasOwn(PROVIDER_KEY_VARS, provider) || !isBackendProvider(provider)) throw new HttpError(400, 'Choose one of the US backend providers.');
-  const key = cleanKey(env[PROVIDER_KEY_VARS[provider]]) || (provider === 'openrouter' ? cleanKey(env.SETTINGS_OWNER_API_KEY) || cleanKey(env.OPENROUTER_OWNER_KEY) : '');
-  if (!key && provider !== 'openrouter') throw new HttpError(400, `Add a ${PROVIDER_META[provider]?.name ?? provider} key first.`);
+  const key = cleanKey(env[PROVIDER_KEY_VARS[provider]]) || '';
+  if (!key) throw new HttpError(400, `Add a ${PROVIDER_META[provider]?.name ?? provider} key first.`);
+  const shape = keyShapeError(provider, key);
+  if (shape) throw new HttpError(400, shape);
+  const probe = accountProbe(provider);
+  if (probe?.url) {
+    let who;
+    try { who = await fetchImpl(probe.url, { headers: { Accept: 'application/json', Authorization: `Bearer ${key}`, 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(15_000) }); }
+    catch (error) { throw new HttpError(502, `Could not reach the provider: ${error?.message || 'connection failed'}`); }
+    if (!who.ok) throw new HttpError(who.status === 401 || who.status === 403 ? 401 : 502, who.status === 401 || who.status === 403 ? 'The provider rejected this key.' : `The provider answered HTTP ${who.status}.`);
+  }
   const target = await resolveTarget(provider, '', env);
-  const headers = { Accept: 'application/json', 'User-Agent': USER_AGENT, ...(key ? (target.nativeAnthropic ? { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION } : { Authorization: `Bearer ${key}` }) : {}) };
+  const headers = { Accept: 'application/json', 'User-Agent': USER_AGENT };
+  if (target.nativeAnthropic) { headers['x-api-key'] = key; headers['anthropic-version'] = ANTHROPIC_VERSION; }
+  else if (provider === 'google') headers['x-goog-api-key'] = key;
+  else headers.Authorization = `Bearer ${key}`;
   let response;
   try { response = await fetchImpl(modelsUrl(provider, target.base), { headers, signal: AbortSignal.timeout(15_000) }); }
   catch (error) { throw new HttpError(502, `Could not reach the provider: ${error?.message || 'connection failed'}`); }

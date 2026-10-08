@@ -1,6 +1,6 @@
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'nvidia' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -31,7 +31,8 @@ export const providers: Record<Provider, ProviderInfo> = {
   // live list from /v1/models and the model field accepts anything typed, as everywhere else.
   // No flagship on purpose: HF's free credit is small, so a new token starts on the first,
   // low-compute seed rather than on the strongest model it could reach.
-  huggingface: { name: 'Hugging Face', tier: 'Open models', endpoint: 'https://router.huggingface.co/v1', models: ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Llama-3.1-8B-Instruct', 'openai/gpt-oss-120b', 'deepseek-ai/DeepSeek-R1:auto', 'Qwen/Qwen2.5-Coder-32B-Instruct', 'zai-org/GLM-4.5', 'moonshotai/Kimi-K2-Instruct'] },
+  huggingface: { name: 'Hugging Face', tier: 'Open models', endpoint: 'https://router.huggingface.co/v1', models: [] },
+  nvidia: { name: 'NVIDIA NIM', tier: 'Hosted', endpoint: 'https://integrate.api.nvidia.com/v1', models: [] },
   // Managed hosted route. The endpoint is intentionally empty in the browser: the server pins
   // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.
   'cheaper-inference': { name: 'Managed inference', tier: 'Orator managed', endpoint: '', models: [] },

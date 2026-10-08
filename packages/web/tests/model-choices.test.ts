@@ -14,6 +14,8 @@ describe('isChatModel', () => {
     expect(isChatModel('tts-1-hd')).toBe(false);
     expect(isChatModel('omni-moderation-latest')).toBe(false);
     expect(isChatModel('dall-e-3')).toBe(false);
+    expect(isChatModel('grok-imagine-image')).toBe(false);
+    expect(isChatModel('imagen-3')).toBe(false);
   });
   it('errs toward keeping an unknown id rather than hiding a working model', () => {
     expect(isChatModel('some-unknown-model-v2')).toBe(true);
@@ -97,26 +99,23 @@ describe('model verification and section grouping', () => {
     // OpenRouter / gateways without verified flagship status
     expect(isVerifiedOperational('openrouter', 'community/custom-model')).toBe(false);
     expect(isVerifiedOperational('huggingface', 'meta-llama/Llama-3.1-8B-Instruct')).toBe(false);
+    expect(isVerifiedOperational('google', 'text-embedding-004')).toBe(false);
   });
 
   it('assigns section and partitions choices into ready and extended sections', async () => {
     const { modelChoices, partitionChoices } = await import('../src/lib/modelChoices');
 
     const googleChoices = modelChoices(
-      ['gemini-2.5-flash', 'gemini-2.5-pro', 'some-random-preview-model'],
+      ['gemini-2.5-flash', 'gemini-2.5-pro', 'some-random-preview-model', 'text-embedding-004'],
       [],
       'google'
     );
 
-    expect(googleChoices[0].verified).toBe(true);
-    expect(googleChoices[0].section).toBe('ready');
-    expect(googleChoices[1].verified).toBe(true);
-    expect(googleChoices[1].section).toBe('ready');
-    expect(googleChoices[2].verified).toBe(false);
-    expect(googleChoices[2].section).toBe('extended');
+    expect(googleChoices.map(m => m.id)).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro', 'some-random-preview-model']);
+    expect(googleChoices.every(m => m.verified && m.section === 'ready')).toBe(true);
 
     const partitioned = partitionChoices(googleChoices);
-    expect(partitioned.ready.map(m => m.id)).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro']);
-    expect(partitioned.extended.map(m => m.id)).toEqual(['some-random-preview-model']);
+    expect(partitioned.ready.map(m => m.id)).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro', 'some-random-preview-model']);
+    expect(partitioned.extended).toEqual([]);
   });
 });

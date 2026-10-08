@@ -829,10 +829,6 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       knowledge={knowledge} addDocuments={f => void addDocuments(f)}
       removeDocument={id => { void storage.removeKnowledge(id).then(() => setKnowledge(k => k.filter(x => x.id !== id))).catch(e => setNotice(errorText(e))); }}
       notify={setNotice}
-      pipes={pipes} setPipes={setPipes}
-      keys={keys} setKeys={setKeys}
-      saveKeys={next => { saveKeyring(next); }}
-      discovered={discovered} discovering={discovering} discover={id => void discover(id)}
     />
     {planPrompt && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="plan-title">
       <h2 id="plan-title">{planPrompt.label} is on the paid plan.</h2>

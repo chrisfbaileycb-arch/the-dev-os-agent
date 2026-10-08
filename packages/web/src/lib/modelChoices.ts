@@ -26,7 +26,7 @@ export interface ModelChoice {
  * survives the filter and simply fails on send if it really wasn't chat, while wrongly hiding
  * a working model is a choice the visitor cannot recover from.
  */
-const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl/i;
+const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b|imagine|flux|sora|dream[-_ ]?machine|eleven/i;
 export function isChatModel(id: string): boolean {
   return id.trim().length > 0 && id.length <= 300 && !NON_CHAT.test(id);
 }
@@ -40,37 +40,9 @@ export function isVerifiedOperational(provider?: string, modelId?: string): bool
   const id = modelId.toLowerCase().trim();
   const prov = String(provider || '').toLowerCase().trim();
 
-  // Currently loaded local endpoints
-  if (prov === 'ollama') return true;
-
-  // Direct BYOK providers: Gemini, Claude, OpenAI flagships
-  if (prov === 'google') {
-    return /^gemini-(?:2\.5|2\.0|1\.5|3\.)/i.test(id) || id.startsWith('gemini-');
-  }
-  if (prov === 'anthropic') {
-    return /^claude-(?:3|4|sonnet|opus|haiku)/i.test(id) || id.startsWith('claude-');
-  }
-  if (prov === 'openai') {
-    return /^(?:gpt-4o|gpt-4\.1|gpt-5|o1|o3)/i.test(id);
-  }
-
-  // Curated flagship verified models on other direct BYOK providers
-  if (prov === 'groq') {
-    return /^(?:llama-3\.[13]|mixtral|gemma-2)/i.test(id);
-  }
-  if (prov === 'cerebras') {
-    return /^(?:llama-3\.[13]|llama3\.)/i.test(id);
-  }
-  if (prov === 'github') {
-    return /^(?:openai\/gpt-4|meta\/llama-3)/i.test(id);
-  }
-  if (prov === 'cohere') {
-    return /^command-(?:a|r)/i.test(id);
-  }
-  if (prov === 'xai') {
-    return /^grok-(?:2|3|4)/i.test(id);
-  }
-
+  if (prov === 'ollama') return isChatModel(id);
+  const lane = ['openai', 'anthropic', 'google', 'groq', 'xai'];
+  if (lane.includes(prov)) return isChatModel(id);
   return false;
 }
 

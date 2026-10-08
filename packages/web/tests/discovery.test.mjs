@@ -114,7 +114,7 @@ test('one fetch per TTL, shared by concurrent callers, and published to the free
     assert.deepEqual(catalogModels().map(m => m.id), ['a/free', 'a/paid']);
     // The point of the whole module: the funding decision now reads what the gateway reported.
     assert.deepEqual(xkiroCatalog(), ['a/free']);
-    assert.deepEqual(freeTierStatus({ XKIRO_API_KEY: 'k' }).models, ['a/free']);
+    assert.deepEqual(freeTierStatus({ XKIRO_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }).models, ['a/free']);
     assert.deepEqual(catalogStatus(), { discovered: true, count: 2, free: 1, at: new Date(1000).toISOString(), error: null });
 
     await ensureCatalog({}, { fetchImpl, now: 1000 + CATALOG_TTL_MS + 1 });
@@ -173,7 +173,7 @@ test('/api/providers publishes the discovered catalogue with the tier of every m
     model({ id: 'a/free', display_name: 'Free One' }),
     model({ id: 'a/paid', display_name: 'Paid One', access_tier: 'paid', pricing: { input: 1, output: 6 } }),
   )));
-  const env = { XKIRO_API_KEY: 'gw-key-do-not-leak' };
+  const env = { XKIRO_API_KEY: 'gw-key-do-not-leak', FREE_CREDIT_MONTHLY_POOL: '400' };
   const handler = createProxy({
     env,
     transport: async () => { throw Error('must not call'); },
