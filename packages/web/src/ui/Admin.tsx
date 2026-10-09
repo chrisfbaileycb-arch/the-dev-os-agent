@@ -18,7 +18,8 @@ interface Tunable { name: string; kind: 'number' | 'boolean' | 'secret' | 'url';
 interface TierEntry { id: string; provider: string; label?: string; }
 interface Tiers { mode: 'auto' | 'manual'; free: TierEntry[]; paid: TierEntry[]; warnings: string[]; }
 interface Published { free: { enabled: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; monthlyCredits: number; perHour: number }; paid: { enabled: boolean; configured: boolean; models: string[] }; }
-interface Config { persistent: boolean; providers: ProviderRow[]; retired: ProviderRow[]; planned: PlannedProvider[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
+interface ExperimentSlot { provider: string; name: string; env: string; source: Source; hint: string; unreadable: boolean; }
+interface Config { persistent: boolean; durable?: boolean; ledger?: 'browser' | 'server'; experiment?: ExperimentSlot[]; providers: ProviderRow[]; retired: ProviderRow[]; planned: PlannedProvider[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
 interface Status { configured: boolean; authenticated: boolean; persistent: boolean; setup: boolean; source: Source; storage: boolean; }
 
 export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; }
@@ -135,6 +136,7 @@ export default function Admin(p: AdminProps) {
       <div className="row gap"><button className="button small" disabled={busy} onClick={() => void refresh().catch(e => p.notify(errorText(e)))}><RefreshCw size={13} />Reload</button><button className="button small" disabled={busy} onClick={signOut}><LogOut size={13} />Sign out</button></div>
     </div>
     {!config.persistent && <div className="notice"><CircleAlert size={13} /><span>This server has no settings storage: values you enter apply until the next restart only. Set DATABASE_URL or a persistent DATA_FILE to keep them.</span></div>}
+    {config.durable === false && <div className="notice"><CircleAlert size={13} /><span>This host forgets its database on restart. The monthly free-tier number is counted in each browser. OpenRouter, Hugging Face, and the execution-engine key stay in Settings on that browser. They are not written here.</span></div>}
     {config.unreadable.length > 0 && <div className="notice"><TriangleAlert size={13} /><span>Stored values for {config.unreadable.join(', ')} were sealed under a secret this server no longer has (ADMIN_TOKEN or SESSION_SECRET changed). Enter them again to reseal.</span></div>}
 
     <section className="panel">
@@ -153,6 +155,18 @@ export default function Admin(p: AdminProps) {
         Keys stored here before the split, for providers outside the US backend. Nothing is funded from them any more; remove them.
         {config.retired.map(r => <span key={r.provider} className="row gap"><strong>{r.name}</strong><small className="mono">{r.env}</small><button className="button small" disabled={busy} aria-label={`Remove ${r.name} key`} onClick={() => removeKey(r.provider)}><Trash2 size={12} />Remove</button></span>)}
       </span></div>}
+      {config.experiment && config.experiment.length > 0 && <>
+        <h3>Experiment and the execution engine</h3>
+        <p className="help">Not the free tier and not Shield. {config.durable ? 'This host can keep these secrets.' : 'Saving is off because this database does not survive a restart. Use Settings on this browser.'}</p>
+        <div className="ledger-wrap"><table className="ledger admin-keys"><thead><tr><th>Slot</th><th>Status</th><th>Key</th><th></th></tr></thead><tbody>
+          {config.experiment.map(r => <tr key={r.provider}>
+            <td><strong>{r.name}</strong><br /><small className="mono">{r.env}</small></td>
+            <td><span className={r.source === 'none' ? 'pill' : 'pill ok'}>{sourceLabel[r.source]}{r.hint ? ` ${r.hint}` : ''}</span></td>
+            <td><input type="password" autoComplete="off" spellCheck={false} placeholder={config.durable ? 'Paste a key' : 'Use Settings on this browser'} value={drafts[r.provider] ?? ''} disabled={busy || config.durable === false} onChange={e => setDrafts(d => ({ ...d, [r.provider]: e.target.value }))} /></td>
+            <td><button className="button primary small" disabled={busy || config.durable === false || !(drafts[r.provider] ?? '').trim()} onClick={() => saveKey(r.provider)}><Check size={12} />Save</button></td>
+          </tr>)}
+        </tbody></table></div>
+      </>}
     </section>
 
     <section className="panel">

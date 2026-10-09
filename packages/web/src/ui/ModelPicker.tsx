@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, CreditCard, Globe, KeyRound, LoaderCircle, RefreshCw, Search, Sparkles, Wallet } from 'lucide-react';
-import { LANE_LABEL, laneOf, providersInLane, type Lane } from '../lib/modelLanes';
+import { Check, ChevronDown, CreditCard, Globe, KeyRound, LoaderCircle, Pin, RefreshCw, Search, Sparkles, Wallet } from 'lucide-react';
+import { EXPERIMENT_SUBTITLE, LANE_LABEL, laneOf, providersInLane, type Lane } from '../lib/modelLanes';
 import { catalog, findModel, type CatalogModel, type InferenceMode } from '../lib/catalog';
 import { providers, type Provider } from '../lib/providers';
 import { emptyReason, type Reach } from '../lib/availability';
@@ -69,8 +69,15 @@ export function payLabel(inference: InferenceMode): string {
 
 /** How many rows a filtered group shows before asking for a narrower filter. */
 const VISIBLE_CAP = 60;
-/** Vendors in the order their groups appear; gateways after the direct vendors. */
-const ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'groq', 'xai'];
+const PINS_KEY = 'sf-hf-pins';
+function loadPins(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PINS_KEY) || '[]');
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string').slice(0, 40) : [];
+  } catch { return []; }
+}
+/** Vendors in the order their groups appear. Experiment is its own menu. */
+const BASE_ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'groq', 'xai'];
 const tierOf = (m: ModelChoice) => TIER_LABELS[capabilityTier(m.id, m.label)];
 
 export default function ModelPicker(p: ModelPickerProps) {
@@ -103,13 +110,16 @@ export default function ModelPicker(p: ModelPickerProps) {
   const badge = payLabel(p.inference);
 
   const [pickedTab, setPickedTab] = useState<'ready' | 'extended' | null>(null);
+  const [pins, setPins] = useState<string[]>(() => loadPins());
+  const experiment = p.lane === 'experiment';
+  const ORDER: Provider[] = experiment ? ['openrouter', 'huggingface'] : BASE_ORDER;
 
   // Keyed vendors first, in a fixed order, then the rest as previews of what a key would unlock.
   const vendors = useMemo(() => {
     const shownPipe = (id: Provider) => pipeEnabled(id, p.pipes);
     const order = providersInLane(ORDER, p.lane);
     const keyed = order.filter(id => p.keyed.has(id) && shownPipe(id));
-    const unkeyed = order.filter(id => !p.keyed.has(id) && shownPipe(id) && !providers[id].keyless && (catalog.some(m => m.provider === id) || providers[id].models.length > 0));
+    const unkeyed = order.filter(id => !p.keyed.has(id) && shownPipe(id) && !providers[id].keyless && (experiment || catalog.some(m => m.provider === id) || providers[id].models.length > 0));
     return [...keyed, ...unkeyed].map(provider => {
       const credential = provider === p.provider && p.reach.token?.trim() ? p.reach.token : p.reach.keys[provider];
       const fingerprint = keyFingerprint(provider === 'ollama' ? p.pipes.ollamaUrl + (credential ?? '') : credential);
@@ -129,7 +139,7 @@ export default function ModelPicker(p: ModelPickerProps) {
         error: p.keyed.has(provider) ? live?.error : undefined
       };
     });
-  }, [p.keyed, p.discovered, p.pipes, p.lane, p.provider, p.reach.keys, p.reach.token]);
+  }, [p.keyed, p.discovered, p.pipes, p.lane, p.provider, p.reach.keys, p.reach.token, experiment]);
 
   // Key entry lives in Settings. The dock selects only connected model catalogues.
   const usable = vendors.filter(v => reachable(v.provider));
@@ -148,9 +158,14 @@ export default function ModelPicker(p: ModelPickerProps) {
     setOpen(false);
     const seed = findModel(m.id);
     if (reachable(provider)) p.onPick(m.id, 'byok', provider);
-    // A model nothing can pay for is still selectable: it names the key it needs rather than
-    // failing quietly on send.
     else p.onNeedsKey(seed && seed.provider === provider ? seed : { id: m.id, provider, label: m.label, tier: 'pro', weight: 3, note: '' });
+  }
+  function togglePin(id: string) {
+    setPins(current => {
+      const next = current.includes(id) ? current.filter(item => item !== id) : [id, ...current].slice(0, 40);
+      try { localStorage.setItem(PINS_KEY, JSON.stringify(next)); } catch { /* this browser refused storage */ }
+      return next;
+    });
   }
   function choosePlan(m: ModelChoice) {
     setOpen(false);
@@ -158,16 +173,17 @@ export default function ModelPicker(p: ModelPickerProps) {
     else p.onNeedsPlan(m);
   }
 
-  const row = (m: ModelChoice, onClick: () => void, badgeText: string, included: boolean, sub: string) =>
+  const row = (m: ModelChoice, onClick: () => void, badgeText: string, included: boolean, sub: string, onPin?: () => void, pinned?: boolean) =>
     <button key={m.id} type="button" role="option" aria-selected={selected(m.id)} className={selected(m.id) ? 'model-option active' : 'model-option'} onClick={onClick} title={m.id}>
-      <strong><span className="model-option-name">{m.label}</span><em className={included ? 'model-badge included' : 'model-badge'}>{badgeText}</em>{selected(m.id) && <Check size={12} />}</strong>
-      <small>{tierOf(m)} · {sub}</small>
+      <strong><span className="model-option-name">{m.label}</span><em className={included ? 'model-badge included' : 'model-badge'}>{badgeText}</em>{pinned && <Pin size={11} />}{selected(m.id) && <Check size={12} />}</strong>
+      <small>{tierOf(m)} · {sub}{onPin && <> · <span role="button" tabIndex={0} className="text-button" onClick={e => { e.stopPropagation(); onPin(); }} onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); onPin(); } }}>{pinned ? 'Unpin' : 'Pin'}</span></>}</small>
     </button>;
 
   function renderVendorGroup(provider: Provider, list: ModelChoice[], live: boolean, error?: string, sectionType: 'ready' | 'extended' = 'ready') {
     const providerName = providers[provider].name;
     const unlocked = reachable(provider);
     const busy = p.discovering.has(provider);
+    const ordered = provider === 'huggingface' ? [...list].sort((a, b) => Number(pins.includes(b.id)) - Number(pins.includes(a.id))) : list;
     return <div key={`${provider}-${sectionType}`} className="model-group">
       <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {providers[provider].keyless ? (live ? `· ${list.length.toLocaleString()} installed` : '· local') : unlocked ? (live ? `· ${list.length.toLocaleString()} on your key` : '· key active') : '· bring your key'}
         {unlocked && <button type="button" className="model-refresh" title={busy ? 'Reading the live list…' : 'Re-read the live model list'} aria-label={`Refresh ${providerName} models`} disabled={busy} onClick={e => { e.stopPropagation(); p.onDiscover(provider); }}>{busy ? <LoaderCircle size={11} className="spin" /> : <RefreshCw size={11} />}</button>}
@@ -176,10 +192,11 @@ export default function ModelPicker(p: ModelPickerProps) {
       {unlocked && !live && busy && <small className="model-group-note">{providers[provider].keyless ? 'Reading the models installed on this machine…' : 'Reading what your key reaches…'}</small>}
       {providers[provider].keyless && !live && !busy && !error && <small className="model-group-note">No local models found yet. Load one in LM Studio (with its server running) or run <code>ollama pull</code>, then refresh.</small>}
       {unlocked && !live && !busy && error && <small className="model-group-note">Could not read the live list ({error}). Refresh in Settings to list available models.</small>}
-      {list.slice(0, VISIBLE_CAP).map(m => {
+      {ordered.slice(0, VISIBLE_CAP).map(m => {
         const local = Boolean(providers[provider].keyless);
         const badgeText = local ? 'Local' : m.free ? 'Free on your key' : 'Your key';
-        return row(m, () => chooseVendor(provider, m), badgeText, local || Boolean(m.free), local ? 'runs on this machine' : 'on your key');
+        const pinned = provider === 'huggingface' && pins.includes(m.id);
+        return row(m, () => chooseVendor(provider, m), badgeText, local || Boolean(m.free), local ? 'runs on this machine' : experiment ? 'your key · not the free tier' : 'on your key', provider === 'huggingface' && unlocked ? () => togglePin(m.id) : undefined, pinned);
       })}
       {list.length > VISIBLE_CAP && <small className="model-group-note">{(list.length - VISIBLE_CAP).toLocaleString()} more — type to narrow the list.</small>}
     </div>;
@@ -187,7 +204,7 @@ export default function ModelPicker(p: ModelPickerProps) {
 
   return <div className="model-picker" ref={root}>
     {/* The dropdown that holds the current model shows it; the other shows its own name, dimmed. */}
-    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}${holdsCurrent ? '' : ' idle'}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title={holdsCurrent ? `Choose a model — ${LANE_LABEL[p.lane]}` : managed ? 'OpenAI, Anthropic, Google, Groq, xAI' : 'A model running on this machine'}>
+    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}${holdsCurrent ? '' : ' idle'}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(o => !o)} title={holdsCurrent ? `Choose a model — ${LANE_LABEL[p.lane]}` : managed ? 'OpenAI, Anthropic, Google, Groq, xAI' : experiment ? EXPERIMENT_SUBTITLE : 'A model running on this machine'}>
       {holdsCurrent
         ? (p.inference === 'free' ? <Sparkles size={13} strokeWidth={1.75} /> : p.inference === 'credits' ? <Wallet size={13} strokeWidth={1.75} /> : <KeyRound size={13} strokeWidth={1.75} />)
         : (managed ? <Sparkles size={13} strokeWidth={1.75} /> : <Globe size={13} strokeWidth={1.75} />)}
@@ -196,7 +213,7 @@ export default function ModelPicker(p: ModelPickerProps) {
       <ChevronDown size={12} />
     </button>
     {open && <div className="model-menu" role="listbox" aria-label={`Model: ${LANE_LABEL[p.lane]}`}>
-      <div className="model-lane-head"><strong>{LANE_LABEL[p.lane]}</strong><small>{managed ? 'Only models a connected key can call, plus the ones this deployment funds.' : 'A model running on this machine. No key.'}</small></div>
+      <div className="model-lane-head"><strong>{LANE_LABEL[p.lane]}</strong><small>{managed ? 'Only models a connected key can call, plus the ones this deployment funds.' : experiment ? EXPERIMENT_SUBTITLE : 'A model running on this machine. No key.'}</small></div>
       {total > 8 && <label className="model-search"><Search size={12} /><input ref={search} type="search" value={query} placeholder={`Filter ${total.toLocaleString()} models…`} aria-label="Filter models" onChange={e => setQuery(e.target.value)} /></label>}
 
       {extendedTotal > 0 && <div className="model-tabs" role="tablist" aria-label="Catalog Sections">

@@ -1,7 +1,7 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { decryptAny, encrypt, isSealed } from './secrets.mjs';
 import { PROVIDER_KEY_VARS, setAdminTiers } from './freetier.mjs';
-import { isBackendProvider } from './providerRegistry.mjs';
+import { isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 import { keyShapeError } from './keyProbe.mjs';
 import { freeOutputTokens, planLimits } from './plans.mjs';
 
@@ -120,7 +120,7 @@ function cleanTierEntry(raw) {
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
   const provider = typeof raw.provider === 'string' ? raw.provider.trim() : '';
   // Only the backend lane can hold a tier entry; a non-US provider here is dropped on save and on load.
-  if (!id || id.length > 200 || !Object.hasOwn(PROVIDER_KEY_VARS, provider) || !isBackendProvider(provider)) return null;
+  if (!id || id.length > 200 || !Object.hasOwn(PROVIDER_KEY_VARS, provider) || !isBackendProvider(provider) || isExperimentProvider(provider)) return null;
   const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim().slice(0, 80) : undefined;
   return label ? { id, provider, label } : { id, provider };
 }
@@ -228,7 +228,8 @@ export async function openSettings({ db, env = process.env, log = console.error 
     unreadable = new Set();
     for (const [key, stored] of rows) {
       let name = null;
-      if (key.startsWith(KEY_PREFIX)) name = PROVIDER_KEY_VARS[key.slice(KEY_PREFIX.length)];
+      if (key === 'key:antigravity') name = 'ANTIGRAVITY_API_KEY';
+      else if (key.startsWith(KEY_PREFIX)) name = PROVIDER_KEY_VARS[key.slice(KEY_PREFIX.length)];
       else if (key.startsWith(TUNABLE_PREFIX)) name = key.slice(TUNABLE_PREFIX.length);
       if (!name) continue;
       if (isSealed(stored)) {
@@ -284,6 +285,9 @@ export async function openSettings({ db, env = process.env, log = console.error 
     unreadable: () => [...unreadable],
     async setKey(provider, value) {
       if (!Object.hasOwn(PROVIDER_KEY_VARS, provider)) throw new Error('Unknown provider.');
+      if (isExperimentProvider(provider) || provider === 'antigravity') {
+        throw new Error('Experiment and execution-engine keys are not backend keys. Save them with the experiment slot, and only on a host that keeps its database.');
+      }
       if (!isBackendProvider(provider)) throw new Error('The dashboard only holds keys for the US backend providers. Other providers are used with a key typed in the browser.');
       // A field may hold a pool (see keyPool), so the header-safe rule is applied per key rather
       // than to the whole block: one pasted key with a stray newline should name itself, not
@@ -297,7 +301,27 @@ export async function openSettings({ db, env = process.env, log = console.error 
       }
       await write(KEY_PREFIX + provider, keys.join('\n'), true);
     },
+    /**
+     * OpenRouter, Hugging Face, and the Antigravity engine key.
+     * Refused when this process cannot keep the row. Never a free-tier key.
+     * `provider` is `openrouter`, `huggingface`, or `antigravity`.
+     */
+    async setExperimentKey(provider, value, { durable }) {
+      const id = String(provider ?? '').toLowerCase();
+      if (id !== 'antigravity' && !isExperimentProvider(id)) throw new Error('That is not an experiment or execution-engine slot.');
+      if (!durable) throw new Error('This host forgets its database on restart. Keep this key in Settings on this browser. It is not written here.');
+      const keys = keyPool(value);
+      const bad = keys.filter(k => !HEADER_SAFE.test(k));
+      if (bad.length) throw new Error('That key contains a character that cannot go in a request header.');
+      if (id === 'antigravity') {
+        if (keys.length !== 1) throw new Error('The execution engine takes one key.');
+        await write('key:antigravity', keys[0], true);
+        return;
+      }
+      await write(KEY_PREFIX + id, keys.join('\n'), true);
+    },
     async deleteKey(provider) {
+      if (provider === 'antigravity') { await write('key:antigravity', null, true); return; }
       if (!Object.hasOwn(PROVIDER_KEY_VARS, provider)) throw new Error('Unknown provider.');
       await write(KEY_PREFIX + provider, null, true);
     },
@@ -347,6 +371,22 @@ export async function openSettings({ db, env = process.env, log = console.error 
         const count = pool.length || (value ? 1 : 0);
         const shape = count > 1 ? `${count} keys` : value ? hint(value) : '';
         return { provider, name: PROVIDER_META[provider]?.name ?? provider, env: name, console: PROVIDER_META[provider]?.console ?? null, source, hint: shape, count, unreadable: unreadable.has(name), backend: isBackendProvider(provider) };
+      });
+    },
+    /** OpenRouter, Hugging Face, and the execution engine. Hints only. Never the free tier. */
+    experimentStatus(base = env) {
+      const effective = { ...base, ...overlayCache };
+      const slots = [
+        { provider: 'openrouter', name: 'OpenRouter', env: 'OPENROUTER_API_KEY' },
+        { provider: 'huggingface', name: 'Hugging Face', env: 'HF_TOKEN' },
+        { provider: 'antigravity', name: 'Execution engine', env: 'ANTIGRAVITY_API_KEY' },
+      ];
+      return slots.map(slot => {
+        const storedKey = slot.provider === 'antigravity' ? 'key:antigravity' : KEY_PREFIX + slot.provider;
+        const value = typeof effective[slot.env] === 'string' ? effective[slot.env].trim() : '';
+        const stored = rows.has(storedKey);
+        const source = stored && overlayCache[slot.env] ? 'dashboard' : value ? 'environment' : 'none';
+        return { ...slot, source, hint: value ? hint(value) : '', unreadable: unreadable.has(slot.env) };
       });
     },
     tunableStatus(base = env) {

@@ -428,7 +428,7 @@ const windows = new Map();
  * `discover` is injectable so tests stay hermetic: the real one reaches the gateway over the
  * network, and a unit test asserting how a Groq request is funded has no business doing that.
  */
-export function createProxy({ env: baseEnv = process.env, settings = null, transport = upstream, resolve = lookup, db = null, log = console.error, discover = ensureCatalog, discoverOpenRouter = ensureOpenRouterCatalog } = {}) {
+export function createProxy({ env: baseEnv = process.env, settings = null, storage = null, transport = upstream, resolve = lookup, db = null, log = console.error, discover = ensureCatalog, discoverOpenRouter = ensureOpenRouterCatalog } = {}) {
   // The environment as this request should read it: the admin dashboard's stored keys and knobs
   // laid over the process environment (see server/settings.mjs). Resolved per request, so a key
   // entered in the dashboard funds the very next message with no restart.
@@ -479,10 +479,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, trans
           // being read from the provider and not from a list in this repository.
           openRouterCatalog: openRouterCatalogStatus(),
           free: freeTierStatus(env),
-          // The plan tier the operator drew up in the dashboard: models a subscriber runs on the
-          // deployment's keys with the access token. Published so the dropdown can show them.
           paid: paidTierStatus(env),
           billing: billingStatus(env),
+          storage: storage ?? { durable: false, kind: 'unconfigured', ledger: 'browser' },
         });
         return true;
       }

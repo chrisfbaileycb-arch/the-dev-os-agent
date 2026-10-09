@@ -114,12 +114,15 @@ test('only exact allowlist ids resolve, and only when the deployment funds them'
   assert.equal(freeTierStatus({ GROQ_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }).monthlyCredits, 400);
 });
 
-test('free routing strips the Groq namespace and fans openrouter/auto out over the free pool', () => {
+test('free routing strips the Groq namespace and fans a free pool out as fallbacks', () => {
   assert.deepEqual(routeFreeRequest(freeModel('groq/llama-3.1-8b-instant')), { model: 'llama-3.1-8b-instant' });
-  const auto = routeFreeRequest(freeModel('openrouter/auto'));
+  // OpenRouter is the experiment lane. freeModel never returns it, even with the backend lane
+  // switched off for these mechanics tests. The fan-out itself is still checked on a hand-built entry.
+  assert.equal(freeModel('openrouter/auto', { OPENROUTER_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }), undefined);
+  const auto = routeFreeRequest({ id: 'openrouter/auto', provider: 'openrouter', pool: ['meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-nemo:free'] });
   assert.equal(auto.model, 'meta-llama/llama-3.2-3b-instruct:free');
   assert.ok(auto.models.length >= 2 && auto.models.every(m => m.endsWith(':free')));
-  assert.deepEqual(routeFreeRequest(freeModel('mistralai/mistral-nemo:free')), { model: 'mistralai/mistral-nemo:free' });
+  assert.deepEqual(routeFreeRequest({ id: 'mistralai/mistral-nemo:free', provider: 'openrouter' }), { model: 'mistralai/mistral-nemo:free' });
 });
 
 test('credits are charged at the fast weight and rounded up to two decimals', () => {
@@ -229,9 +232,10 @@ test('/api/providers advertises the tier without ever leaking a key', async () =
     assert.ok(!text.includes('server-key-do-not-leak') && !text.includes('other-secret'));
     const body = JSON.parse(text);
     assert.equal(body.free.enabled, true);
-    // Only what these two keys fund — the gateway entries stay out until its key is present.
-    assert.equal(body.free.models.length, 6);
-    assert.ok(!body.free.models.some(id => id.startsWith('deepseek/')));
+    // OpenRouter is an experiment provider. It does not join this list even when its key is set.
+    assert.equal(body.free.models.length, 2);
+    assert.ok(body.free.models.every(id => id.startsWith('groq/')));
+    assert.ok(!body.free.models.some(id => id.startsWith('openrouter/') || id.startsWith('deepseek/')));
     // And the discovery report rides along, so an operator can see why the pool is the size it is.
     assert.equal(body.gatewayCatalog.discovered, false);
     assert.deepEqual(body.gatewayCatalog.models, []);
@@ -419,42 +423,33 @@ test('OmniRoute remains disabled unless a future adapter is explicitly implement
   });
 });
 
-test('an owner key brings the standard free pool up without a per-provider key', () => {
-  // The operator sets one credential and the tier comes up: the OpenRouter community pool
-  // authenticates through their account, and a stranger can type a first message with nothing
-  // pasted anywhere. Their key never reaches the browser — /api/providers reports the models it
-  // unlocks, not the credential behind them.
+test('an owner key does not put OpenRouter on the free tier', () => {
+  // OpenRouter is the experiment lane. An owner key used to fund its community pool. It does not
+  // any more: the free tier is Shield providers only, and a relay is not one of them.
   const env = { OPENROUTER_OWNER_KEY: 'owner-key', FREE_CREDIT_MONTHLY_POOL: '400' };
   assert.equal(ownerKey(env), 'owner-key');
   assert.equal(ownerKeyName(env), 'OPENROUTER_OWNER_KEY');
-  assert.equal(freeKey(freeModel('mistralai/mistral-nemo:free', env), env).key, 'owner-key');
-  assert.equal(fundedModels(env).some(m => m.provider === 'openrouter'), true);
-  assert.equal(freeTierStatus(env).enabled, true, 'the browser is told the tier is live');
-  assert.ok(freeTierStatus(env).models.includes('mistralai/mistral-nemo:free'));
-  // The generic dashboard name means the same thing, and names itself in diagnostics.
+  assert.equal(freeModel('mistralai/mistral-nemo:free', env), undefined);
+  assert.equal(fundedModels(env).some(m => m.provider === 'openrouter'), false);
+  assert.equal(freeTierStatus(env).enabled, false, 'an OpenRouter owner key alone does not open the free tier');
   assert.equal(ownerKey({ SETTINGS_OWNER_API_KEY: 'owner-key' }), 'owner-key');
   assert.equal(ownerKeyName({ SETTINGS_OWNER_API_KEY: 'owner-key' }), 'SETTINGS_OWNER_API_KEY');
   assert.equal(ownerKeyName({ SETTINGS_OWNER_API_KEY: 'a', OPENROUTER_OWNER_KEY: 'b' }), 'SETTINGS_OWNER_API_KEY');
 });
 
-test('the owner key reaches the OpenRouter pool and no other provider', () => {
-  // One credential belongs to one endpoint. An OpenRouter-shaped key sent to Groq's host or the
-  // Hugging Face router would trade a working free tier for a guaranteed 401, so the owner key
-  // stands in for the gateway pool only; every other pool keeps needing its own provider key.
+test('Hugging Face is not on the free tier even when a token is set', () => {
   const env = { OPENROUTER_OWNER_KEY: 'owner-key', FREE_CREDIT_MONTHLY_POOL: '400' };
-  assert.equal(freeKey(freeModel('groq/llama-3.1-8b-instant', env), env).key, '');
+  assert.equal(freeKey({ id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' }, env).key, '');
   assert.equal(fundedModels(env).some(m => m.provider === 'groq'), false);
   assert.equal(fundedModels(env).some(m => m.provider === 'huggingface'), false);
   const withHf = { ...env, HF_TOKEN: 'hf-token' };
-  assert.equal(fundedModels(withHf).some(m => m.provider === 'huggingface'), true);
-  assert.equal(freeKey(freeModel('Qwen/Qwen2.5-7B-Instruct', withHf), withHf).source, 'HF_TOKEN');
+  assert.equal(fundedModels(withHf).some(m => m.provider === 'huggingface'), false);
+  assert.equal(freeModel('Qwen/Qwen2.5-7B-Instruct', withHf), undefined);
 });
 
-test('a provider key outranks the owner key, and an unusable owner key funds nothing', () => {
+test('a provider key is not shadowed by the owner key, and OpenRouter stays off the free tier', () => {
   const both = { OPENROUTER_OWNER_KEY: 'owner-key', OPENROUTER_API_KEY: 'provider-key' };
-  const sourced = freeKey(freeModel('mistralai/mistral-nemo:free', both), both);
-  assert.equal(sourced.key, 'provider-key', 'OPENROUTER_API_KEY is not shadowed by the owner key');
-  assert.equal(sourced.source, 'OPENROUTER_API_KEY');
+  assert.equal(freeModel('mistralai/mistral-nemo:free', both), undefined, 'OpenRouter is not a free-tier provider');
   // Surrounding whitespace is a paste and is stripped; a character that cannot go in a header at
   // all is refused, because Node throws while building the request and the failure looks like DNS.
   assert.equal(ownerKey({ OPENROUTER_OWNER_KEY: '  owner-key\n' }), 'owner-key');

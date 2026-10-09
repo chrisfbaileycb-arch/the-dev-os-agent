@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Check, Database, FileText, Globe, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X, Zap } from 'lucide-react';
+import { Check, Database, Download, FileText, Globe, ListChecks, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X, Zap } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import { guessTransport, refreshTools, type McpConnection, type McpTransport } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
 import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset, type McpPresetGroup } from '../lib/mcpPresets';
+import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, saveSkillState, type SkillState } from '../lib/skillRegistry';
 import { useDismiss } from './useDismiss';
 import type { Knowledge } from '../lib/types';
 
@@ -14,7 +15,7 @@ import type { Knowledge } from '../lib/types';
 // connectors. They live in Settings. An MCP server is a tool the agent may call; a chat
 // prompt is never sent to one.
 
-export type ConnectorTab = 'github' | 'web' | 'files' | 'mcp';
+export type ConnectorTab = 'github' | 'web' | 'files' | 'mcp' | 'skills';
 
 export interface ConnectorsProps {
   open: boolean; close: () => void;
@@ -32,6 +33,7 @@ const TABS: { id: ConnectorTab; label: string; icon: typeof GithubMark; blurb: s
   { id: 'web', label: 'Web', icon: Globe, blurb: 'URL crawler, no CORS limits' },
   { id: 'files', label: 'Documents', icon: FileText, blurb: 'Drag-and-drop knowledge index' },
   { id: 'mcp', label: 'Custom MCP', icon: Plug, blurb: 'External agent servers' },
+  { id: 'skills', label: 'Skills', icon: ListChecks, blurb: 'Crew presets, demo or live' },
 ];
 
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
@@ -44,6 +46,7 @@ export default function Connectors(p: ConnectorsProps) {
   const [preset, setPreset] = useState<McpPreset | null>(null);
   const [presetQuery, setPresetQuery] = useState('');
   const [activeGroup, setActiveGroup] = useState<McpPresetGroup | 'All'>('All');
+  const [skills, setSkills] = useState<SkillState[]>(() => loadSkillState());
 
   const urlError = (() => {
     const v = url.trim();
@@ -124,7 +127,27 @@ export default function Connectors(p: ConnectorsProps) {
   }
 
   const mcpTools = p.mcp.filter(c => c.enabled).reduce((n, c) => n + c.tools.length, 0);
-  const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools };
+  const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools, skills: skills.filter(s => s.enabled).length };
+
+  function writeSkills(next: SkillState[]) {
+    saveSkillState(next);
+    setSkills(next);
+    const live = liveMcpConnections(next);
+    const rest = p.mcp.filter(c => !c.id.startsWith('skill:'));
+    const merged = live.map(row => {
+      const existing = p.mcp.find(c => c.id === row.id);
+      return existing ? { ...existing, url: row.url, token: row.token, saveToken: row.saveToken, enabled: true, name: row.name, transport: 'http' as const } : row;
+    });
+    p.setMcp([...merged, ...rest]);
+  }
+  function patchSkill(id: string, patch: Partial<SkillState>) {
+    writeSkills(skills.map(row => row.id === id ? { ...row, ...patch, config: patch.config ?? row.config } : row));
+  }
+  function exportStack() {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(exportSkillStack(skills), null, 2)], { type: 'application/json' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'signal-forge-skills.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) p.close(); }}>
     <section className="drawer" role="dialog" aria-modal="true" aria-labelledby="connectors-title">
@@ -293,6 +316,23 @@ export default function Connectors(p: ConnectorsProps) {
         </section>)}
         {!p.mcp.length && <p className="help"><Database size={12} /> No servers connected yet. Pick one above, or paste any https MCP URL.</p>}
       </>}
+
+      {p.tab === 'skills' && <section className="panel">
+        <div className="panel-head"><h3>Crew skills</h3><button type="button" className="button small" onClick={exportStack}><Download size={13} />Export stack</button></div>
+        <p className="help">A skill is either a demo preset or a live MCP server. Demo means there is no server behind it. Live skills are called through the existing MCP proxy. The execution engine receives only the live ones, and it stores a token with the Credentials API so the model never sees it. Carol Ann is the owner's reference for this habit, not an upstream.</p>
+        {CREW_SKILLS.map(skill => {
+          const row = skills.find(item => item.id === skill.id) ?? { id: skill.id, enabled: false, config: {} };
+          return <div key={skill.id} className="doc-row">
+            <ListChecks size={13} />
+            <span>
+              <strong>{skill.name}</strong>
+              <small>{skill.kind === 'demo' ? 'Demo' : 'Live'} · {skill.blurb}</small>
+              {skill.kind === 'live' && row.enabled && skill.fields.map(field => <label key={field.key}>{field.label}<input type={field.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} value={row.config[field.key] ?? ''} onChange={e => patchSkill(skill.id, { config: { ...row.config, [field.key]: e.target.value } })} /></label>)}
+            </span>
+            <label className="switch"><input type="checkbox" checked={row.enabled} onChange={e => patchSkill(skill.id, { enabled: e.target.checked })} />{row.enabled ? 'On' : 'Off'}</label>
+          </div>;
+        })}
+      </section>}
     </section>
   </div>;
 }

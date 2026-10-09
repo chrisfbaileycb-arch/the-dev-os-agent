@@ -28,12 +28,12 @@ export default function RunCard({ run, onApprove, onStop }: RunCardProps) {
   const current = run.steps.find(s => s.status === 'running' || s.status === 'assigned');
   const final = run.status === 'completed' ? finished[finished.length - 1] : undefined;
   const failure = run.steps.find(s => s.error)?.error;
-  const label = workflows[run.workflow].label;
+  const label = run.title ?? workflows[run.workflow].label;
   // At a gate, show everything the phase just produced: that is what is being approved.
   const gateOutputs = run.status === 'awaiting_approval' && run.gate ? finished.filter(s => s.phase === run.gate!.phase - 1) : [];
 
   return <div className={`run calm ${run.status}`}>
-    {run.status === 'running' && <p className="run-pulse" role="status"><HourglassIcon />Building… <span className="run-step">{current?.title ?? 'Starting'}</span></p>}
+    {run.status === 'running' && <div className="run-pulse" role="status"><p><HourglassIcon />Working… <span className="run-step">{current?.title ?? 'Starting'}</span></p>{current?.output && <pre className="msg-body">{current.output}</pre>}{finished.map(s => <div key={s.id} className="run-phase"><small>{s.title}</small><pre className="msg-body">{s.output}</pre></div>)}</div>}
 
     {run.status === 'awaiting_approval' && <div className="run-gate" role="group" aria-label="Approval needed">
       <p className="run-gate-head"><strong>Phase {run.gate?.phase ?? finished.length} of {run.gate?.phases ?? 4} done — approve to continue</strong><small>Nothing further is sent to the model until you approve.</small></p>

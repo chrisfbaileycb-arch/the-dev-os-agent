@@ -13,7 +13,7 @@ import { hasPlanAccess, freeOutputTokens } from './plans.mjs';
 // browser is told the resulting list by /api/providers and renders exactly that, so there is one
 // source of truth and nothing for a UI catalogue to drift away from.
 
-import { isBackendLaneEnforced, isBackendProvider } from './providerRegistry.mjs';
+import { isBackendLaneEnforced, isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 /** Credits per 1,000 tokens. Mirrors CREDIT_WEIGHTS.fast in src/lib/catalog.ts. */
 export const FREE_WEIGHT = 0.5;
 
@@ -273,7 +273,7 @@ export const PROVIDER_KEY_VARS = {
 let adminTiers = { mode: 'auto', free: [], paid: [] };
 // An entry from a provider outside the backend lane is dropped here, so a stored tier list that
 // predates the lane split (or a hand-built request) cannot put a non-US provider back on the card.
-const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider) && isBackendProvider(m.provider)
+const cleanEntry = m => m && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 && Object.hasOwn(PROVIDER_KEY_VARS, m.provider) && isBackendProvider(m.provider) && !isExperimentProvider(m.provider)
   ? { id: m.id.trim(), provider: m.provider, envKey: PROVIDER_KEY_VARS[m.provider], ...(typeof m.label === 'string' && m.label.trim() ? { label: m.label.trim().slice(0, 80) } : {}) }
   : null;
 export function setAdminTiers(tiers) {
@@ -354,7 +354,7 @@ const STATIC_FREE = [
 export function freeModels(env = process.env, discovered = discoveredXkiro, tiers = adminTiers) {
   // Not an option: the backend lane is the architecture, not a launch setting. It applies to the
   // operator's own dashboard entries too, so a non-lane entry is dropped rather than quietly funded.
-  return allFreeModels(env, discovered, tiers).filter(m => isBackendProvider(m.provider));
+  return allFreeModels(env, discovered, tiers).filter(m => isBackendProvider(m.provider) && !isExperimentProvider(m.provider));
 }
 
 function allFreeModels(env, discovered, tiers) {
@@ -436,7 +436,7 @@ export function openRouterPool(env = process.env, discovered = discoveredOpenRou
  * would be a locked door with nothing behind it.
  */
 export function paidModels(env = process.env, tiers = adminTiers) {
-  return tiers.paid.filter(m => isBackendProvider(m.provider) && Boolean(freeKey(m, env).key));
+  return tiers.paid.filter(m => isBackendProvider(m.provider) && !isExperimentProvider(m.provider) && Boolean(freeKey(m, env).key));
 }
 export function paidModel(id, env = process.env, tiers = adminTiers) {
   if (typeof id !== 'string') return undefined;

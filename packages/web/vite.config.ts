@@ -26,7 +26,22 @@ import { createFetcher } from './server/fetch.mjs';
 import { createGithub } from './server/github.mjs';
 // @ts-expect-error Server modules are JavaScript.
 import { createJobs, openJobs } from './server/jobs.mjs';
-const api: Plugin = { name: 'signal-forge-api', async configureServer(server) { const db = openDatabase('data/dev.sqlite'); const settings = await openSettings({ db }); const auth = createAuth({ db }); const handlers = [auth, createAdmin({ db, settings }), createProxy({ db, settings }), createState({ db, settings }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs: openJobs(db.raw()) })]; server.middlewares.use((req: { url?: string }, res, next) => { if (new URL(req.url ?? '/', 'http://dev').pathname === '/admin') req.url = '/'; void (async () => { for (const handle of handlers) if (await handle(req, res)) return; next(); })().catch(next); }); } };
+// @ts-expect-error Server modules are JavaScript.
+import { createEngine } from './server/antigravity.mjs';
+// @ts-expect-error Server modules are JavaScript.
+import { classifyStorage } from './server/durability.mjs';
+const api: Plugin = { name: 'signal-forge-api', async configureServer(server) {
+  const dataFile = 'data/dev.sqlite';
+  const db = openDatabase(dataFile);
+  const settings = await openSettings({ db });
+  const auth = createAuth({ db });
+  // Same durability rule as the production server. data/dev.sqlite is outside /tmp, so the local
+  // ledger is durable. A DATABASE_URL, when the operator set one, still wins.
+  const databaseUrl = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.DATABASE_URL;
+  const storage = classifyStorage({ databaseUrl, dataFile });
+  const handlers = [auth, createAdmin({ db, settings, storage }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, settings, storage }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs: openJobs(db.raw()) })];
+  server.middlewares.use((req: { url?: string }, res, next) => { if (new URL(req.url ?? '/', 'http://dev').pathname === '/admin') req.url = '/'; void (async () => { for (const handle of handlers) if (await handle(req, res)) return; next(); })().catch(next); });
+} };
 // Emits dist/sw.js with the precache list taken from the real bundle, so the offline shell always matches the build.
 const shellWorker: Plugin = { name: 'shell-worker', apply: 'build', generateBundle(_options, bundle) { const { source } = buildShellWorker(Object.keys(bundle)); this.emitFile({ type: 'asset', fileName: 'sw.js', source }); } };
 

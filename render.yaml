@@ -10,12 +10,12 @@
 #   No Chromium.      The Browser Agent persona cannot run; /api/browse answers 503. Everything
 #                     else works, including the URL crawler connector, which needs no browser.
 #
-#   No disk.          SQLite lives at DATA_FILE and is wiped on every restart and redeploy.
-#                     Sessions, runs, and the ledger are reconstructed from each browser's own
-#                     IndexedDB copy, so a returning visitor keeps their history; what does not
-#                     survive is the server's record. The free-tier monthly quota resets with it,
-#                     which makes FREE_MAX_PER_HOUR — an in-memory per-IP window — the cap that
-#                     actually bounds spend on the deployment's keys.
+#   No disk.          SQLite at DATA_FILE=/tmp is wiped on every restart. The monthly free-tier
+#                     number is counted in the browser, not remembered by this process. Admin
+#                     settings in that file do not survive. FREE_MAX_PER_HOUR is the in-memory
+#                     spend bound. If DATABASE_URL from the free Postgres below is set, admin
+#                     settings and the server ledger do survive, and experiment keys may be
+#                     stored. The page says which case you are in.
 #
 #   No worker.        Multi-step agent workflows run in the visitor's own browser Web Worker,
 #                     which is the default path regardless. /api/jobs reports `worker: false`

@@ -58,9 +58,9 @@ export const REGISTRY = [
 
   // --- Never Shield: relays, non-US companies, or unknowable destinations ---
   { id: 'openrouter', name: 'OpenRouter', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
-    note: 'US company, but it routes to many upstream hosts, including non-US ones.' },
+    note: 'US company, but it routes to many upstream hosts, including non-US ones. Experiment lane. Not Shield and not the free tier.' },
   { id: 'huggingface', name: 'Hugging Face', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
-    note: 'Inference Providers routes to third-party hosts. Not a key slot.' },
+    note: 'Inference Providers router at router.huggingface.co. Experiment lane. Your key. Not Shield and not the free tier.' },
   { id: 'cohere', name: 'Cohere', hq: 'CA', kind: 'direct', integrated: true, ...unchecked },
   { id: 'venice', name: 'Venice', hq: 'unknown', kind: 'direct', integrated: true, ...unchecked },
   { id: 'vercel', name: 'Vercel AI Gateway', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
@@ -80,7 +80,7 @@ export const providerRecord = id => byId.get(String(id ?? '').toLowerCase());
 export const isShieldEligible = record =>
   Boolean(record) && record.hq === 'US' && ['direct', 'cloud', 'host'].includes(record.kind);
 
-/** Provider ids Shield allows (and the proxy can reach today unless `onlyIntegrated` is false). */
+/** Provider ids Shield allows (and the proxy can reach today unless `onlyIntegrated` is false). Relays, including the experiment lane, are never in this list. */
 export function shieldProviders({ onlyIntegrated = true } = {}) {
   return REGISTRY.filter(r => isShieldEligible(r) && (!onlyIntegrated || r.integrated)).map(r => r.id);
 }
@@ -92,6 +92,9 @@ export const allowedUnderShield = id => isShieldEligible(providerRecord(id));
 // OpenAI, Anthropic, Google, Groq, and xAI. Hugging Face and NVIDIA stay in the registry
 // so a key stored earlier can be removed; they are not slots.
 export const KEY_LANE_IDS = ['openai', 'anthropic', 'google', 'groq', 'xai'];
+
+/** Experiment lane. Own keys. Never Shield, never the funded free tier. */
+export const EXPERIMENT_IDS = ['openrouter', 'huggingface'];
 
 const BACKEND_IDS = KEY_LANE_IDS;
 
@@ -107,8 +110,15 @@ export function setBackendLaneEnforcedForTests(on) { laneEnforced = Boolean(on);
 /** Whether the lane is being enforced (always, outside the funding-mechanics tests). */
 export const isBackendLaneEnforced = () => laneEnforced;
 
-/** Whether the operator's backend may hold a key for, and fund requests to, this provider. */
+/** Whether the operator's backend may hold a key for, and fund requests to, this provider. Experiment providers are never funded. */
 export const isBackendProvider = id => !laneEnforced || BACKEND_IDS.includes(String(id ?? '').toLowerCase());
+
+export const isExperimentProvider = id => EXPERIMENT_IDS.includes(String(id ?? '').toLowerCase());
+
+/** Experiment provider ids. These are key slots. They are not Shield and not the free tier. */
+export function experimentProviders() {
+  return [...EXPERIMENT_IDS];
+}
 
 /** Backend provider ids. With `onlyIntegrated` (the default) only the ones the proxy can route to today. */
 export function backendProviders({ onlyIntegrated = true } = {}) {

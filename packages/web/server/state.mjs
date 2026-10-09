@@ -29,13 +29,21 @@ export function validateSession(s) { if (!s || !isId(s.id) || typeof s.title !==
 export function validateRun(r) { if (!r || !isId(r.id) || !isIso(r.startedAt) || !Array.isArray(r.steps) || typeof r.goal !== 'string') throw new HttpError(400, 'Invalid run.'); if (JSON.stringify(r).length > 1_000_000) throw new HttpError(413, 'Run is too large.'); }
 export function validateEntry(e) { if (!e || !isId(e.id) || !isIso(e.at) || typeof e.model !== 'string' || e.model.length > 200 || !['free', 'byok', 'pro'].includes(e.tier) || !['credits', 'byok', 'free'].includes(e.mode) || !Number.isInteger(e.tokens) || e.tokens < 0 || e.tokens > 10_000_000 || typeof e.credits !== 'number' || !Number.isFinite(e.credits) || e.credits < 0 || e.credits > 1_000_000) throw new HttpError(400, 'Invalid ledger entry.'); }
 
-export function createState({ env: baseEnv = process.env, db, settings = null }) {
+export function createState({ env: baseEnv = process.env, db, settings = null, storage = null }) {
   // Dashboard settings over the process environment, resolved per request like the proxy does.
   const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
   // The zero-config allowance is metered by the proxy, not by the browser, so the balance the
   // client shows for it is read back from the server rather than recomputed from local rows.
   const fundingWorkspace = (req, env) => parseSession(req.headers.cookie, env.SESSION_SECRET)?.workspaceId ?? req.socket.remoteAddress ?? 'unknown';
-  const budget = async (workspace, env, req) => ({ pool: Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000), freePool: monthlyPool(env), freeUsed: await db.usedThisMonth(fundingWorkspace(req, env), new Date(), 'free'), free: freeTierStatus(env) });
+  const budget = async (workspace, env, req) => ({
+    pool: Math.max(0, Number(env.CREDIT_MONTHLY_POOL) || 100_000),
+    freePool: monthlyPool(env),
+    freeUsed: await db.usedThisMonth(fundingWorkspace(req, env), new Date(), 'free'),
+    free: freeTierStatus(env),
+    // On a host with no disk the monthly number above dies on restart. The browser ledger is
+    // the one the visitor is told to trust. The hourly cap remains in memory either way.
+    storage: storage ?? { durable: false, kind: 'unconfigured', ledger: 'browser' },
+  });
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://state').pathname;
     if (!['/api/state', '/api/state/clear', '/api/state/delete', '/api/state/usage', '/api/state/plan'].includes(path)) return false;

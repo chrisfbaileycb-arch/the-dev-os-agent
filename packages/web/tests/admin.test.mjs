@@ -53,16 +53,17 @@ test('tier config is validated: unknown providers drop out and free wins over pa
 });
 
 test('admin tiers shape the free and paid pools the proxy reads', () => {
-  setAdminTiers({ mode: 'auto', free: [{ id: 'openai/gpt-4o-mini', provider: 'openrouter', label: 'GPT-4o mini' }], paid: [{ id: 'gpt-4o', provider: 'openai', label: 'GPT-4o' }, { id: 'groq/llama-3.1-8b-instant', provider: 'groq' }] });
+  setAdminTiers({ mode: 'auto', free: [{ id: 'groq/custom-free', provider: 'groq', label: 'Custom free' }], paid: [{ id: 'gpt-4o', provider: 'openai', label: 'GPT-4o' }, { id: 'groq/llama-3.1-8b-instant', provider: 'groq' }] });
   const env = { OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2', OPENAI_API_KEY: 'k3', SERVER_CREDIT_ACCESS_TOKEN: 'tok', FREE_CREDIT_MONTHLY_POOL: '400' };
   const free = freeModels(env, []);
-  assert.equal(free[0].id, 'openai/gpt-4o-mini');
-  assert.equal(free[0].envKey, 'OPENROUTER_API_KEY');
+  assert.equal(free[0].id, 'groq/custom-free');
+  assert.equal(free[0].envKey, 'GROQ_API_KEY');
+  assert.ok(!free.some(m => m.provider === 'openrouter'), 'OpenRouter is not a free-tier provider');
   // Moved to the paid tier, so it leaves the automatic free pool even though it is a static entry.
   assert.ok(!free.some(m => m.id === 'groq/llama-3.1-8b-instant'));
   assert.ok(free.some(m => m.id === 'groq/llama-3.3-70b-versatile'));
   const status = freeTierStatus(env, []);
-  assert.equal(status.labels['openai/gpt-4o-mini'], 'GPT-4o mini');
+  assert.equal(status.labels['groq/custom-free'], 'Custom free');
   const paid = paidTierStatus(env);
   assert.equal(paid.enabled, true);
   assert.deepEqual(paid.models, ['gpt-4o', 'groq/llama-3.1-8b-instant']);
@@ -72,6 +73,9 @@ test('admin tiers shape the free and paid pools the proxy reads', () => {
   // Manual mode: exactly the operator's list.
   setAdminTiers({ mode: 'manual', free: [{ id: 'only/this', provider: 'groq' }], paid: [] });
   assert.deepEqual(freeModels(env, ['discovered/free']).map(m => m.id), ['only/this']);
+  // An experiment provider cannot be written onto the free tier, even with the lane off.
+  setAdminTiers({ mode: 'manual', free: [{ id: 'openai/gpt-4o-mini', provider: 'openrouter' }], paid: [] });
+  assert.deepEqual(freeModels(env, []).map(m => m.id), []);
 });
 
 test('the model list normalizer keeps a plain id list plain and reads labels and free flags where given', () => {

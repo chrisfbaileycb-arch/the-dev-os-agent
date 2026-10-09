@@ -243,6 +243,6 @@ test('the live gateway catalogue agrees with what this build would fund', { skip
     // Finally through the same path the server uses, so the published list is the checked one.
     await ensureCatalog({}, { now: Date.now() });
     assert.deepEqual(xkiroCatalog(), free);
-    assert.deepEqual(freeTierStatus({ XKIRO_API_KEY: 'k' }).models, free);
+    assert.deepEqual(freeTierStatus({ XKIRO_API_KEY: 'k', FREE_CREDIT_MONTHLY_POOL: '400' }).models, free);
   } finally { resetCatalog(); }
 });

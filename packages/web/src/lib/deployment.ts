@@ -38,7 +38,10 @@ export interface GatewayCatalog { url: string | null; models: GatewayModel[]; di
 export interface PaidTier { enabled: boolean; configured: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; }
 export const emptyPaidTier: PaidTier = { enabled: false, configured: false, models: [], providers: {}, labels: {} };
 
-export interface Deployment { free: FreeTier; paid: PaidTier; billing: Billing; gateway: string | null; gatewayCatalog: GatewayCatalog; ollamaBridge: string | null; reachable: boolean; }
+export interface HostStorage { durable: boolean; kind: 'postgres' | 'sqlite' | 'ephemeral' | 'unconfigured'; ledger: 'server' | 'browser'; }
+export const browserStorage: HostStorage = { durable: false, kind: 'unconfigured', ledger: 'browser' };
+
+export interface Deployment { free: FreeTier; paid: PaidTier; billing: Billing; gateway: string | null; gatewayCatalog: GatewayCatalog; ollamaBridge: string | null; reachable: boolean; storage: HostStorage; }
 
 /**
  * What a visitor sees whenever the zero-config tier cannot serve them: keys unset, provider
@@ -64,6 +67,7 @@ export const offlineDeployment: Deployment = {
   gatewayCatalog: emptyGatewayCatalog,
   ollamaBridge: null,
   reachable: false,
+  storage: browserStorage,
 };
 
 /**
@@ -94,6 +98,13 @@ function gatewayCatalogFrom(raw: unknown): GatewayCatalog {
     at: typeof source.at === 'string' ? source.at : null,
     error: typeof source.error === 'string' ? source.error.slice(0, 300) : null,
   };
+}
+
+function storageFrom(raw: unknown): HostStorage {
+  const source = (raw ?? {}) as Partial<HostStorage>;
+  const kind = source.kind === 'postgres' || source.kind === 'sqlite' || source.kind === 'ephemeral' ? source.kind : 'unconfigured';
+  const ledger = source.ledger === 'server' ? 'server' : 'browser';
+  return { durable: source.durable === true && ledger === 'server', kind, ledger };
 }
 
 /** Labels by id from every source the deployment reports, so the dock and the status bar can name a model. */
@@ -196,7 +207,7 @@ async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): 
   try {
     const response = await fetch('/api/providers', { credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(timeoutMs)]) });
     if (!response.ok) return offlineDeployment;
-    const body = await response.json() as { free?: Partial<FreeTier>; paid?: unknown; billing?: unknown; gateway?: unknown; gatewayCatalog?: unknown; ollamaBridge?: string | null };
+    const body = await response.json() as { free?: Partial<FreeTier>; paid?: unknown; billing?: unknown; gateway?: unknown; gatewayCatalog?: unknown; ollamaBridge?: string | null; storage?: unknown };
     const free = body.free ?? {};
     return {
       reachable: true,
@@ -205,6 +216,7 @@ async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): 
       gatewayCatalog: gatewayCatalogFrom(body.gatewayCatalog),
       paid: paidFrom(body.paid),
       ollamaBridge: typeof body.ollamaBridge === 'string' ? body.ollamaBridge : null,
+      storage: storageFrom(body.storage),
       free: {
         enabled: free.enabled === true && Array.isArray(free.models) && free.models.length > 0,
         models: Array.isArray(free.models) ? free.models.filter((m): m is string => typeof m === 'string') : [],

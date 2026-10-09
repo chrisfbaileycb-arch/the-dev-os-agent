@@ -41,14 +41,11 @@ test('an anonymous request is funded only for an allowlisted free model', async 
   await withProxy({ env: { GROQ_API_KEY: 'server-key', FREE_TIER_DISABLED: 'true' }, transport: async () => { throw Error('must not call'); } },
     async url => { assert.equal((await post(url, { ...base, apiKey: '' })).status, 503); });
 });
-test('openrouter/auto on the free tier is pinned to the zero-cost pool, never the paid router', async () => {
-  await withProxy({ env: { OPENROUTER_API_KEY: 'server-key' }, transport: async (url, options) => {
-    const body = JSON.parse(options.body);
-    assert.equal(body.model, 'meta-llama/llama-3.2-3b-instruct:free');
-    assert.ok(body.models.every(m => m.endsWith(':free')));
-    assert.ok(!JSON.stringify(body).includes('openrouter/auto'));
-    return stream('data: [DONE]\n\n');
-  } }, async url => { assert.equal((await post(url, { ...base, apiKey: '', provider: 'openrouter', model: 'openrouter/auto' })).status, 200); });
+test('openrouter/auto is not funded by the free tier', async () => {
+  await withProxy({ env: { OPENROUTER_API_KEY: 'server-key', FREE_CREDIT_MONTHLY_POOL: '400' }, transport: async () => { throw Error('must not call'); } }, async url => {
+    const response = await post(url, { ...base, apiKey: '', provider: 'openrouter', model: 'openrouter/auto' });
+    assert.notEqual(response.status, 200);
+  });
 });
 test('free-tier output is capped and the visitor cannot raise it', async () => {
   await withProxy({ env: { GROQ_API_KEY: 'server-key', FREE_MAX_OUTPUT_TOKENS: '256' }, transport: async (url, options) => { assert.equal(JSON.parse(options.body).max_tokens, 256); return stream('data: [DONE]\n\n'); } },
@@ -143,31 +140,14 @@ test('Hugging Face routes through its OpenAI-compatible router on the visitor to
   assert.equal(usageReportable('huggingface', { nativeCohere: false, nativeAnthropic: false }), true, 'usage is requested so BYOK runs still count tokens');
 });
 
-test('HF serverless models join the zero-config pool only when the deployment holds HF_TOKEN', async () => {
-  // With the token set, the small instruct models are funded exactly like the Groq statics:
-  // mode 'free', the deployment's key, the allowlist entry carried along so routeFreeRequest
-  // and the handler know where to send it. DeepSeek-R1:auto stays out — a reasoning chain is
-  // what this tier must not fund by default, and :auto is a router directive, not a price.
-  const env = { HF_TOKEN: 'server-hf-token' };
-  const funded = fundingFor({ provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct' }, env);
-  assert.equal(funded.mode, 'free');
-  assert.equal(funded.apiKey, 'server-hf-token');
-  assert.deepEqual(funded.entry, { id: 'Qwen/Qwen2.5-7B-Instruct', provider: 'huggingface', envKey: 'HF_TOKEN' });
-  assert.equal(fundingFor({ provider: 'huggingface', model: 'meta-llama/Llama-3.1-8B-Instruct' }, env).mode, 'free');
-  assert.equal(fundingFor({ provider: 'huggingface', model: 'deepseek-ai/DeepSeek-R1:auto' }, env).mode, 'none', 'reasoning is never deployment-funded by default');
-  assert.equal(fundingFor({ provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct' }, {}).mode, 'none', 'no token, no pool — never advertise a 503 as free');
-  // A keyless request routes to the pinned router home with the id passed through untouched
-  // and the server-side output cap applied, like every other zero-config model.
-  let captured;
-  await withProxy({ env, transport: async (url, options) => { captured = { url, ...options }; return stream('data: [DONE]\n\n'); } }, async url => {
+test('Hugging Face is not on the free tier even when the deployment holds HF_TOKEN', async () => {
+  const env = { HF_TOKEN: 'server-hf-token', FREE_CREDIT_MONTHLY_POOL: '400' };
+  assert.equal(fundingFor({ provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct' }, env).mode, 'none');
+  assert.equal(fundingFor({ provider: 'huggingface', model: 'meta-llama/Llama-3.1-8B-Instruct' }, env).mode, 'none');
+  await withProxy({ env, transport: async () => { throw Error('must not call'); } }, async url => {
     const response = await post(url, { provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct', messages: base.messages });
-    assert.equal(response.status, 200);
+    assert.notEqual(response.status, 200);
   });
-  assert.equal(captured.url, 'https://router.huggingface.co/v1/chat/completions');
-  assert.equal(captured.headers.Authorization, 'Bearer server-hf-token');
-  const payload = JSON.parse(captured.body);
-  assert.equal(payload.model, 'Qwen/Qwen2.5-7B-Instruct');
-  assert.ok(payload.max_tokens <= 16384, 'free-tier output stays capped');
 });
 
 test('Anthropic is translated to /v1/messages, headers and all', async () => {
@@ -416,33 +396,21 @@ test('client-supplied provider URLs cannot re-enable the disabled OmniRoute adap
   });
 });
 
-test('an owner key funds the free pool server-side, and never beats a visitor key', () => {
-  // The operator's master credential takes the same funding path as any other free-tier request:
-  // it is resolved inside the proxy, attached to the upstream call, and never returned to the
-  // browser. /api/providers reports the models it unlocks, not the key behind them.
+test('an OpenRouter owner key does not fund the free tier', () => {
+  // OpenRouter is an experiment slot. An owner key must not turn it into managed access.
   const env = { OPENROUTER_OWNER_KEY: 'owner-key' };
   const funded = fundingFor({ provider: 'openrouter', model: 'mistralai/mistral-nemo:free' }, env);
-  assert.equal(funded.mode, 'free');
-  assert.equal(funded.apiKey, 'owner-key');
+  assert.equal(funded.mode, 'none');
   assert.equal(fundingFor({ provider: 'openrouter', model: 'mistralai/mistral-nemo:free', apiKey: 'visitor' }, env).mode, 'byok');
-  assert.equal(fundingFor({ provider: 'openrouter', model: 'mistralai/mistral-nemo:free' }, { SETTINGS_OWNER_API_KEY: 'owner-key' }).apiKey, 'owner-key');
-  // It is not a universal credential: it funds the OpenRouter pool only, and no paid model.
+  assert.equal(fundingFor({ provider: 'openrouter', model: 'mistralai/mistral-nemo:free' }, { SETTINGS_OWNER_API_KEY: 'owner-key' }).mode, 'none');
   assert.equal(fundingFor({ provider: 'groq', model: 'groq/llama-3.1-8b-instant' }, env).mode, 'none');
-  assert.equal(fundingFor({ provider: 'openrouter', model: 'anthropic/claude-3.5-sonnet' }, env).mode, 'none');
 });
 
-test('the managed tier streams on an owner key alone, and publishes no credential', async () => {
-  await withProxy({ env: { OPENROUTER_OWNER_KEY: 'owner-key' }, transport: async (url, options) => {
-    assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
-    assert.equal(options.headers.Authorization, 'Bearer owner-key');
-    return stream('data: [DONE]\n\n');
-  } }, async url => {
+test('an OpenRouter owner key does not publish a managed tier or its credential', async () => {
+  await withProxy({ env: { OPENROUTER_OWNER_KEY: 'owner-key' }, transport: async () => { throw new Error('must not call'); } }, async url => {
     const status = await fetch(url + '/api/providers', { headers: { 'X-Workspace-Id': '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f' } }).then(r => r.json());
-    assert.equal(status.free.enabled, true, 'the tier is live for a visitor with no key at all');
-    assert.ok(status.free.models.length > 0);
-    assert.ok(!JSON.stringify(status).includes('owner-key'), 'the credential never crosses to the browser');
-    const response = await chatFree(url, { provider: 'openrouter', model: 'meta-llama/llama-3.2-3b-instruct:free', messages: [{ role: 'user', content: 'hi' }] });
-    assert.equal(response.status, 200);
+    assert.equal(status.free.enabled, false);
+    assert.ok(!JSON.stringify(status).includes('owner-key'));
   });
 });
 

@@ -2,9 +2,9 @@
 
 A browser workspace for one person or a small business: a chat with a business agent, three multi-agent workflows, a connectors hub, a knowledge hub that stays on the device, a model hub, a credit ledger, and a sandboxed browser agent. Runs on a Chromebook or any modern browser, installs as an app, and needs no account.
 
-**Zero-config by default.** On a deployment with server provider keys, a first-time visitor types a prompt and gets a live streaming reply — no sign-up, no API key, nothing to configure. The server funds free and plan models only from the **US backend** — Anthropic, OpenAI, Google, xAI, Groq and Cerebras (Meta, Azure and Bedrock once they are integrated) — using the keys and model picks the operator sets in the admin dashboard, and meters every request against a visible credit quota. The dock has two model dropdowns to match: **US models**, and **Other providers** (OpenRouter, GitHub Models, Cohere, Venice, Hugging Face, xKiro, a local model and the rest), which runs only on a personal key the visitor enters in Settings and which is kept in that browser alone. The server never spends its own keys on a provider outside the US backend; the list lives in `server/providerRegistry.mjs`.
+**Zero-config by default.** On a deployment with server provider keys, a first-time visitor types a prompt and gets a live streaming reply — no sign-up, no API key, nothing to configure. The server funds free and plan models only from the **US backend** — Anthropic, OpenAI, Google, xAI, Groq and Cerebras (Meta, Azure and Bedrock once they are integrated) — using the keys and model picks the operator sets in the admin dashboard. The dock has three model menus: **Models** (the US labs and whatever this deployment funds), **Experiment** (OpenRouter and Hugging Face only; subtitle "Your key. May route outside the US. Not the free tier."), and **On this machine**. Experiment keys are excluded from `shieldProviders()` and from the free-tier allowlist. The monthly free-tier number is counted in the browser unless storage is durable. The live host has no disk.
 
-Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio. Original code and prompts; the Apache and MIT notices for the FreeToken and Ruflo code carried in this directory are in `THIRD_PARTY_NOTICES.md`.
+Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio. Original code and prompts; the Apache and MIT notices for the FreeToken and Ruflo code carried in this directory are in `THIRD_PARTY_NOTICES.md`. Carol Ann is the owner's own reference for the skills registry, not an upstream.
 
 ## What is in the box
 
@@ -60,7 +60,7 @@ See `.env.example`.
 
 | Variable | Purpose |
 |---|---|
-| `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `XKIRO_API_KEY` | Fund the zero-config free tier. Set any one and keyless visitors get live replies; leave all unset and the app opens in the scripted preview. Keys stack — the pools combine. |
+| `GROQ_API_KEY`, `XKIRO_API_KEY` | Fund the zero-config free tier when the dashboard has not listed models of its own. OpenRouter and Hugging Face keys do not. Leave the US keys unset and the app opens without a funded tier. |
 | `XKIRO_FREE_MODELS` | Optional comma-separated allowlist that **narrows** the discovered free pool. Ids the gateway does not give away are refused, so this can restrict what the deployment funds but never widen it. Blank means the whole discovered pool. |
 | `XKIRO_BASE_URL` | The gateway base, default `https://api.xkiro.com/v1`. HTTPS only; a malformed value falls back to the default rather than failing the tier. |
 | `FREE_CREDIT_MONTHLY_POOL` | Free credits per workspace per month at 0.5 per 1K tokens (default 400 ≈ 800,000 tokens). |
@@ -68,7 +68,7 @@ See `.env.example`.
 | `FREE_MAX_OUTPUT_TOKENS` | Output ceiling for a server-funded reply (default 16,384; old 1,024 / 8,192 settings upgrade to 16,384), applied whatever the browser asks for. |
 | `FREE_TIER_DISABLED` | `true` switches the tier off without removing the provider keys. Visitors then see the same warming-up message as an unfunded tier. |
 | `APP_ORIGIN` | Optional. Pins one external origin; leave unset on Render. Also used for OpenRouter attribution. |
-| `DATA_DIR` / `DATA_FILE` | Where the SQLite file lives. Put it on a persistent disk. |
+| `DATA_DIR` / `DATA_FILE` | Where the SQLite file lives. A path under `/tmp` or `/var/tmp` is wiped on restart; the monthly free-tier ledger then stays in the browser and experiment keys are not written to that file. A path outside those directories, or `DATABASE_URL`, is durable. |
 | `PLAN_STARTER_CREDITS` / `PLAN_PREMIUM_CREDITS` / `PLAN_PRO_CREDITS` | Server-enforced monthly plan allowances (defaults 1,000 / 2,500 / 6,000). |
 | `FETCH_ALLOWED_HOSTS`, `FETCH_MAX_PER_HOUR` | URL crawler scope (empty means any public host) and budget (default 60). |
 | `GITHUB_TOKEN`, `GITHUB_MAX_PER_HOUR` | Optional server token for the GitHub connector, and its hourly budget (default 120). |
@@ -79,7 +79,7 @@ See `.env.example`.
 | `SERVER_CREDIT_ACCESS_TOKEN`, `COHERE_API_KEY`, `CUSTOM_API_KEY` | Server keys used only for requests carrying the access token (platform credits). |
 | `ADMIN_TOKEN` | Opens the admin dashboard at `/admin` (at least 12 characters; `openssl rand -hex 24`). Unset, every `/api/admin` route answers 503 and the page says so. |
 | `SETTINGS_SECRET` | Optional. Seals the provider keys entered in the dashboard before they are stored. Falls back to `SESSION_SECRET`, then `ADMIN_TOKEN`; older seals are still opened by whichever secret made them. |
-| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `AIHUBMIX_API_KEY`, `HF_TOKEN` | Server keys for the direct vendors and the other gateways. Any of them can fund a model the dashboard puts on the free or paid tier. Every key here can also be entered in the dashboard instead. |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `AIHUBMIX_API_KEY` | Server keys for direct vendors. A key here can fund a model the dashboard puts on the free or paid tier only when that provider is on the US backend. `HF_TOKEN` and `OPENROUTER_API_KEY` are experiment slots: they never fund the free tier. `ANTIGRAVITY_API_KEY` is the execution engine, a different slot from `GOOGLE_API_KEY`, and it is stored only when storage is durable. |
 | `WORKER_TOKEN` | Shared secret between the web service and the background worker. Unused without a worker. |
 | `WEB_SERVICE_URL`, `WORKER_POLL_MS` | Worker service only: the web service's internal address and poll interval. |
 
@@ -101,7 +101,7 @@ See `.env.example`.
 
 Open `/admin` (or Settings → *Open the admin dashboard*) and sign in with `ADMIN_TOKEN`. Three things live there, and each applies to the next request with no redeploy:
 
-- **Provider keys.** Paste a key for any provider — OpenRouter, Groq, OpenAI, Anthropic, Google, Cohere, xKiro, AIHubMix, Hugging Face, managed inference. It is sealed before it is stored (`server/secrets.mjs`), laid over the same environment variable for every request (`server/settings.mjs`), and never sent back to a browser. Remove it and the environment value, if any, applies again.
+- **Provider keys.** The US backend keys (OpenAI, Anthropic, Google, Groq, xAI) can be sealed and stored. OpenRouter, Hugging Face, and the execution engine are separate slots and are refused on a host whose database does not survive a restart. A stored key is sealed before it is stored (`server/secrets.mjs`), laid over the same environment variable for every request (`server/settings.mjs`), and never sent back to a browser. Remove it and the environment value, if any, applies again.
 - **Model tiers.** Load a connected provider's live model list and mark each model *Free* (any visitor, no key, on the deployment's key, metered against the free allowance), *Paid* (subscribers holding the plan access token, on the deployment's key, against the plan allowance) or *BYOK* (the default: the visitor brings a key). *Automatic + your picks* adds your free picks to the pool the server discovers on its own; *Only your picks* makes the free tier exactly your list. A model marked paid leaves the automatic free pool. Frontier-class picks are flagged, not refused: the burst and monthly caps are what bound the spend.
 - **Limits.** The free credit pool, the per-network hourly cap, the output cap, the on/off switch, the plan credit pool, the plan access token, and the owner key.
 

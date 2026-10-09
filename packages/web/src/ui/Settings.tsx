@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Check, Coins, CreditCard, ExternalLink, HardDrive, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
@@ -10,6 +10,9 @@ import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
 import type { Balance, FreeTier, LedgerEntry, PlanReading } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
+import { EXPERIMENT_SUBTITLE } from '../lib/modelLanes';
+import { testLocalEndpoint } from '../lib/localNetwork';
+import type { HostStorage } from '../lib/deployment';
 import ThemePicker from './ThemePicker';
 import type { ThemeChoice } from '../lib/theme';
 
@@ -27,6 +30,10 @@ export interface SettingsProps {
   theme: ThemeChoice; setTheme: (choice: ThemeChoice) => void;
   /** The local-model switch and address (lib/pipes.ts), which the Local model box below edits. */
   pipes: PipeSettings; setPipes: (next: PipeSettings) => void;
+  /** Where the monthly free number lives. Absent means the page does not claim a browser ledger. */
+  storage?: HostStorage;
+  engineKey?: string;
+  setEngineKey?: (value: string) => void;
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
@@ -82,6 +89,10 @@ export default function Settings(p: SettingsProps) {
   const managed = inference === 'free';
   const plan = inference === 'credits';
   const planOffered = p.paid.configured || p.paid.enabled || hasToken;
+  const browserLedger = p.storage?.ledger === 'browser';
+  const [localNote, setLocalNote] = useState('');
+  const [probing, setProbing] = useState(false);
+  const iosHomeScreen = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && !isInstalled();
   const outputCap = Math.min(modelOutputCeiling(c.model), managed ? p.free.maxOutputTokens ?? 16384 : plan ? p.subscription?.plan.maxOutputTokens ?? 16384 : 65536);
   const outputOptions = [...new Set([...OUTPUT_LIMITS.filter(n => n <= outputCap), outputCap])].sort((a, b) => a - b);
 
@@ -180,9 +191,27 @@ export default function Settings(p: SettingsProps) {
             <p className="help">This token is sent only to the local server address below. Use Save connection with Remember enabled to keep it in this browser.</p>
             <label>Address<input value={p.pipes.ollamaUrl} spellCheck={false} aria-invalid={Boolean(localEndpointError(p.pipes.ollamaUrl))} placeholder="http://localhost:1234/v1 (LM Studio) or http://localhost:11434/v1 (Ollama)" onChange={e => p.setPipes({ ...p.pipes, ollamaUrl: e.target.value })} onBlur={e => { if (!localEndpointError(e.target.value)) p.setPipes({ ...p.pipes, ollamaUrl: normalizeLocalEndpoint(e.target.value) }); }} /></label>
             {localEndpointError(p.pipes.ollamaUrl) && <p className="msg-error" role="alert">{localEndpointError(p.pipes.ollamaUrl)}</p>}
-            <div className="row gap"><button className="button small" disabled={Boolean(localEndpointError(p.pipes.ollamaUrl)) || p.discovering.has('ollama')} onClick={() => p.discover('ollama')}>{p.discovering.has('ollama') ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Check for models</button></div>
-            {p.discovered.ollama?.models.length ? <p className="help">{p.discovered.ollama.models.length.toLocaleString()} local model{p.discovered.ollama.models.length === 1 ? '' : 's'} found. Pick one from the Other providers menu in the chat window.</p> : p.discovered.ollama?.error ? <p className="help" role="alert">Could not reach it: {p.discovered.ollama.error}. Is the local server running?</p> : <p className="help">Nothing found yet. Load a model in LM Studio (with its server running) or run <code>ollama pull</code>, then check again.</p>}
+            <div className="row gap">
+              <button className="button small" disabled={Boolean(localEndpointError(p.pipes.ollamaUrl)) || p.discovering.has('ollama')} onClick={() => p.discover('ollama')}>{p.discovering.has('ollama') ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}Check for models</button>
+              <button className="button small" disabled={probing || Boolean(localEndpointError(p.pipes.ollamaUrl))} onClick={() => { setProbing(true); void testLocalEndpoint(p.pipes.ollamaUrl, location.origin).then(result => setLocalNote(result.message)).finally(() => setProbing(false)); }}>Test</button>
+            </div>
+            {localNote && <p className="help" role="status">{localNote}</p>}
+            {p.discovered.ollama?.models.length ? <p className="help">{p.discovered.ollama.models.length.toLocaleString()} local model{p.discovered.ollama.models.length === 1 ? '' : 's'} found. Pick one from the On this machine menu in the chat window.</p> : p.discovered.ollama?.error ? <p className="help" role="alert">Could not reach it: {p.discovered.ollama.error}. Is the local server running?</p> : <p className="help">Nothing found yet. Load a model in LM Studio (with its server running) or run <code>ollama pull</code>, then check again. A native app is not required.</p>}
           </>}
+        </section>
+
+        <section className="panel">
+          <h2><KeyRound size={15} strokeWidth={1.75} /> Experiment</h2>
+          <p className="help">{EXPERIMENT_SUBTITLE} These keys stay in this browser. They are not the free tier and they are not Shield.</p>
+          <label>OpenRouter<input type="password" autoComplete="off" spellCheck={false} value={p.keys.openrouter || ''} placeholder="sk-or-…" onChange={e => p.setKeys({ ...p.keys, openrouter: e.target.value })} /></label>
+          <label>Hugging Face<input type="password" autoComplete="off" spellCheck={false} value={p.keys.huggingface || ''} placeholder="hf_… Inference Providers router" onChange={e => p.setKeys({ ...p.keys, huggingface: e.target.value })} /></label>
+          <p className="help">Hugging Face uses router.huggingface.co. Pin a model from its catalog inside the Experiment menu.</p>
+        </section>
+
+        <section className="panel">
+          <h2><KeyRound size={15} strokeWidth={1.75} /> Execution engine</h2>
+          <p className="help">Google's hosted Linux sandbox. Not a chat model, and not the Gemini chat key unless you paste that key into this box. Off until it is saved. Shield-eligible because Google hosts it in the US. Not on the free tier.</p>
+          <label>Engine key<input type="password" autoComplete="off" spellCheck={false} value={p.engineKey ?? ''} placeholder="A Gemini API key, used only for this slot" onChange={e => p.setEngineKey?.(e.target.value)} /></label>
         </section>
 
         <section className="panel">
@@ -196,7 +225,7 @@ export default function Settings(p: SettingsProps) {
         <section className="panel">
           <div className="panel-head"><h2>{managed ? 'Free allowance' : plan ? `${p.subscription?.plan.name ?? 'Plan'} allowance` : 'Usage'}</h2><span className="pill">{managed ? <Sparkles size={12} /> : <Coins size={12} />}{managed || plan && p.subscription ? `${meter.remaining.toLocaleString()} of ${meter.pool.toLocaleString()} credits left` : 'No plan credits charged'}</span></div>
           {(managed || plan && p.subscription) && <div className="meter" role="progressbar" aria-valuemin={0} aria-valuemax={meter.pool} aria-valuenow={meter.used} aria-label="Credits used this month"><span style={{ width: `${meter.pool ? Math.min(100, (meter.used / meter.pool) * 100) : 0}%` }} /></div>}
-          <p className="help">{managed || plan && p.subscription ? `${meter.used.toLocaleString()} credits used in ${meter.month}. Managed usage is measured by the server.` : 'Personal keys and local models do not draw plan credits.'}</p>
+          <p className="help">{managed || plan && p.subscription ? `${meter.used.toLocaleString()} credits used in ${meter.month}. ${browserLedger && managed ? 'Managed usage is counted in this browser. This host does not remember the monthly quota.' : 'Managed usage is measured by the server.'}` : 'Personal keys and local models do not draw plan credits.'}</p>
           {recent.length > 0 && <div className="ledger-wrap"><table className="ledger"><thead><tr><th>When</th><th>Model</th><th>Mode</th><th className="num">Tokens</th><th className="num">Credits</th></tr></thead><tbody>{recent.map(entry => <tr key={entry.id}><td>{new Date(entry.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td><td className="mono">{entry.model}</td><td>{entry.mode}</td><td className="num">{entry.tokens.toLocaleString()}</td><td className="num">{entry.credits.toLocaleString()}</td></tr>)}</tbody></table></div>}
         </section>
 
@@ -213,7 +242,8 @@ export default function Settings(p: SettingsProps) {
 
         <section className="panel">
           <h2><MonitorDown size={15} strokeWidth={1.75} /> Install on this device</h2>
-          <p className="help">Install Orator on Chrome, Windows, Mac, Linux, or a Chromebook. The same customer experience works across devices; hosted reasoning needs a connection.</p>
+          <p className="help">Install Signal Forge on Chrome, Windows, Mac, Linux, or a Chromebook. The browser's own prompt is the install. Hosted models need a connection. A local model works only if Ollama is up.</p>
+          {iosHomeScreen && <p className="help">On iPhone or iPad, use Share, then Add to Home Screen. There is no App Store listing.</p>}
           {isInstalled() ? <p className="help">Installed. You are using the app window now.</p> : p.canInstall ? <button className="button small" onClick={() => void promptInstall()}><MonitorDown size={13} />Install app</button> : <p className="help">Your browser has not offered to install yet. Use the browser's Install option when it appears.</p>}
         </section>
 

@@ -1,95 +1,78 @@
-# Next session brief: Hey Buddy, web edition
+# Next session brief: Signal Forge OS
 
-> **Status note, 2026-09-11.** This is a historical record of the Floot rebuild session; read
-> sections 3 and 4 (licences, the owner's assets) as still current and the rest as background.
-> Two things have changed since it was written:
->
-> - **The Floot edition is gone.** `floot/` and `docs/floot-rebuild-brief.md` were deleted, and
->   `web/` is now the only edition. Floot is no longer a deployment target; Render is, via the
->   two services in `render.yaml`.
-> - **The "no anonymous server-funded pool" decision of 2026-09-10 was reversed.** The web
->   edition now ships a zero-config free tier: a visitor with no key streams a live reply on an
->   allowlisted set of free models funded by the deployment's own Groq and OpenRouter keys, and
->   metered on the server against a visible credit quota. See `web/server/freetier.mjs` and the
->   free-tier section of `web/README.md`.
+Written 2026-10-09. This replaces the Hey Buddy / Floot brief. Do not rename the product backward. The README is the source of truth for what is shipped; this file is the plan that produced the current cut.
 
-Written at the end of the Floot rebuild session so the next session starts with the decisions made, the licences checked, and the owner's own material at the centre.
+Product: Signal Forge, a privacy-first progressive web app for one person or a small business on a Chromebook or any modern browser. One rail, one dock. No second slide-out. No desktop app, no mobile store app, no "download the app" modal. Install is the browser's own prompt: a quiet chip when `beforeinstallprompt` fires, plus the Settings install button.
 
-## 1. Where things stand
+Brand line: "Your AI crew. Always in your corner."
 
-- `web/` is the original FreeToken Web x Ruflo app (Apache 2.0, with an MIT Ruflo subset). Reference implementation; runs on any Node host.
-- `floot/` mirrors the Floot edition (project 599da6cf-0aa2-48c3-8788-206be3f30c05, live at https://freetoken-web-ruflo.floot.app). No accounts, browser-local storage, anonymous rate-limited proxy, buffered per-stage responses, typechecked and smoke-tested.
-- Chrome OS install is done (branch `claude/chrome-os-pwa-support-w8aezg`): both editions carry a Hey Buddy-named manifest with Hey Buddy's icon set, an Install button in Settings, and the `web/` edition adds an offline shell worker. Floot forbids service workers, so the Floot edition installs from its manifest alone and has no offline mode. The manifest already says Hey Buddy while the shell still says FreeToken; the rename step closes that gap.
-- The web edition was rebuilt on the same branch after the PWA work: renamed Hey Buddy; icon rail; chat canvas with sessions; floating prompt dock with file drop, voice, and token counters; model hub with free and pro tiers and two payment modes (BYOK, platform credits); credit ledger with a status-bar balance; SQLite persistence on the server keyed by an anonymous workspace id; the business roster (Operational Executive, Financial Auditor, Content and Reputation Specialist, Browser Agent) leading chats, the work skills running the three workflows; and a real Playwright browser agent behind an allowlist. Platform credits are a local ledger plus the deployment access token; no anonymous server-funded pool and no accounts, by the owner's decision on 2026-09-10. The dock also attaches photos (resized in the browser, sent as image parts to vision models) and connects remote MCP servers over Streamable HTTP through /api/mcp, whose tools join the chat tool loop. The Floot edition is renamed Hey Buddy and its composer now carries the same tool dock (file and photo attachments with drag-drop and paste, microphone, MCP server dialog backed by a stateless `endpoints/mcp_POST.ts` proxy, tool calls in the Research stage); the icon rail, model hub, credit ledger, and business roster are still only in `web/` and remain to be mirrored.
-- The owner's own product is Hey Buddy (github.com/chrisfbaileycb-arch/Hey-Buddy.AI): a privacy-first AI companion PWA with five buddy personas, The Oracle daily mystery, a community scavenger hunt, encrypted BYOK keys, a phone-to-PC bridge, custom personas behind a safety baseline, an agent and workflow builder with a capability sandbox, an agent market, and a tier model. That is the voice, the audience, and the values. The next session converts the workspace into the web edition of Hey Buddy rather than a FreeToken clone.
+The app is [`packages/web/`](../packages/web/) (Vite, React 19, Node 22). Root `web/` is only a Render bridge. Do not edit application code there. Live host: https://hey-buddy-web.onrender.com (Render service `hey-buddy-web`, branch `main`).
 
-## 2. The owner's intent, in their words
+## Ground rules
 
-A comfortable web interaction platform that is a good option for people who cannot afford a 124 GB machine. Not a get-rich plan. Nothing plagiarised. More agent skills, ideas from LobeHub and AnythingLLM, and Hey Buddy folded in so the product becomes theirs again.
+- Original code and original prompts only.
+- Do not copy LobeHub / Lobe Chat (community license). Ideas only. Do not adopt `lobe-ui`.
+- Do not copy Cherry Studio (AGPL).
+- Do not import or wrap Hermes Agent. Do not shell out to the `agy` CLI. Do not implement Nous Research OAuth plugins.
+- Do not edit `github.com/chrisfbaileycb-arch/carol-ann-trib-3-1`. It is a reference, not a merge target. Carol Ann is credited as the owner's own reference for the skills registry, not as an upstream.
+- Do not put OpenRouter or Hugging Face on the free tier or in Shield.
+- Do not add accounts, payments, or a plugin market of thousands.
+- Emoji are banned. Lucide icons only.
+- Apache 2.0 on the repo. MIT notice for the Ruflo subset in `packages/web`. Credit FreeToken, Ruflo, AnythingLLM, LobeHub, and Cherry Studio as inspiration.
 
-## 3. The honesty line, checked at the source on 2026-09-10
+## Lanes
 
-| Source | Licence | What is allowed here |
-|---|---|---|
-| FreeToken Web (zip) | Apache 2.0 | Use, modify, host. Keep the notice. |
-| Ruflo subset (zip) | MIT | Use, modify, host. Keep the notice. |
-| Hey Buddy (owner's repo) | Owner's own | Everything. This is the product. |
-| AnythingLLM (Mintplex Labs) | MIT | Ideas freely; code too if the MIT notice is kept. |
-| LobeHub / LobeChat | LobeHub Community License (Apache-based) | Run it as a service unmodified is fine; distributing a derivative work needs their commercial licence. So: ideas only, no code, credit them as inspiration. |
-| Cherry Studio | AGPL-3.0 (commercial licence available) | Desktop-only Electron app; cannot be embedded in a web tab. Ideas only, no code. Copying code would make the hosted site AGPL. |
+Already decided in `packages/web/server/providerRegistry.mjs`.
 
-Rule for the whole project: original code and original prompts; every upstream named as inspiration in the README; notices kept for the two permissive sources actually carried in `web/`. The five FreeToken agent instructions and three workflow titles get replaced by Hey Buddy voice, which removes the last borrowed prose.
+- **Shield.** US company, own API or US host: anthropic, openai, google, xai, groq, cerebras, github, nvidia, meta. The funded free tier is an allowlist inside that, metered. Relays are never Shield.
+- **Local.** Ollama / LM Studio / a URL the visitor typed. Nothing leaves the machine. A public HTTPS page cannot quietly call `127.0.0.1`. Ship a Test button that requests local-network access and shows the exact `OLLAMA_ORIGINS` value. If the browser refuses, say so. Do not pretend a native app is required.
+- **Experiment.** OpenRouter and Hugging Face only. Own key slots. Third group in the model menu. Subtitle: "Your key. May route outside the US. Not the free tier." Hugging Face means the Inference Providers router (`router.huggingface.co`, OpenAI-compatible), not the retired free inference API. Pin-from-catalog inside the picker. No new chrome.
 
-## 4. What Hey Buddy contributes (the owner's assets, ready to reuse)
+## Antigravity (an engine, not a model)
 
-Taken from the repo's own modules and copy. All of it is the owner's and can be lifted directly.
+Google's managed agent, not Gemini chat. Pinned 2026-10-09 from https://ai.google.dev/gemini-api/docs/antigravity-agent:
 
-- **Brand line.** "Your AI crew. Always in your corner."
-- **The crew.** The Drill (ruthless with your goals, every word kind), Haven (the one you can talk to at 2am, no judgment), The Ledger (your commitments, tracked; no punishment, just honesty), Coach (calm, intense, or science-based; same knowledge, different energy), First Responder, and The Oracle (a new mystery every day, one winner worldwide). Each has guardrails in `security/guardrails.js`: blocked patterns, a crisis path for Haven, a disclaimer for Coach, and a rule that The Oracle never uses personal information in clues.
-- **Safety baseline** (`persona-guard.js`): every custom persona's prompt is prepended with a fixed kindness-and-safety preamble that wins on conflict, points people in crisis to 911 and 988, and says the buddy is not a doctor, lawyer, or emergency service. This is the moral core and should be the first thing any agent in the web edition sees.
-- **Privacy contract** (landing copy): zero data leaving the device by default, conversations encrypted in origin-scoped storage, API keys AES-256-GCM encrypted on device, a visible badge whenever a message routes to a cloud provider, one button that destroys everything, no account required.
-- **Agent platform** (`agent-spec.js`, `agent-builder.js`, `workflow-engine.js`, `fleet-presets.js`, `agent-market.js`): agent specs with a capability allow-list (http_request, web_scrape, schedule_cron, notify_user, storage_read, storage_write), trigger types (manual, cron, webhook, chat command), DAG workflows with `{{step.output}}` interpolation and topological ordering, starter presets, and a browsable market of agent and workflow templates.
-- **Bridge** (`bridge-client.js`, `bridge-pairing.js`, `BRIDGE_DESIGN.md`): phone to home PC over LAN, then an end-to-end encrypted relay with P-256 ECDH pairing by QR. "Message-taker, not actor" is the invariant. This is the answer to the 124 GB problem for people who do own a PC: the web app talks to the model at home; the relay sees only ciphertext.
-- **Tiers** (`tier-config.js`): free trial credits, BYOK Pro membership, and the rule that anyone using their own key is never charged credits. Tasteful upgrade prompts, never aggressive.
-- **Community layer** (`hunt-engine.js`, `park-moment.js`): a daily deterministic scavenger hunt and an opt-in "say hi" nudge for nearby players. Out of scope for the workspace's first cut, but it is what makes Hey Buddy a companion rather than a console.
+- Agent id `antigravity-preview-09-2026`.
+- `POST https://generativelanguage.googleapis.com/v1beta/interactions`
+- Header `x-goog-api-key`. On the wire this is a Gemini API key. In the product it is a different slot. Never reuse the Gemini chat key unless the operator pastes it into this slot.
+- `environment: "remote"` provisions a Linux sandbox Google hosts. Reuse `environment_id` across turns. Files go in and out with the sandbox. MCP secrets go through the Credentials API (`POST /v1beta/credentials`) so the model never sees the token.
+- Default tools: `code_execution`, `google_search`, `url_context`, filesystem when environment is set. Custom tools: `function`, `mcp_server`.
+- Cap every run with `agent_config.max_total_tokens`. Default model `gemini-3.8-flash`. Do not send temperature or other unsupported generation params.
+- UI: "Run with the execution engine" on a workflow step or a long task. Not a row in the chat model picker. Stream the plan and the tool trace into the existing run card. Signal Forge keeps approval of anything that spends money, sends a message, or leaves the sandbox.
+- Shield-eligible because Google hosts it in the US, but it is an engine, not a funded chat model. Off until the key is saved. Not on the free tier.
 
-Two adjustments when bringing these over: Hey Buddy's presets use emoji avatars, and the web edition's design rules use lucide icons only, so each avatar becomes an icon name; and the encrypted-storage layer (`security/storage.js`, `security/crypto.js`) should replace the Floot edition's plain IndexedDB helper.
+## Skills
 
-## 5. Ideas worth re-implementing from LobeHub and AnythingLLM (ideas only)
+The connector habit, nothing else, from Lobe: a skill or MCP server is listed, toggled, given a few fields, and is then actually callable.
 
-From AnythingLLM (MIT): workspaces that hold documents and chats together; drag-and-drop ingestion of PDF, DOCX, and text with source citations in answers; agent skills the user switches on per workspace; dynamic model routing by rule (cheap model for short questions, strong model for long tasks); an embeddable chat widget for a website; user-managed memories.
+Carol Ann proved the pattern (skills toggle, config, export an MCP stack JSON; a connector that is not live says demo; agents share a bus). Rebuild a smaller registry inside `packages/web`, original code. Live entries go through `/api/mcp`. Antigravity receives only the live ones, via `mcp_server` plus the Credentials API. Ship the owner's crew presets first. A connector that is not live says demo. Do not build voice in this cut.
 
-From LobeHub (ideas only): an agent marketplace with one-click install and an agent builder that auto-configures from a short description; agent groups that work in parallel on one task; scheduling so agents run when the user is away; structured, editable personal memory; branching conversations; artifacts rendered beside the chat; text-to-speech on any reply.
+## PWA
 
-Hey Buddy already has the market, builder, scheduling triggers, and memory scopes in spec form. The web edition's job is to make them run in a hosted tab.
+Manifest and shell worker already exist. Still required:
 
-## 6. The expanded crew: agent skills for the web edition
+- `navigator.storage.persist()` after install.
+- Manifest shortcuts: Chat, Crew, Knowledge. Share target for `.md` and `.txt`.
+- Dock copy when offline: hosted models need the network; local models work only if Ollama is up.
+- One update toast when a new service worker is waiting. No nag.
+- iOS: one Add to Home Screen note only if iOS and not already standalone. No App Store link.
 
-Skills are named roles with a capability allow-list, in the owner's voice. Each ships with a system prompt written fresh, the safety baseline prepended.
+## Storage decision (this cut)
 
-| Skill | Job | Capabilities |
-|---|---|---|
-| The Drill | Goal pressure with kindness; turns a vague wish into a plan with dates | notify_user, storage_read |
-| Haven | Presence at 2am; listens, reflects, never diagnoses; crisis path to 988 | none |
-| The Ledger | Tracks commitments the user states; asks what got in the way; no punishment | storage_read, storage_write |
-| Coach | Health and habit guidance in three styles; always carries the disclaimer | storage_read |
-| First Responder | Calm triage for real-world problems; points to real help fast | notify_user |
-| The Oracle | Daily riddle host; clues cost; never uses personal data | storage_read |
-| Researcher | Reads supplied notes and approved pages; never invents sources | web_scrape, storage_read |
-| Architect | Designs a solution with interfaces and tradeoffs | storage_read |
-| Reviewer | Challenges the work for correctness and safety | none |
-| Scribe | Turns any thread into a clean note, letter, or post | storage_write |
-| Translator | Plain-language rewrite for seniors and non-native readers; large-print aware | none |
-| Dispatcher | Runs a workflow DAG, assigns steps to skills, reports progress | schedule_cron, notify_user |
+The live service has no disk. SQLite at `DATA_FILE=/tmp` dies on restart. **Choice: the monthly credit ledger lives in the browser.** The server does not claim to remember quotas. The in-memory `FREE_MAX_PER_HOUR` cap is the only server-side spend bound, and it dies with the process. Admin settings written to ephemeral SQLite do not survive; the dashboard says so.
 
-The three workflows become Hey Buddy verbs: Plan it (Drill, Researcher and Architect, Reviewer, Scribe), Look into it (Researcher twice from two angles, Reviewer, Scribe), Check my work (Reviewer, Architect, Ledger, Scribe).
+OpenRouter, Hugging Face, and the Antigravity key are not written to that database. They stay in this browser. They may be saved as admin secrets only when storage is durable (Postgres via `DATABASE_URL`, or a `DATA_FILE` outside `/tmp`). Even then they are excluded from `shieldProviders()` and the free-tier allowlist.
 
-## 7. System prompt for the next session
+## Build order that this cut followed
 
-You are continuing work on the-dev-os-agent repo (github.com/chrisfbaileycb-arch/the-dev-os-agent). Read docs/next-session-brief.md first.
+1. Replace this brief.
+2. Honest browser ledger (above). README matches.
+3. Experiment lane.
+4. Antigravity execution route, own secret, token cap, streamed into the run card.
+5. Skills registry.
+6. PWA polish and the local-model Test button.
+7. Branch one message, and a visible deletable "what this crew remembers" list.
 
-The product is Hey Buddy, web edition: a hosted, browser-only, privacy-first AI companion and multi-agent workspace, built in the United States as a different and appealing option next to the well-known Chinese-made clients. It exists so people without expensive hardware, including people whose only computer is a Chromebook, can use frontier and open models with their own keys from a browser tab. It must run fully on Chrome OS as an installable PWA. Local models are optional and self-managed: a user who runs Ollama or LM Studio at home connects it through the encrypted bridge or a custom endpoint, and the app never assumes local hardware exists.
+## Verify
 
-Shape the product in the spirit of LobeHub: an agent marketplace with one-click install, an agent builder that configures an assistant from a short description, agent groups that work in parallel, scheduling, editable personal memory, branching conversations, artifacts beside the chat, and text-to-speech. Take these as ideas and build every one from scratch.
-
-Ground rules. (1) Original code and original prompts only. Credit FreeToken, Ruflo, AnythingLLM, LobeHub, and Cherry Studio as inspiration in the README; keep the Apache and MIT notices already in web/; copy no source from LobeHub or Cherry Studio because their licences do not permit derivative distribution here; AnythingLLM code may be used only with its MIT notice kept. (2) The owner's Hey Buddy repo (github.com/chrisfbaileycb-arch/Hey-Buddy.AI) is the source of truth for names, personas, guardrails, the safety baseline, the privacy contract, the agent spec, the workflow engine, tiers, and the bridge design. Reuse it freely; it is theirs. (3) Rename the product from FreeToken to Hey Buddy and replace the five FreeToken agent instructions and three workflow titles with the crew and verbs in section 6, safety baseline first in every prompt. (4) No accounts by default; browser-local encrypted storage using Hey Buddy's storage and key handling; a visible badge whenever a message routes to a cloud provider; one button that destroys everything. (5) Emoji are banned in this codebase; map Hey Buddy's emoji avatars to lucide icons. (6) Floot is the deployment target (project 599da6cf-0aa2-48c3-8788-206be3f30c05); web/ is the reference implementation; floot/ must be mirrored in the repo after every Floot change; verify with typecheck, a headless endpoint smoke test, a screenshot, and a 400px-wide check before reporting done. (7) Build order: rename and re-voice (the PWA manifest, icons, and Install button already exist in both editions, and web/ has an offline shell; keep them in step with the rename); port the safety baseline and guardrails; add the skill roster and the three verbs; add the agent market and builder from Hey Buddy's spec; then AnythingLLM-style document workspaces with citations; then the bridge as a provider option. Stop and ask before adding tiers, payments, or the community layer.
+From `packages/web`: `npm test`, `npm run test:server`, `npm run build`. Check a 400px-wide layout. A 200 from curl is not done.

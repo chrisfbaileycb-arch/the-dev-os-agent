@@ -82,7 +82,8 @@ test('the dashboard stores keys for the lane only, and can still clear one left 
   const settings = await openSettings({ db, env: { ADMIN_TOKEN: TOKEN } });
   await settings.setKey('anthropic', 'sk-ant-dashboard');
   assert.equal(settings.env().ANTHROPIC_API_KEY, 'sk-ant-dashboard');
-  for (const provider of ['openrouter', 'xkiro', 'venice', 'custom']) await assert.rejects(() => settings.setKey(provider, 'k'), /US backend providers/, provider);
+  await assert.rejects(() => settings.setKey('openrouter', 'k'), /experiment slot/);
+  for (const provider of ['xkiro', 'venice', 'custom']) await assert.rejects(() => settings.setKey(provider, 'k'), /US backend providers/, provider);
   // A row stored before the lane existed is still removable.
   db.setSetting('key:openrouter', 'legacy-plain');
   await settings.reload();
@@ -129,7 +130,7 @@ test('NVIDIA and Hugging Face are not key slots; Amazon Bedrock is not either', 
   const db = openDatabase(':memory:');
   const settings = await openSettings({ db, env: { ADMIN_TOKEN: TOKEN } });
   await assert.rejects(() => settings.setKey('nvidia', 'nvapi-test-key'), /US backend providers/);
-  await assert.rejects(() => settings.setKey('huggingface', 'hf-test-token'), /US backend providers/);
+  await assert.rejects(() => settings.setKey('huggingface', 'hf-test-token'), /experiment slot/);
   await assert.rejects(() => settings.setKey('bedrock', 'AKIAIOSFODNN7EXAMPLE'), /Unknown provider|US backend providers/);
   await assert.rejects(() => settings.setKey('openai', 'not-openai'), /sk-/);
   await assert.rejects(() => settings.setKey('meta', 'muse-key-for-test'), /US backend providers/);

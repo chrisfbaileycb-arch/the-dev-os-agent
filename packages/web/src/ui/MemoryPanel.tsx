@@ -30,7 +30,7 @@ export default function MemoryPanel(p: MemoryPanelProps) {
   }
 
   return <section className="panel memory-panel">
-    <div className="panel-head"><h2><Brain size={15} strokeWidth={1.75} /> Memory</h2><span className="pill">{p.memories.length} saved</span></div>
+    <div className="panel-head"><h2><Brain size={15} strokeWidth={1.75} /> What this crew remembers</h2><span className="pill">{p.memories.length} saved</span></div>
     <p className="help">Short facts the workspace keeps between sessions. Each message carries only the few that match it, never the whole list. Keys and passwords are refused, not stored. Start a message with <code>remember that …</code> to add one from the chat.</p>
     <div className="row gap">
       <input className="grow" value={text} maxLength={600} disabled={p.busy} placeholder="I deploy to Render; use pnpm, not npm" onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void submit(); }} aria-label="New memory" />

@@ -97,7 +97,7 @@ export function makeEntry(input: { sessionId: string; model: string; mode: Infer
 }
 
 // Server sync. Failures are silent: the tab keeps working from IndexedDB and retries on next load.
-interface Budget { pool: number; freePool: number; freeUsed: number; free: FreeTier; }
+interface Budget { pool: number; freePool: number; freeUsed: number; free: FreeTier; storage?: { ledger?: 'server' | 'browser' }; }
 interface ServerState extends Budget { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; }
 export interface UsageReading extends Budget { used: number; entry: LedgerEntry | null; }
 export interface PlanReading { plan: { id: string; name: string; price: string; monthlyCredits: number; maxOutputTokens: number }; pool: number; used: number; entry: LedgerEntry | null; }
@@ -168,7 +168,11 @@ export async function loadWorkspace(signal?: AbortSignal): Promise<Workspace> {
   if (server && (merged.toPush.sessions.length || merged.toPush.runs.length || merged.toPush.ledger.length)) void sync.push(merged.toPush);
   const pool = server?.pool ?? DEFAULT_MONTHLY_POOL;
   const freePool = server?.freePool ?? DEFAULT_FREE_POOL;
-  return { sessions: merged.sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), runs: merged.runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt)), ledger: merged.ledger, knowledge, balance: computeBalance(merged.ledger, pool, server ? 'server' : 'local'), freeBalance: server ? serverBalance(freePool, server.freeUsed) : computeBalance(merged.ledger, freePool, 'local', monthKey(), 'free'), serverReachable: Boolean(server) };
+  // A diskless host must not be treated as the source of the monthly number. Only an explicit
+  // server ledger (Postgres, or SQLite outside /tmp) replaces the copy in this browser.
+  const serverLedger = server?.storage?.ledger === 'server';
+  const freeBalance = server && serverLedger ? serverBalance(freePool, server.freeUsed) : computeBalance(merged.ledger, freePool, 'local', monthKey(), 'free');
+  return { sessions: merged.sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), runs: merged.runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt)), ledger: merged.ledger, knowledge, balance: computeBalance(merged.ledger, pool, server ? 'server' : 'local'), freeBalance, serverReachable: Boolean(server) };
 }
 
 export async function persistSession(session: Session): Promise<void> { await storage.saveSession(session); void sync.push({ sessions: [session] }); }

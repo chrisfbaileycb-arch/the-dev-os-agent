@@ -421,6 +421,8 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
   .dock { border-radius: 12px; }
   .dock-hint { display: none; }
   .chip-label { display: none; }
+  /* The execution engine is a checkbox with no other name. Keep the words at phone width. */
+  .engine-toggle .chip-label { display: inline; font-size: 11px; }
   .model-trigger { max-width: 190px; }
   /* On a phone the trigger sits mid-row, so a popover anchored to it runs off the edge.
      The menu becomes a bottom sheet instead: always fully on screen, wherever the chip is. */

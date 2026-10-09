@@ -7,7 +7,7 @@ import { USER_AGENT } from './discovery.mjs';
 import { modelsUrl, normalizeModelList } from './models.mjs';
 import { PROVIDER_META, TUNABLES } from './settings.mjs';
 import { loadVault, saveVault, getClientConfig } from './vault.mjs';
-import { REGISTRY, isBackendProvider } from './providerRegistry.mjs';
+import { REGISTRY, isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 import { accountProbe, keyShapeError } from './keyProbe.mjs';
 
 // The operator's dashboard: /api/admin/*.
@@ -93,7 +93,7 @@ export async function discoverForProvider(provider, env, fetchImpl = fetch) {
   return models;
 }
 
-export function createAdmin({ db = null, env: baseEnv = process.env, settings, log = console.error, fetchImpl = fetch, now = () => Date.now() } = {}) {
+export function createAdmin({ db = null, env: baseEnv = process.env, settings, storage = null, log = console.error, fetchImpl = fetch, now = () => Date.now() } = {}) {
   const attempts = new Map();
   const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
   /**
@@ -150,6 +150,9 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, l
       // What visitors are being told right now, so a change here can be checked against its effect.
       published: { free: freeTierStatus(env), paid: paidTierStatus(env) },
       gateway: catalogStatus(),
+      durable: Boolean(storage?.durable),
+      ledger: storage?.ledger === 'server' ? 'server' : 'browser',
+      experiment: settings.experimentStatus?.(baseEnv) ?? [],
     };
   }
 
@@ -215,7 +218,12 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, l
       if (path === '/api/admin/keys' && req.method === 'PUT') {
         const body = await readBody(req, 16_384);
         const provider = typeof body.provider === 'string' ? body.provider : '';
-        if (typeof body.key === 'string' && body.key.trim()) await settings.setKey(provider, body.key); else await settings.deleteKey(provider);
+        const experiment = isExperimentProvider(provider) || provider === 'antigravity';
+        if (experiment && !storage?.durable) throw new HttpError(409, 'This host forgets its database on restart. Keep this key in Settings on this browser. It is not written here.');
+        if (typeof body.key === 'string' && body.key.trim()) {
+          if (experiment) await settings.setExperimentKey(provider, body.key, { durable: true });
+          else await settings.setKey(provider, body.key);
+        } else await settings.deleteKey(provider);
         log(`[admin] ${provider} key ${typeof body.key === 'string' && body.key.trim() ? 'set' : 'removed'} from the dashboard`);
         json(res, 200, config()); return true;
       }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, CircleCheck, Download, KeyRound, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
+import { CircleAlert, CircleCheck, Download, GitBranch, KeyRound, MonitorDown, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
 import Rail, { type Page } from './ui/Rail';
 import Dock, { type Attached, type RunMode } from './ui/Dock';
 import RunCard from './ui/RunCard';
@@ -33,15 +33,19 @@ import { firstHealthyFree } from './lib/freeHealth';
 import { clearDiscovered, isFresh, keyFingerprint, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
 import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
-import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type PlanReading, type Session } from './lib/store';
+import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, workspaceId, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type PlanReading, type Session } from './lib/store';
 import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
-import { useInstallAvailable, useOnline } from './pwa';
+import { useInstallAvailable, useOnline, useUpdateReady, applyUpdate, isInstalled, promptInstall } from './pwa';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
 import { activeCount, activeTools, clearSettings, loadSettings, saveSettings, type ConnectorSettings, type GithubSettings } from './lib/connectors';
 import { loadSyncSettings } from './lib/githubSync';
 import type { Connection, Knowledge, MemoryEntry, MemoryKind, Run, Workflow, WorkerEvent } from './lib/types';
 import { loadTheme, saveTheme, type ThemeChoice } from './lib/theme';
+import { loadEngineKey, saveEngineKey } from './lib/engineKey';
+import { liveSkillsForEngine, loadSkillState } from './lib/skillRegistry';
+import { readEngineStream, type EngineEvent } from './lib/engineClient';
+import { branchSession } from './lib/branch';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
 const now = () => new Date().toISOString();
@@ -85,7 +89,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const [theme, setTheme] = useState<ThemeChoice>(() => loadTheme());
   const chooseTheme = (choice: ThemeChoice) => { saveTheme(choice); setTheme(choice); };
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('hb-rail') !== 'expanded'; } catch { return true; } });
-  const canInstall = useInstallAvailable(); const online = useOnline();
+  const canInstall = useInstallAvailable(); const online = useOnline(); const updateReady = useUpdateReady();
+  const [engineKey, setEngineKey] = useState(loadEngineKey);
+  const [engineOn, setEngineOn] = useState(false);
   const [connection, setConnection] = useState<Connection>(() => { const c = initialProvider(); try { const t = localStorage.getItem('hb-plan-token'); if (t) c.serverAccessToken = t; } catch { /* storage unavailable */ } return c; });
   /**
    * One saved key per provider, owned here rather than inside Settings.
@@ -418,6 +424,14 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
    * its own ledger row locally and syncs it.
    */
   async function charge(sessionId: string, count: number, usage?: { input: number; output: number }) {
+    if (inference === 'free' && deployment.storage.ledger !== 'server') {
+      try {
+        const entry = await recordUsage({ sessionId, model: connection.model, mode: 'free', tokens: count, usage });
+        const next = [entry, ...ledgerRef.current]; ledgerRef.current = next; setLedger(next);
+        setFreeBalance(computeBalance(next, deployment.free.monthlyCredits || DEFAULT_FREE_POOL, 'local', undefined, 'free'));
+      } catch (e) { setNotice(errorText(e)); }
+      return;
+    }
     if (inference === 'free' || inference === 'credits') {
       const reading = inference === 'credits' ? await sync.plan(planToken) : await sync.usage();
       if (!reading) return;
@@ -499,22 +513,68 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
 
   function send(overrideText?: string) {
     const text = (typeof overrideText === 'string' ? overrideText : draft).trim(); if (!text || busy || !ready) return;
-    const problem = preflight(); if (problem) { setNotice(problem); return; }
-    if (mode === 'chat' && lastAssistant && isContinuationRequest(text) && needsPreviewRecovery(lastAssistant.content, false, lastAssistant.truncated)) {
+    const useEngine = engineOn && (workMode !== 'chat' || text.length >= 280);
+    if (useEngine) {
+      if (!engineKey.trim()) { setNotice('Save the execution engine key in Settings first. The Gemini chat key is not used.'); return; }
+    } else {
+      const problem = preflight(); if (problem) { setNotice(problem); return; }
+    }
+    if (mode === 'chat' && !useEngine && lastAssistant && isContinuationRequest(text) && needsPreviewRecovery(lastAssistant.content, false, lastAssistant.truncated)) {
       setDraft(''); void finishExistingPreview(); return;
     }
     // "remember that …" saves a preference as well as going to the agent as usual.
     const preference = rememberRequest(text);
     if (preference) void remember('preference', preference, true);
-    if (mode !== 'chat' && photos.length) { setNotice('Photos go with chat messages. Workflows work from text; remove the photo or switch to Chat.'); return; }
+    if (mode !== 'chat' && photos.length && !useEngine) { setNotice('Photos go with chat messages. Workflows work from text; remove the photo or switch to Chat.'); return; }
     // A workflow is five requests, so a BYOK visitor is asked once per session before it spends.
-    if (mode !== 'chat' && inference === 'byok' && !approvedRuns.current) { setConfirm('run'); return; }
+    if (!useEngine && mode !== 'chat' && inference === 'byok' && !approvedRuns.current) { setConfirm('run'); return; }
     const session = ensureSession(); const files = typeof overrideText === 'string' ? [] : attachments; const shots = typeof overrideText === 'string' ? [] : photos;
     const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, at: now(), attachments: files.map(a => ({ name: a.name, chars: a.content.length })), photos: shots.map(ph => ({ name: ph.name, thumb: ph.thumb })) };
     const title = session.messages.length ? session.title : text.replace(/\s+/g, ' ').slice(0, 60);
     setDraft(''); setAttachments([]); setPhotos([]); if (!preference) setNotice(''); setBusy(true); setPage('workspace');
     if (workMode === 'build' && !previewOpen) { setPreviewOpen(true); resetSplit(); }
+    if (useEngine) { void runEngine(session, user, text, title); return; }
     if (mode === 'chat') void runChat(session, user, text, files, shots, title); else startWorkflow(session, user, text, files, title, mode);
+  }
+
+  function applyEngineEvent(runId: string, event: EngineEvent) {
+    const current = runsRef.current.find(r => r.id === runId);
+    if (!current) return;
+    const step = (title: string, output: string, status = 'completed') => ({ id: crypto.randomUUID(), title, agent: 'engine', status, output, attempts: 1 });
+    if (event.type === 'environment' && event.id) updateRun({ ...current, environmentId: event.id });
+    else if (event.type === 'plan' || event.type === 'delta') updateRun({ ...current, steps: [...current.steps, step(event.type === 'plan' ? 'Plan' : 'Result', event.text || '')] });
+    else if (event.type === 'tool') updateRun({ ...current, steps: [...current.steps, step(event.name || 'tool', event.detail || '')] });
+    else if (event.type === 'approval') updateRun({ ...current, status: 'awaiting_approval', gate: { phase: 1, phases: 2 }, steps: [...current.steps, step(`Hold: ${event.name || 'tool'}`, event.detail || 'This leaves the sandbox. Approve to continue.')] });
+    else if (event.type === 'error') updateRun({ ...current, status: 'failed', completedAt: now(), steps: [...current.steps, step('Stopped', event.message || 'The execution engine failed.', 'failed')] });
+    else if (event.type === 'done') updateRun({ ...current, status: 'completed', completedAt: now() });
+  }
+
+  async function runEngine(session: Session, user: ChatMessage, text: string, title: string, continueApproved?: string, existingRunId?: string) {
+    const runId = existingRunId ?? crypto.randomUUID();
+    const existing = runsRef.current.find(r => r.id === runId);
+    if (!existing) {
+      const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: 'Execution engine', model: 'gemini-3.8-flash', runId };
+      patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
+      updateRun({ id: runId, goal: text, title: 'Execution engine', workflow: workMode === 'plan' ? plan : 'build', mode: 'remote', model: 'gemini-3.8-flash', status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id, origin: 'server' });
+    } else updateRun({ ...existing, status: 'running' });
+    const controller = new AbortController(); abortRef.current = controller; setBusy(true);
+    try {
+      const response = await fetch('/api/engine', {
+        method: 'POST', credentials: 'same-origin', signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId(), ...(engineKey.trim() ? { 'x-engine-key': engineKey.trim() } : {}) },
+        body: JSON.stringify({ input: text, environmentId: runsRef.current.find(r => r.id === runId)?.environmentId, skills: liveSkillsForEngine(loadSkillState()), maxTotalTokens: 50_000, continueApproved }),
+      });
+      let held = false;
+      await readEngineStream(response, event => { if (event.type === 'approval') held = true; applyEngineEvent(runId, event); });
+      const finished = runsRef.current.find(r => r.id === runId);
+      if (finished && finished.status !== 'running') void persistRun(finished).catch(e => setNotice(errorText(e)));
+      if (held) setNotice('The execution engine is waiting. Approve only if this step should spend money, send a message, or leave the sandbox.');
+    } catch (e) {
+      if (!controller.signal.aborted) {
+        applyEngineEvent(runId, { type: 'error', message: errorText(e) });
+        setNotice(errorText(e));
+      }
+    } finally { abortRef.current = null; setBusy(false); }
   }
 
   async function runChat(session: Session, user: ChatMessage, text: string, files: Attached[], shots: Photo[], title: string) {
@@ -639,8 +699,25 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   }
 
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
-  /** Release the plan's current approval gate so the next phase runs. */
-  function approveRun() { worker.current?.postMessage({ type: 'approve' }); }
+  /** Release the plan's current approval gate so the next phase runs. An engine hold starts a new turn in the same sandbox. */
+  function approveRun(run?: Run) {
+    if (run?.title === 'Execution engine') {
+      const session = sessionsRef.current.find(s => s.id === run.sessionId);
+      if (!session) return;
+      const held = [...run.steps].reverse().find(s => s.title.startsWith('Hold:'))?.title.replace(/^Hold:\s*/, '') || 'the held step';
+      void runEngine(session, session.messages[0], run.goal, session.title, held, run.id);
+      return;
+    }
+    worker.current?.postMessage({ type: 'approve' });
+  }
+  function branchFrom(session: Session, messageId: string) {
+    const next = branchSession(session, messageId, now());
+    if (!next) return;
+    commitSessions([next, ...sessionsRef.current]);
+    setActiveId(next.id);
+    void persistSession(next);
+    setNotice('Branched from that message. The original session is unchanged.');
+  }
   /**
    * Read what one provider's key reaches and remember it for the dock and Settings alike.
    *
@@ -683,6 +760,21 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     const want = page === 'admin' ? '/admin' : '/';
     if (location.pathname !== want) history.replaceState(null, '', want + location.search);
   }, [page]);
+  useEffect(() => {
+    const view = new URLSearchParams(location.search).get('view');
+    if (view === 'crew') setPage('roster');
+    else if (view === 'knowledge') setPage('knowledge');
+    else if (view === 'chat') setPage('workspace');
+    const onShare = (event: MessageEvent) => {
+      const data = event.data as { type?: string; text?: string; title?: string } | null;
+      if (!data || data.type !== 'share' || typeof data.text !== 'string' || !data.text.trim()) return;
+      setDraft(data.text.slice(0, 12000));
+      setPage('workspace');
+      setNotice(data.title ? `Shared “${data.title.slice(0, 80)}” is in the message box.` : 'Shared text is in the message box.');
+    };
+    navigator.serviceWorker?.addEventListener('message', onShare);
+    return () => navigator.serviceWorker?.removeEventListener('message', onShare);
+  }, []);
   /**
    * Save the connection and the whole keyring together. The remember checkbox governs every key,
    * not just the active one: unticked means nothing is written and anything previously stored is
@@ -718,8 +810,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   return <div className={collapsed ? 'app rail-collapsed' : 'app'}>
     <Rail page={page} setPage={setPage} collapsed={collapsed} toggle={toggleRail} badge={{ knowledge: knowledge.length }} authUser={authUser} googleEnabled={googleEnabled} admin={adminActive} onLock={onLock} />
     <div className="main">
-      {(!online || notice || modelFallback) && <div className="notices">
-        {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. Hosted models need a connection.</span></div>}
+      {(!online || notice || modelFallback || (canInstall && !isInstalled())) && <div className="notices">
+        {!online && <div className="notice" role="status"><CircleAlert size={13} /><span>You are offline. Hosted models need a connection. A local model works only if Ollama is up.</span></div>}
+        {canInstall && !isInstalled() && <div className="notice" role="status"><MonitorDown size={13} /><span>Install this workspace in the browser.</span><button className="button small" onClick={() => void promptInstall()}>Install</button></div>}
         {modelFallback && (
           <div className="notice warning" role="status">
             <CircleAlert size={13} />
@@ -767,11 +860,11 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
                 <div className="starter-grid">{starters.map((s, i) => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={i} className="starter-card" onClick={() => { if (s.workMode === 'build') chooseWorkMode('build'); else { chooseWorkMode(s.workMode); choosePersona(s.persona); } setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
               </div>}
               {active?.messages.map(m => {
-                if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}</div>{m.photos && m.photos.length > 0 && <div className="msg-photos">{m.photos.map(ph => <img key={ph.name} src={ph.thumb} alt={ph.name} title={ph.name} />)}</div>}<pre className="msg-body">{m.content}</pre></article>;
+                if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}{active && <button type="button" className="text-button" disabled={busy} onClick={() => branchFrom(active, m.id)}><GitBranch size={11} />Branch here</button>}</div>{m.photos && m.photos.length > 0 && <div className="msg-photos">{m.photos.map(ph => <img key={ph.name} src={ph.thumb} alt={ph.name} title={ph.name} />)}</div>}<pre className="msg-body">{m.content}</pre></article>;
                 const run = m.runId ? runs.find(r => r.id === m.runId) : undefined;
                 return <article key={m.id} className="msg agent">
                   <div className="msg-meta"><strong>{m.persona ?? 'Agent'}</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.model && <em>{m.model}</em>}{m.tokens ? <em>{m.tokens.toLocaleString()} tok</em> : null}{m.latencyMs ? <em>{m.latencyMs} ms</em> : null}</div>
-                  {run ? <RunCard run={run} onApprove={run.status === 'awaiting_approval' ? approveRun : undefined} onStop={run.status === 'awaiting_approval' ? stop : undefined} /> : <AssistantReply content={m.content} working={busy && m.id === writingReplyId && !m.error} />}
+                  {run ? <RunCard run={run} onApprove={run.status === 'awaiting_approval' ? () => approveRun(run) : undefined} onStop={run.status === 'awaiting_approval' ? stop : undefined} /> : <AssistantReply content={m.content} working={busy && m.id === writingReplyId && !m.error} />}
                   {m.tools?.map((t, i) => { const args = JSON.stringify(t.args); return <div key={i} className={t.ok ? 'tool-trace' : 'tool-trace failed'}><Wrench size={11} /><code>{t.tool} {args.length > 60 ? `${args.slice(0, 57)}...` : args}</code><span>{t.summary}</span></div>; })}
                   {m.error && <p className="msg-error"><CircleAlert size={12} />{m.error}</p>}
                 </article>;
@@ -793,6 +886,10 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
               tokens={tokens}
               truncated={lastTruncated}
               onContinue={() => previewNeedsFinish ? void finishExistingPreview() : send('continue from where you left off')}
+              online={online}
+              showEngine={workMode !== 'chat' || draft.trim().length >= 280}
+              engineOn={engineOn}
+              setEngineOn={setEngineOn}
             />
           </section>
           {previewOpen && <>
@@ -816,10 +913,10 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} />}
+        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} storage={deployment.storage} engineKey={engineKey} setEngineKey={value => { saveEngineKey(value); setEngineKey(value); }} />}
         {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
       </div>
-      <StatusBar outputLimit={effectiveOutput} planName={subscription?.plan.name} paymentMode={inference} localModel={connection.provider === 'ollama'} model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} />
+      <StatusBar outputLimit={effectiveOutput} planName={subscription?.plan.name} paymentMode={inference} localModel={connection.provider === 'ollama'} model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} ledger={deployment.storage.ledger} />
     </div>
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
     <GithubPullDialog open={githubPullOpen} close={() => setGithubPullOpen(false)} github={settings.github} addFiles={f => void addFiles(f)} openConnectors={() => openConnectors('github')} notify={setNotice} notifyToast={showToast} onImportProject={importProjectToWorkspace} />
@@ -854,6 +951,11 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         : <p>This removes sessions, runs, the ledger, notes, connectors, and saved connection details from this browser and from the server copy. Export anything you want to keep first.</p>}
       <div className="row gap end"><button className="button small" autoFocus onClick={() => setConfirm(null)}>Cancel</button><button className={confirm === 'run' ? 'button primary small' : 'button danger small'} onClick={() => { if (confirm === 'run') { approvedRuns.current = true; setConfirm(null); send(); } else void clearAll(); }}>{confirm === 'run' ? 'Approve and run' : 'Delete everything'}</button></div>
     </section></div>}
+    {updateReady && <div className="toast" role="status" aria-live="polite">
+      <CircleCheck size={14} />
+      <span><strong>Update ready.</strong> Reload to use it.</span>
+      <button className="button small" onClick={() => applyUpdate()}>Reload</button>
+    </div>}
     {toast && <div className={`toast ${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
       {toast.tone === 'error' ? <CircleAlert size={14} /> : <CircleCheck size={14} />}
       <span><strong>{toast.title}</strong>{toast.message}</span>
