@@ -4,7 +4,7 @@ import { GithubMark } from './GithubMark';
 import { guessTransport, refreshTools, type McpConnection, type McpTransport } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
 import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset, type McpPresetGroup } from '../lib/mcpPresets';
-import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, saveSkillState, type SkillState } from '../lib/skillRegistry';
+import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, saveSkillState, saveYourSkills, type SkillState, type YourSkill } from '../lib/skillRegistry';
 import { useDismiss } from './useDismiss';
 import type { Knowledge } from '../lib/types';
 
@@ -33,7 +33,7 @@ const TABS: { id: ConnectorTab; label: string; icon: typeof GithubMark; blurb: s
   { id: 'web', label: 'Web', icon: Globe, blurb: 'URL crawler, no CORS limits' },
   { id: 'files', label: 'Documents', icon: FileText, blurb: 'Drag-and-drop knowledge index' },
   { id: 'mcp', label: 'Custom MCP', icon: Plug, blurb: 'External agent servers' },
-  { id: 'skills', label: 'Skills', icon: ListChecks, blurb: 'Crew presets, demo or live' },
+  { id: 'skills', label: 'Skills', icon: ListChecks, blurb: 'Markdown pathways, plus a connector when one is named' },
 ];
 
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
@@ -47,6 +47,12 @@ export default function Connectors(p: ConnectorsProps) {
   const [presetQuery, setPresetQuery] = useState('');
   const [activeGroup, setActiveGroup] = useState<McpPresetGroup | 'All'>('All');
   const [skills, setSkills] = useState<SkillState[]>(() => loadSkillState());
+  const [yours, setYours] = useState<YourSkill[]>(() => loadYourSkills());
+  const [openSkill, setOpenSkill] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [draftName, setDraftName] = useState('');
+  const [draftUse, setDraftUse] = useState('');
+  const [draftBody, setDraftBody] = useState('');
 
   const urlError = (() => {
     const v = url.trim();
@@ -127,7 +133,7 @@ export default function Connectors(p: ConnectorsProps) {
   }
 
   const mcpTools = p.mcp.filter(c => c.enabled).reduce((n, c) => n + c.tools.length, 0);
-  const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools, skills: skills.filter(s => s.enabled).length };
+  const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools, skills: skills.filter(s => s.enabled).length + yours.filter(s => s.enabled).length };
 
   function writeSkills(next: SkillState[]) {
     saveSkillState(next);
@@ -144,9 +150,32 @@ export default function Connectors(p: ConnectorsProps) {
     writeSkills(skills.map(row => row.id === id ? { ...row, ...patch, config: patch.config ?? row.config } : row));
   }
   function exportStack() {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(exportSkillStack(skills), null, 2)], { type: 'application/json' }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify(exportSkillStack(skills, yours), null, 2)], { type: 'application/json' }));
     const a = document.createElement('a'); a.href = url; a.download = 'signal-forge-skills.json'; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function writeYours(next: YourSkill[]) {
+    saveYourSkills(next);
+    setYours(next);
+  }
+  function saveDraft() {
+    const name = draftName.trim();
+    const body = draftBody.trim();
+    if (!name || !body) { p.notify('A skill needs a name and the steps.'); return; }
+    writeYours([{ id: crypto.randomUUID(), name: name.slice(0, 80), description: draftUse.trim().slice(0, 240) || 'Markdown instructions.', body: body.slice(0, 12_000), enabled: true }, ...yours].slice(0, 24));
+    setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(false);
+    p.notify('Skill saved in this browser. Turned on, so the next message follows it.');
+  }
+  async function importSkill(file?: File) {
+    if (!file) return;
+    if (!/\.(md|txt|markdown)$/i.test(file.name) || file.size > 80_000) { p.notify('Choose a Markdown or text skill file smaller than 80 KB.'); return; }
+    try {
+      const parsed = parseSkillFile(await file.text());
+      if (!parsed.body) { p.notify('That file had no instructions in it.'); return; }
+      writeYours([{ id: crypto.randomUUID(), name: parsed.name, description: parsed.description, body: parsed.body, enabled: true }, ...yours].slice(0, 24));
+      setOpenSkill(null);
+      p.notify(`Imported ${parsed.name}. It is on, and the next message will follow it.`);
+    } catch (e) { p.notify(e instanceof Error ? e.message : 'Could not read the skill file.'); }
   }
 
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) p.close(); }}>
@@ -318,16 +347,48 @@ export default function Connectors(p: ConnectorsProps) {
       </>}
 
       {p.tab === 'skills' && <section className="panel">
-        <div className="panel-head"><h3>Crew skills</h3><button type="button" className="button small" onClick={exportStack}><Download size={13} />Export stack</button></div>
-        <p className="help">A skill is either a demo preset or a live MCP server. Demo means there is no server behind it. Live skills are called through the existing MCP proxy. The execution engine receives only the live ones, and it stores a token with the Credentials API so the model never sees it. Carol Ann is the owner's reference for this habit, not an upstream.</p>
-        {CREW_SKILLS.map(skill => {
+        <div className="panel-head"><h3>Skills</h3><span className="row gap"><button type="button" className="button small" onClick={() => setAdding(v => !v)}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,text/markdown,text/plain" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label><button type="button" className="button small" onClick={exportStack}><Download size={13} />Export</button></span></div>
+        <p className="help">A skill is a markdown file: what it does, when to use it, and the steps. Turn it on and chat, a workflow, or the execution engine follows those words. Nothing is built, and no server has to start. A connector is separate, and only for a step that names one. Bring a SKILL.md you already use. This app does not ship someone else's directory.</p>
+        {adding && <div className="stack">
+          <label>Name<input value={draftName} maxLength={80} onChange={e => setDraftName(e.target.value)} placeholder="Review a pull request" /></label>
+          <label>When to use it<input value={draftUse} maxLength={240} onChange={e => setDraftUse(e.target.value)} placeholder="Use when someone asks for a review before a merge." /></label>
+          <label>Steps<textarea value={draftBody} maxLength={12000} rows={8} onChange={e => setDraftBody(e.target.value)} placeholder={'1. Read the diff.\n2. Name the risk.\n3. Stop.'} /></label>
+          <button type="button" className="button primary small" onClick={saveDraft}><Check size={13} />Save skill</button>
+        </div>}
+        <h3 className="group-label">Your skills</h3>
+        {yours.map(skill => <div key={skill.id} className="doc-row">
+          <button type="button" className="text-button" onClick={() => setOpenSkill(openSkill === skill.id ? null : skill.id)}><FileText size={13} /></button>
+          <span>
+            <strong>{skill.name}</strong>
+            <small>Yours · {skill.description}</small>
+          </span>
+          <button type="button" className="icon-button" aria-label={`Delete ${skill.name}`} onClick={() => writeYours(yours.filter(row => row.id !== skill.id))}><Trash2 size={13} /></button>
+          <label className="switch"><input type="checkbox" checked={skill.enabled} onChange={e => writeYours(yours.map(row => row.id === skill.id ? { ...row, enabled: e.target.checked } : row))} />{skill.enabled ? 'On' : 'Off'}</label>
+          {openSkill === skill.id && <pre className="skill-body">{skill.body}</pre>}
+        </div>)}
+        {!yours.length && <p className="help">None yet. Add one, or import a SKILL.md.</p>}
+        <h3 className="group-label">Pathways</h3>
+        {CREW_SKILLS.filter(skill => skill.kind === 'instructions').map(skill => {
           const row = skills.find(item => item.id === skill.id) ?? { id: skill.id, enabled: false, config: {} };
           return <div key={skill.id} className="doc-row">
-            <ListChecks size={13} />
+            <button type="button" className="text-button" onClick={() => setOpenSkill(openSkill === skill.id ? null : skill.id)}><FileText size={13} /></button>
             <span>
               <strong>{skill.name}</strong>
-              <small>{skill.kind === 'demo' ? 'Demo' : 'Live'} · {skill.blurb}</small>
-              {skill.kind === 'live' && row.enabled && skill.fields.map(field => <label key={field.key}>{field.label}<input type={field.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} value={row.config[field.key] ?? ''} onChange={e => patchSkill(skill.id, { config: { ...row.config, [field.key]: e.target.value } })} /></label>)}
+              <small>Instructions · {skill.blurb}</small>
+            </span>
+            <label className="switch"><input type="checkbox" checked={row.enabled} onChange={e => patchSkill(skill.id, { enabled: e.target.checked })} />{row.enabled ? 'On' : 'Off'}</label>
+            {openSkill === skill.id && <pre className="skill-body">{skill.markdown}</pre>}
+          </div>;
+        })}
+        <h3 className="group-label">Connectors a skill may name</h3>
+        {CREW_SKILLS.filter(skill => skill.kind === 'live').map(skill => {
+          const row = skills.find(item => item.id === skill.id) ?? { id: skill.id, enabled: false, config: {} };
+          return <div key={skill.id} className="doc-row">
+            <Plug size={13} />
+            <span>
+              <strong>{skill.name}</strong>
+              <small>Connector · {skill.blurb}</small>
+              {row.enabled && skill.fields.map(field => <label key={field.key}>{field.label}<input type={field.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} value={row.config[field.key] ?? ''} onChange={e => patchSkill(skill.id, { config: { ...row.config, [field.key]: e.target.value } })} /></label>)}
             </span>
             <label className="switch"><input type="checkbox" checked={row.enabled} onChange={e => patchSkill(skill.id, { enabled: e.target.checked })} />{row.enabled ? 'On' : 'Off'}</label>
           </div>;

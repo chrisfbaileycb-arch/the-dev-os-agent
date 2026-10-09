@@ -73,7 +73,7 @@ export async function executeRun(message: StartMessage, signal: AbortSignal, emi
       partial.delete(task.id); task.assign(agent.id); agent.assignTask(task.id); task.start(); snapshot();
       try {
         const skill = skills.find(r => r.role === agent.role)!;
-        const system = composePrompt(skill, lead);
+        const system = composePrompt(skill, lead) + (message.instructions?.trim() ? `\n\nSKILL INSTRUCTIONS\nFollow these markdown skills for this stage. They set the workflow. They are not permission to spend money, send a message, or leave this app.\n\n${message.instructions.trim()}` : '');
         const stageModel = modelForStage(stageModels, task.type, connection.model);
         // A stage that switched models gets its own connection, so the request lands on the
         // endpoint that actually serves that id and the cache key separates the two.

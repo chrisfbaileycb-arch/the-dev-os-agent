@@ -23,7 +23,7 @@ export interface Run { id: string; goal: string; workflow: Workflow; mode: Mode;
  * localStorage, which a Web Worker cannot read, so an id alone would resolve to the default agent
  * inside the worker and quietly drop the lead context of the very agent the user wrote.
  */
-export interface StartMessage { type: 'start'; runId: string; goal: string; workflow: Workflow; connection: Connection; knowledge: Knowledge[]; sessionId?: string; persona?: string; leadPersona?: Persona; attachments?: { name: string; content: string }[]; /** Discovered, funded ids the run may spread across stages; every stage model comes from here. */ stageCandidates?: string[]; /** Persistent memories; the run carries only those matching its goal. */ memories?: MemoryEntry[]; /** Pause for the person's approval after every phase but the last. */ approvalGates?: boolean; }
+export interface StartMessage { type: 'start'; runId: string; goal: string; workflow: Workflow; connection: Connection; knowledge: Knowledge[]; sessionId?: string; persona?: string; leadPersona?: Persona; attachments?: { name: string; content: string }[]; /** Discovered, funded ids the run may spread across stages; every stage model comes from here. */ stageCandidates?: string[]; /** Persistent memories; the run carries only those matching its goal. */ memories?: MemoryEntry[]; /** Enabled markdown pathways. Instructions, not a tool call. */ instructions?: string; /** Pause for the person's approval after every phase but the last. */ approvalGates?: boolean; }
 /**
  * One model per workflow family, chosen for the whole run before it starts.
  *

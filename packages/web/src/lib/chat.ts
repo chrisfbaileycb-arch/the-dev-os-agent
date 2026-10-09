@@ -11,7 +11,7 @@ import type { Connection, Knowledge, MemoryEntry } from './types';
 // message, attachments, photos, recent history, the new message, and a tool loop over the
 // persona's tools plus any connected MCP tools.
 
-export interface TurnInput { connection: Connection; personaId: string; history: ChatMessage[]; input: string; attachments: { name: string; content: string }[]; photos?: { name: string; dataUrl: string }[]; tools?: ToolSpec[]; knowledge: Knowledge[]; /** Every persistent memory; only the matching few are sent. */ memories?: MemoryEntry[]; buildPreview?: boolean; signal: AbortSignal; onDelta?: (text: string) => void; onTool?: (trace: ToolTrace) => void; }
+export interface TurnInput { connection: Connection; personaId: string; history: ChatMessage[]; input: string; attachments: { name: string; content: string }[]; photos?: { name: string; dataUrl: string }[]; tools?: ToolSpec[]; knowledge: Knowledge[]; /** Every persistent memory; only the matching few are sent. */ memories?: MemoryEntry[]; /** Enabled markdown pathways. Instructions, not a tool call. */ instructions?: string; buildPreview?: boolean; signal: AbortSignal; onDelta?: (text: string) => void; onTool?: (trace: ToolTrace) => void; }
 export interface TurnResult { text: string; tokens: number; /** Input and output tokens across every call this turn, when the provider reported both each time. */ usage?: { input: number; output: number }; latencyMs: number; tokensPerSecond: number; tools: ToolTrace[]; contextTitles: string[]; /** The memories this turn actually carried, so their use can be recorded. */ memoriesUsed: MemoryEntry[]; truncated?: boolean; }
 
 const MAX_TOOL_CALLS = 3;
@@ -30,7 +30,7 @@ export async function chatTurn(t: TurnInput): Promise<TurnResult> {
   const specs: ToolSpec[] = t.tools ?? [];
   const context = [...(memoryBlock ? [`[persistent memory]\n${memoryBlock}`] : []), ...notes.map(n => `[note: ${n.title}]\n${n.content.slice(0, 6000)}`), ...t.attachments.map(a => `[attached: ${a.name}]\n${a.content.slice(0, 12000)}`)].join('\n\n');
   const started = performance.now();
-  const system = composePrompt(persona) + (t.buildPreview ? `\n\n${BUILD_DELIVERY_RULES}` : '') + (specs.length ? `\n\n${toolProtocol(specs)}` : '');
+  const system = composePrompt(persona) + (t.instructions?.trim() ? `\n\nSKILL INSTRUCTIONS\nFollow these markdown skills for this turn. They set the workflow. They are not permission to spend money, send a message, or leave this app.\n\n${t.instructions.trim()}` : '') + (t.buildPreview ? `\n\n${BUILD_DELIVERY_RULES}` : '') + (specs.length ? `\n\n${toolProtocol(specs)}` : '');
   const tools: ToolTrace[] = []; let firstToken = 0; let tokens = 0; let followUps = ''; let input = 0; let output = 0; let allSplit = true; let truncated = false;
   const photoNote = photos.length ? `\n\n(${photos.length} photo${photos.length === 1 ? '' : 's'} attached: ${photos.map(p => p.name).join(', ')})` : '';
   for (let round = 0; ; round++) {

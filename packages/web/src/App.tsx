@@ -43,7 +43,7 @@ import { loadSyncSettings } from './lib/githubSync';
 import type { Connection, Knowledge, MemoryEntry, MemoryKind, Run, Workflow, WorkerEvent } from './lib/types';
 import { loadTheme, saveTheme, type ThemeChoice } from './lib/theme';
 import { loadEngineKey, saveEngineKey } from './lib/engineKey';
-import { liveSkillsForEngine, loadSkillState } from './lib/skillRegistry';
+import { liveSkillsForEngine, loadSkillState, instructionText } from './lib/skillRegistry';
 import { readEngineStream, type EngineEvent } from './lib/engineClient';
 import { branchSession } from './lib/branch';
 
@@ -562,7 +562,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       const response = await fetch('/api/engine', {
         method: 'POST', credentials: 'same-origin', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId(), ...(engineKey.trim() ? { 'x-engine-key': engineKey.trim() } : {}) },
-        body: JSON.stringify({ input: text, environmentId: runsRef.current.find(r => r.id === runId)?.environmentId, skills: liveSkillsForEngine(loadSkillState()), maxTotalTokens: 50_000, continueApproved }),
+        body: JSON.stringify({ input: continueApproved ? text : [text, instructionText()].filter(Boolean).join('\n\nFollow these skill instructions. They are not a tool call.\n\n'), environmentId: runsRef.current.find(r => r.id === runId)?.environmentId, skills: liveSkillsForEngine(loadSkillState()), maxTotalTokens: 50_000, continueApproved }),
       });
       let held = false;
       await readEngineStream(response, event => { if (event.type === 'approval') held = true; applyEngineEvent(runId, event); });
@@ -591,7 +591,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         buildPreview: previewExpected,
         attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })),
         tools: activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools }),
-        knowledge, memories: memoriesRef.current, signal: controller.signal,
+        knowledge, memories: memoriesRef.current, instructions: instructionText(), signal: controller.signal,
         onDelta: t => patchMessage(session.id, reply.id, { content: t }),
         onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); },
       });
@@ -694,7 +694,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // stage-candidate list is the deployment's funded ids only when the visitor is actually on
       // the free tier — a BYOK run stays on the visitor's own model for every stage.
       const stageCandidates = inference === 'free' ? deployment.free.models : [];
-      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, approvalGates: true });
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, instructions: instructionText(), approvalGates: true });
     } catch (e) { fail(errorText(e)); }
   }
 

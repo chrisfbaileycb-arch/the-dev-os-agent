@@ -405,7 +405,8 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .dropzone.dragging { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .dropzone p { font-size: 12px; }
 .doc-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.doc-row { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-bottom: 1px solid var(--line); color: var(--muted); } .doc-row:last-child { border-bottom: 0; }
+.doc-row { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-bottom: 1px solid var(--line); color: var(--muted); flex-wrap: wrap; } .doc-row:last-child { border-bottom: 0; }
+.skill-body { flex: 1 0 100%; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; line-height: 1.5; max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--panel-2); color: var(--ink); }
 .doc-row span { display: flex; flex-direction: column; min-width: 0; flex: 1; } .doc-row strong { color: var(--ink); font-weight: 550; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .doc-row small { font-size: 11px; }
 
 @media (max-width: 1000px) { .two-col, .two-col.wide { grid-template-columns: minmax(0, 1fr); } }
