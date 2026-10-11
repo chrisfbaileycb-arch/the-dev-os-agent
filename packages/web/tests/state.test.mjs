@@ -5,7 +5,7 @@ import { openDatabase } from '../server/db.mjs';
 import { createState, validateEntry } from '../server/state.mjs';
 const ws = '3f2b8c1e-5d4a-4b6c-9e7f-0a1b2c3d4e5f';
 async function withState(env, fn) {
-  const db = openDatabase(':memory:'); const handler = createState({ env, db });
+  const db = openDatabase(':memory:'); const handler = createState({ env: { WORKSPACE_AUTH_REQUIRED: 'false', ...env }, db });
   const server = createServer((req, res) => { handler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   try { await fn(`http://127.0.0.1:${server.address().port}`, db); } finally { await new Promise(r => server.close(r)); db.close(); }

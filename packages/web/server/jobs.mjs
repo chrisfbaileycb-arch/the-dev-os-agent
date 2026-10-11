@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { HttpError } from './proxy.mjs';
 import { checkOrigin } from './state.mjs';
+import { resolveWorkspace } from './workspace.mjs';
 
 // /api/jobs: the hand-off between Render's two services.
 //
@@ -113,8 +114,7 @@ export function createJobs({ env = process.env, jobs }) {
       }
 
       checkOrigin(req, env);
-      const workspace = req.headers['x-workspace-id'];
-      if (typeof workspace !== 'string' || !ID.test(workspace)) throw new HttpError(400, 'A workspace id header is required.');
+      const workspace = resolveWorkspace(req, env);
       if (path !== '/api/jobs') throw new HttpError(404, 'Unknown jobs route.');
       if (req.method === 'GET') {
         const id = new URL(req.url, 'http://jobs').searchParams.get('id');

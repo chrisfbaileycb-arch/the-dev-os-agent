@@ -1,42 +1,95 @@
-# Render setup: free tier, durable storage
+# Signal Forge Render test deployment
 
-Two settings on the live `hey-buddy-web` service. Neither needs a code change. Enter secrets in
-the Render dashboard (Environment), never in chat or in this repository.
+Source: `chrisfbaileycb-arch/the-dev-os-agent`, branch `main`.
+App: https://hey-buddy-web.onrender.com
+Render service: `srv-dahrsjad0e5s738lvfsg`, Christopher's workspace, Oregon.
 
-## Connect Groq to the free tier
+The existing service builds with `cd web && npm ci && npm run build` and starts with
+`cd web && npm start`. `web/package.json` is a compatibility bridge to `packages/web`;
+there is one current app, not a separate older deployment. A push to `main` triggers deployment.
+`render.yaml` describes a reproducible test topology; it is not automatically applied to an
+existing service unless the service is managed through a Blueprint.
 
-The free tier already knows two Groq models (`server/freetier.mjs`): `llama-3.3-70b-versatile`
-and `llama-3.1-8b-instant`. They appear as soon as the deployment holds a key.
+## Initial owner setup
 
-1. Create a key at console.groq.com.
-2. Render > hey-buddy-web > Environment > add `GROQ_API_KEY`. Save; the service restarts.
-3. Optional: Groq's limits are higher than the xKiro gateway's, so `FREE_MAX_OUTPUT_TOKENS`
-   (default 16384, ceiling 65536; legacy 1024 / 8192 are upgraded) can be raised, for example to 32768, so most generated pages finish
-   in one call instead of needing continuation calls. Every free reply is funded from the
-   deployment's own quota, so raise it gradually and watch usage.
+1. Open Render > hey-buddy-web > Environment. Copy `ADMIN_BOOTSTRAP_TOKEN` using the
+   dashboard's secret control. Do not put it in source code, a skill, a URL, or an issue.
+2. Open https://hey-buddy-web.onrender.com/admin, enter the setup code, and choose your own
+   password of at least 12 characters. Keep the password in your password manager.
+3. After successful setup, remove the bootstrap variable from Render. The stored password is
+   a scrypt hash; simultaneous setup attempts cannot replace the first password.
 
-The xKiro key can stay set. Free models from every configured provider are listed together.
+Without a configured bootstrap code or an existing `ADMIN_TOKEN`, admin setup is locked.
+An existing environment `ADMIN_TOKEN` overrides a database password; direct-token operators
+manage that token in Render. `SETTINGS_SECRET` seals operator settings outside the database.
+Keep it stable across redeployments. Personal visitor keys stay in page memory and clear on reload.
 
-## Keep sessions, ledger and quota across restarts
+## Workspace ownership
 
-The live boot log reads `Workspace data: /tmp/heybuddy.sqlite`. `/tmp` is wiped on every restart
-and redeploy, so the server's record of sessions, runs, the credit ledger and the free-tier
-monthly quota resets each time. Browsers keep their own IndexedDB copy, which is why history
-still shows for returning visitors, but a paid product cannot rely on that.
+`SESSION_SECRET` must be a random value of at least 32 characters. `/api/workspace/session`
+issues a signed, HttpOnly, SameSite=Strict cookie for an anonymous workspace. Google OAuth,
+when separately configured, supplies the account's canonical workspace. Server state and
+browser job requests require this proof; a UUID alone cannot read, replace, or delete data.
+A mismatching workspace header is refused. Keep `WORKSPACE_AUTH_REQUIRED=true` on hosted apps.
+Local IndexedDB data remains in the browser and is reconciled into the new owned workspace;
+old server-only data is not claimed by accepting an unverified browser UUID.
 
-**Option A, a Render disk (simplest).** The service is on a paid instance, which can attach one.
+`APP_ORIGIN=https://hey-buddy-web.onrender.com` pins write requests to this deployment.
+Google sign-in additionally needs Google-issued client credentials and a registered callback;
+it is optional and is not implied by anonymous workspace identity.
 
-1. Render > hey-buddy-web > Disks > Add disk. Mount path `/var/data`, size 1 GB is plenty.
-2. Environment: set `DATA_FILE` to `/var/data/heybuddy.sqlite`.
-3. Save. The service redeploys and keeps its SQLite file from then on.
+## Funding stays disabled
 
-Trade-offs: a service with a disk runs a single instance and redeploys with a short gap.
+`OPERATOR_FUNDING_DISABLED=true` stops keyless and plan-funded provider requests before
+upstream discovery or inference dispatch. The switch is controlled by Render, not an imported
+prompt or a dashboard tunable. `FREE_TIER_DISABLED=true` and `FREE_CREDIT_MONTHLY_POOL=0`
+are also set. Personal provider keys still work and their providers bill their owners.
 
-**Option B, Postgres.** The server already uses Postgres whenever `DATABASE_URL` is set
-(`server/index.mjs`). Create a Render Postgres instance, set `DATABASE_URL` from its internal
-connection string, and the disk is not needed. Check the current terms of Render's free Postgres
-plan before relying on it for data you want to keep.
+Do not enable owner funding until an atomic dollar reservation ledger, reconciliation,
+per-user/global caps, concurrency limits, approved model/provider routes, and provider-side
+key limits have been implemented and tested. Token/credit counters do not guarantee a USD cap.
+No model-provider API keys or checkout links were supplied in this deployment work.
 
-Either way, confirm afterwards: the next boot log should no longer say `/tmp/heybuddy.sqlite`.
+## Database and limitations
 
-For the three monthly subscription tiers and new checkout settings, see [monthly plans](monthly-plans.md). Dashboard values override hosting environment variables.
+`signal-forge-test-db`, Postgres 16, Oregon, ID `dpg-db5iqebbc2fs73922ocg-a`, is the
+free test database created for this deployment. Connect its **internal** URL to `DATABASE_URL`
+on the web service; do not use the external connection or expose credentials to the client.
+The database restricts external IP access and the app uses a pool of five connections.
+
+The database expires **2026-11-10 06:31 UTC** (**November 9, 2026, 11:31 PM Denver**).
+Render's free plan has no backups and is a 30-day test resource. Upgrade, migrate, or export
+before expiry; restarting the web app is not the same as making a backup. This deployment
+must not be represented as a production data-retention guarantee.
+
+The existing web service's instance plan was retained. Chromium, a queue worker, an isolated
+repository execution sandbox, and resumable jobs/artifacts are not provisioned. Browser-side
+workflows remain available. Server jobs with a Postgres workspace store are still transient.
+
+## Skills
+
+Code Reviewer, Git Workflow Master, and SRE are shipped as complete, initially disabled
+Agency Agents roles pinned to `f99f6aa910a442b0197b768ce0ea7751e35e2060`, with SHA-256,
+source, author, and MIT license metadata. The license is also served under `/licenses/`.
+Select only the roles needed for the task in Agent Skills. Markdown and JSON stack imports
+preserve complete instruction bodies and bundled text resources; imported connectors do not
+receive permissions. Editing a personal imported body creates a local skill without claiming
+its old source hash.
+
+Selected instructions have a 64,000-character activation budget. If exceeded, the UI blocks
+the next run and explains how to reduce selection. It does not silently clip workflows.
+This character budget does not guarantee that every selected model has sufficient context.
+Imported resources remain text packages; external scripts/dependencies are not installed.
+
+## Release verification
+
+Check `/api/health` for `ok`, deployed commit, storage kind, identity configuration, and
+funding-disabled status. Also check `/` and `/admin` return HTML successfully. Test anonymous
+admin setup rejection, forged/mismatched workspace denial, and funding rejection before
+claiming the app is ready. Record the exact commit and tests with each release.
+
+The remaining execution milestone is a real repository repair in an isolated environment:
+pinned input commit -> scoped diff -> repository test logs/exit code -> review -> branch/PR.
+It requires the server-owned exact-action approval dispatcher, budgets before owner funding,
+reviewed adapters, and durable resumable jobs/artifacts. This deployment completes the initial
+host/security foundation and skill preservation; it does not claim that whole loop is finished.

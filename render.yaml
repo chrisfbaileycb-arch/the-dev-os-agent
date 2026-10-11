@@ -28,6 +28,7 @@
 
 databases:
   - name: hey-buddy-db
+    # Test database: expires after 30 days. Upgrade or replace before saving production data.
     plan: free
     region: oregon
     databaseName: heybuddy
@@ -46,7 +47,7 @@ services:
     buildCommand: npm ci && cd packages/web && npm run build
     startCommand: node packages/web/server/index.mjs
     # Probe the workspace page: a healthy API alone can hide a broken static-file server.
-    healthCheckPath: /
+    healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -70,12 +71,17 @@ services:
         sync: false
 
       # --- Admin dashboard ---------------------------------------------------------------
-      # One token opens /admin, where provider keys, the free and paid model tiers, and the
-      # free-tier limits are managed live without a redeploy. Generate one (openssl rand -hex 24)
-      # and enter it in the dashboard; `sync: false` keeps it out of this file. Keys entered in
-      # /admin are stored sealed in the Postgres database above, so they survive restarts.
-      - key: ADMIN_TOKEN
-        sync: false
+      # A generated owner bootstrap code permits initial password creation at /admin. Copy
+      # it from Render Environment; after setup remove it. SESSION_SECRET signs workspace
+      # ownership and SETTINGS_SECRET seals operator settings. Never put these in source.
+      - key: ADMIN_BOOTSTRAP_TOKEN
+        generateValue: true
+      - key: SETTINGS_SECRET
+        generateValue: true
+      - key: WORKSPACE_AUTH_REQUIRED
+        value: "true"
+      - key: OPERATOR_FUNDING_DISABLED
+        value: "true"
 
       # --- Zero-config free tier -------------------------------------------------------
       # Set one or both and visitors get a live streaming reply with no API key and no account:
@@ -180,7 +186,7 @@ services:
         sync: false
       # Any long random string: openssl rand -hex 32
       - key: SESSION_SECRET
-        sync: false
+        generateValue: true
 
       # APP_ORIGIN is deliberately unset. The server falls back to matching the request Origin
       # against its own Host, which is correct on Render. Set it only to pin a single external

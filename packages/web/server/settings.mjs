@@ -346,6 +346,15 @@ export async function openSettings({ db, env = process.env, log = console.error 
      * `sessionEnv()` in admin.mjs. Empty when no password is stored, never the raw password.
      */
     adminSessionSecret: () => adminHash,
+    /** Atomic across processes: a second setup request cannot replace the first password. */
+    async setInitialAdminToken(token) {
+      if (!persistent || !has('createSetting')) throw new Error('Atomic setup is unavailable on this storage adapter.');
+      const text = String(token ?? '').trim();
+      if (text.length < 12 || text.length > 1024 || !HEADER_SAFE.test(text)) throw new Error('Use a dashboard password of 12 to 1024 printable characters.');
+      const created = await db.createSetting(ADMIN_KEY, hashAdminToken(text));
+      await reload();
+      return created;
+    },
     /** Set (or replace) the dashboard password. Stored as a scrypt hash, never in the clear. */
     async setAdminToken(token) {
       const text = String(token ?? '').trim();

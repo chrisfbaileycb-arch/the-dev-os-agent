@@ -1,5 +1,9 @@
 # Signal Forge OS, web edition
 
+The October 11 test deployment adds owner-only bootstrap setup, signed workspace ownership,
+a hosting-controlled funding stop switch, and complete pinned skill packages. See
+[Render setup and remaining execution requirements](docs/render-setup.md).
+
 Your AI crew. Always in your corner. A privacy-first workspace for one person or a small business: business agents you chat with, three multi-agent workflows on a browser-adapted subset of Ruflo's Agent and Task entities, a connectors hub, a knowledge hub that stays on the device, a model hub, a credit ledger, and a sandboxed browser agent. Hosted inference goes through one streaming proxy. The funded free tier is US labs only.
 
 **Open it and type.** On a deployment with server provider keys, a first-time visitor gets a live streaming reply with no sign-up, no API key, and nothing to configure: the server funds models only from US providers (Anthropic, OpenAI, Google, xAI, Groq, Cerebras), chosen in the admin dashboard. The dock has three model groups: **Models** (those US labs, plus whatever this deployment funds), **Experiment** (OpenRouter and Hugging Face, your key, not the free tier, and not Shield), and **On this machine**. The monthly free-tier number is counted in the browser unless this host has durable storage (Postgres via `DATABASE_URL`, or a SQLite file outside `/tmp`). The live Render service has no disk, so it does not claim to remember that quota. `FREE_MAX_PER_HOUR` is the in-memory cap that bounds spend on the deployment's keys, and it dies with the process.

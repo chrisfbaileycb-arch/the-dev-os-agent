@@ -3,8 +3,8 @@ import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
-// SQLite persistence for sessions, runs, and the credit ledger, keyed by an anonymous workspace
-// id the browser mints. No accounts: the id is the only handle. Bodies are stored as JSON text.
+// SQLite persistence for sessions, runs, and the credit ledger. The HTTP handlers establish
+// workspace ownership before calling this storage adapter. Bodies are stored as JSON text.
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (workspace_id TEXT NOT NULL, id TEXT NOT NULL, updated_at TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (workspace_id, id));
@@ -38,6 +38,7 @@ export function openDatabase(file = ':memory:') {
     ],
     getSetting: db.prepare('SELECT value FROM settings WHERE key = ?'),
     setSetting: db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'),
+    createSetting: db.prepare('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)'),
     deleteSetting: db.prepare('DELETE FROM settings WHERE key = ?'),
     allSettings: db.prepare('SELECT key, value FROM settings ORDER BY key'),
   };
@@ -65,6 +66,7 @@ export function openDatabase(file = ':memory:') {
     // Deployment settings entered in the admin dashboard: provider keys (sealed), tier lists, knobs.
     getSetting(key) { return statements.getSetting.get(key)?.value ?? null; },
     setSetting(key, value) { statements.setSetting.run(key, value, new Date().toISOString()); },
+    createSetting(key, value) { return statements.createSetting.run(key, value, new Date().toISOString()).changes === 1; },
     deleteSetting(key) { statements.deleteSetting.run(key); },
     allSettings() { return statements.allSettings.all(); },
     /** The underlying handle, so server/jobs.mjs can own its own table in the same file. */

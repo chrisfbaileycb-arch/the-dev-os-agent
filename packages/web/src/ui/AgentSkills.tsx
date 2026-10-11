@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Check, Download, FileText, Pencil, Plug, Plus, Trash2 } from 'lucide-react';
-import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, saveSkillState, saveYourSkills, type SkillState, type YourSkill } from '../lib/skillRegistry';
+import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, parseSkillStack, saveSkillState, saveYourSkills, instructionText, SKILL_CAP, SKILL_FILE_CAP, type SkillState, type YourSkill } from '../lib/skillRegistry';
 import type { McpConnection } from '../lib/mcp';
 
 export interface AgentSkillsProps {
@@ -21,6 +21,9 @@ export default function AgentSkills(p: AgentSkillsProps) {
   const [draftBody, setDraftBody] = useState('');
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
+  let activation = '';
+  let activationError = '';
+  try { activation = instructionText(skills, yours); } catch (e) { activationError = e instanceof Error ? e.message : 'Could not activate skills.'; }
   const matches = (name: string, description: string) => `${name} ${description}`.toLowerCase().includes(query.trim().toLowerCase());
 
   function writeSkills(next: SkillState[]) {
@@ -44,41 +47,59 @@ export default function AgentSkills(p: AgentSkillsProps) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   function writeYours(next: YourSkill[]) {
-    saveYourSkills(next);
+    try { saveYourSkills(next); } catch (e) { p.notify(e instanceof Error ? e.message : 'Could not save skills.'); return false; }
     setYours(next);
     p.onChange?.();
+    return true;
   }
   function saveDraft() {
     const name = draftName.trim();
     const body = draftBody.trim();
     if (!name || !body) { p.notify('A skill needs a name and the steps.'); return; }
     if (!editing && yours.length >= 24) { p.notify('This browser holds up to 24 skills. Remove one before adding another.'); return; }
-    const skill: YourSkill = { id: editing ?? crypto.randomUUID(), name: name.slice(0, 80), description: draftUse.trim().slice(0, 240) || 'Markdown instructions.', body: body.slice(0, 12_000), enabled: editing ? yours.find(s => s.id === editing)?.enabled ?? true : true };
-    writeYours(editing ? yours.map(s => s.id === editing ? skill : s) : [skill, ...yours]);
+    const skill: YourSkill = { id: editing ?? crypto.randomUUID(), name: name.slice(0, 80), description: draftUse.trim().slice(0, 240) || 'Markdown instructions.', body, enabled: editing ? yours.find(s => s.id === editing)?.enabled ?? true : true };
+    if (!writeYours(editing ? yours.map(s => s.id === editing ? skill : s) : [skill, ...yours])) return;
     setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(false); setEditing(null);
     p.notify(skill.enabled ? 'Skill saved. Its instructions apply to the next message.' : 'Skill saved. Enable it when you want to use it.');
   }
   async function importSkill(file?: File) {
     if (!file) return;
     if (yours.length >= 24) { p.notify('This browser holds up to 24 skills. Remove one before importing another.'); return; }
-    if (!/\.(md|txt|markdown)$/i.test(file.name) || file.size > 80_000) { p.notify('Choose a Markdown or text skill file smaller than 80 KB.'); return; }
+    const stack = /\.json$/i.test(file.name);
+    if (!/\.(md|txt|markdown|json)$/i.test(file.name) || file.size > (stack ? 5_000_000 : SKILL_FILE_CAP)) { p.notify('Choose a Markdown file under 500 KB or a skill stack under 5 MB.'); return; }
     try {
-      const parsed = parseSkillFile(await file.text());
+      const text = await file.text();
+      if (stack) {
+        const imported = parseSkillStack(text);
+        if (imported.length + yours.length > 24) throw new Error('This stack will not fit the 24-skill limit. Nothing was imported.');
+        for (const skill of imported) {
+          if (!skill.provenance) continue;
+          const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(skill.body));
+          const actual = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+          if (actual !== skill.provenance.sha256) throw new Error(`The content hash for ${skill.name} does not match. Nothing was imported.`);
+        }
+        if (writeYours([...imported, ...yours])) p.notify(`Imported ${imported.length} complete skills and their resources. Select the skills needed for your task.`);
+        return;
+      }
+      const parsed = parseSkillFile(text);
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+      const sha256 = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
       if (!parsed.body) { p.notify('That file had no instructions in it.'); return; }
-      writeYours([{ id: crypto.randomUUID(), name: parsed.name, description: parsed.description, body: parsed.body, enabled: true }, ...yours].slice(0, 24));
+      writeYours([{ id: crypto.randomUUID(), name: parsed.name, description: parsed.description, body: parsed.body, provenance: { file: file.name, sha256 }, enabled: false }, ...yours]);
       setOpenSkill(null);
-      p.notify(`Imported ${parsed.name}. It is on, and the next message will follow it.`);
+      p.notify(`Imported ${parsed.name}. Complete instructions saved. Select it when this task needs it.`);
     } catch (e) { p.notify(e instanceof Error ? e.message : 'Could not read the skill file.'); }
   }
 
   return <section className="panel">
-        <div className="panel-head"><h2>Skill library</h2><span className="row gap"><button type="button" className="button small" onClick={() => { setEditing(null); setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(v => !v); }}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,text/markdown,text/plain" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label><button type="button" className="button small" onClick={exportStack}><Download size={13} />Export</button></span></div>
+        <div className="panel-head"><h2>Skill library</h2><span className="row gap"><button type="button" className="button small" onClick={() => { setEditing(null); setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(v => !v); }}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,.json,text/markdown,text/plain,application/json" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label><button type="button" className="button small" onClick={exportStack}><Download size={13} />Export</button></span></div>
         <p className="help">Import a SKILL.md or write your own steps. Enabled skills provide instructions for your next chat, build, or plan. Skills are saved in this browser; scripts and templates need separate tools to run. Connector tokens stay in page memory and clear on reload or tab close. Export shares instructions and connector addresses without connector credentials. Never paste keys into a skill.</p>
+        <p className={activationError ? 'msg-error' : 'help'}>{activationError || `Selected instructions: ${activation.length.toLocaleString()} / ${SKILL_CAP.toLocaleString()} characters. Each selected skill is loaded completely. Turn on only the skills needed for this task.`}</p>
         <label>Search skills<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Name or purpose" /></label>
         {adding && <div className="stack">
           <label>Name<input value={draftName} maxLength={80} onChange={e => setDraftName(e.target.value)} placeholder="Review a pull request" /></label>
           <label>When to use it<input value={draftUse} maxLength={240} onChange={e => setDraftUse(e.target.value)} placeholder="Use when someone asks for a review before a merge." /></label>
-          <label>Steps<textarea value={draftBody} maxLength={12000} rows={8} onChange={e => setDraftBody(e.target.value)} placeholder={'1. Read the diff.\n2. Name the risk.\n3. Stop.'} /></label>
+          <label>Steps<textarea value={draftBody} maxLength={SKILL_FILE_CAP} rows={8} onChange={e => setDraftBody(e.target.value)} placeholder={'1. Read the diff.\n2. Name the risk.\n3. Stop.'} /></label>
           <button type="button" className="button primary small" onClick={saveDraft}><Check size={13} />{editing ? 'Save changes' : 'Save skill'}</button>
           <button type="button" className="button small" onClick={() => { setAdding(false); setEditing(null); }}>Cancel</button>
         </div>}
@@ -87,7 +108,7 @@ export default function AgentSkills(p: AgentSkillsProps) {
           <button type="button" className="text-button" aria-label={`Read ${skill.name}`} aria-expanded={openSkill === skill.id} onClick={() => setOpenSkill(openSkill === skill.id ? null : skill.id)}><FileText size={13} /></button>
           <span>
             <strong>{skill.name}</strong>
-            <small>Yours · {skill.description}</small>
+            <small>Yours · {skill.description} · {skill.body.length.toLocaleString()} characters</small>{skill.provenance && <small>Imported from {skill.provenance.file} · SHA-256 {skill.provenance.sha256.slice(0, 12)} · content stored in full</small>}
           </span>
           <button type="button" className="icon-button" aria-label={`Edit ${skill.name}`} onClick={() => { setEditing(skill.id); setDraftName(skill.name); setDraftUse(skill.description); setDraftBody(skill.body); setAdding(true); }}><Pencil size={13} /></button>
           <button type="button" className="icon-button" aria-label={`Delete ${skill.name}`} onClick={() => writeYours(yours.filter(row => row.id !== skill.id))}><Trash2 size={13} /></button>
@@ -103,7 +124,7 @@ export default function AgentSkills(p: AgentSkillsProps) {
             <button type="button" className="text-button" aria-label={`Read ${skill.name}`} aria-expanded={openSkill === skill.id} onClick={() => setOpenSkill(openSkill === skill.id ? null : skill.id)}><FileText size={13} /></button>
             <span>
               <strong>{skill.name}</strong>
-              <small>Instructions · {skill.blurb}</small>
+              <small>Instructions · {skill.blurb}</small>{skill.provenance && <small><a href={skill.provenance.source} target="_blank" rel="noreferrer">Source {skill.provenance.commit?.slice(0, 8)}</a> · {skill.provenance.license} · {skill.provenance.author} · SHA-256 {skill.provenance.sha256.slice(0, 12)}</small>}
             </span>
             <label className="switch"><input type="checkbox" aria-label={`Enable ${skill.name}`} checked={row.enabled} onChange={e => patchSkill(skill.id, { enabled: e.target.checked })} />{row.enabled ? 'On' : 'Off'}</label>
             {openSkill === skill.id && <pre className="skill-body">{skill.markdown}</pre>}

@@ -13,7 +13,7 @@ const request = { goal: 'Plan the week', workflow: 'build', connection: { provid
 async function withJobs(env, fn) {
   const db = openDatabase(':memory:');
   const jobs = openJobs(db.raw());
-  const handler = createJobs({ env, jobs });
+  const handler = createJobs({ env: { WORKSPACE_AUTH_REQUIRED: 'false', ...env }, jobs });
   const server = createServer((req, res) => { handler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   try { await fn(`http://127.0.0.1:${server.address().port}`, jobs); } finally { await new Promise(r => server.close(r)); db.close(); }

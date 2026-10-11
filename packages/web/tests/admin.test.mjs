@@ -92,8 +92,8 @@ test('the dashboard is off without ADMIN_TOKEN and refuses a wrong token', async
   const settings = await openSettings({ db, env: {} });
   await withServer([createAdmin({ db, env: {}, settings, log: () => {} })], async url => {
     const status = await (await call(url, '/api/admin/status')).json();
-    // No credential yet, but a deployment with storage offers first-run setup instead of refusing.
-    assert.deepEqual(status, { configured: false, authenticated: false, persistent: true, setup: true, source: 'none', storage: true });
+    // Storage alone cannot offer initial setup without the operator bootstrap credential.
+    assert.deepEqual(status, { configured: false, authenticated: false, persistent: true, setup: false, source: 'none', storage: true });
     assert.equal((await call(url, '/api/admin/config')).status, 503);
   });
   const env = { ADMIN_TOKEN: TOKEN };
@@ -109,19 +109,22 @@ test('the dashboard is off without ADMIN_TOKEN and refuses a wrong token', async
   });
 });
 
-test('a deployment with no ADMIN_TOKEN can be set up from the page, once', async () => {
+test('only the owner bootstrap credential can create the initial password, once', async () => {
   const db = openDatabase(':memory:');
   const settings = await openSettings({ db, env: {} });
-  const handler = createAdmin({ db, env: {}, settings, log: () => {} });
+  const bootstrapToken = 'owner-bootstrap-token-for-tests';
+  const handler = createAdmin({ db, env: { ADMIN_BOOTSTRAP_TOKEN: bootstrapToken }, settings, log: () => {} });
   await withServer([handler], async url => {
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'anonymous-password-choice' }, origin: url })).status, 403);
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'anonymous-password-choice', bootstrapToken: 'wrong' }, origin: url })).status, 403);
     // The password is a one-time decision: too short is refused, cross-origin is refused.
-    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'short' }, origin: url })).status, 400);
-    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password' }, origin: 'https://elsewhere.example' })).status, 403);
-    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password' }, origin: url })).status, 200);
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'short', bootstrapToken }, origin: url })).status, 400);
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password', bootstrapToken }, origin: 'https://elsewhere.example' })).status, 403);
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password', bootstrapToken }, origin: url })).status, 200);
     // Setting it closes setup and opens the dashboard with the password just chosen.
     assert.deepEqual(await (await call(url, '/api/admin/status')).json(), { configured: true, authenticated: false, persistent: true, setup: false, source: 'dashboard', storage: true });
     assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-second-password-choice' }, origin: url })).status, 403);
-    assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'a-long-enough-password' }, origin: url })).status, 200);
+    assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'a-long-enough-password', bootstrapToken }, origin: url })).status, 200);
     assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'a-second-password-choice' }, origin: url })).status, 401);
   });
   // The session cookie is signed with something only this server holds, not with the empty string
@@ -135,8 +138,20 @@ test('a deployment with no ADMIN_TOKEN can be set up from the page, once', async
   const volatile = await openSettings({ db: { allSettings: async () => [] }, env: {} });
   await withServer([createAdmin({ db: null, env: {}, settings: volatile, log: () => {} })], async url => {
     assert.equal((await (await call(url, '/api/admin/status')).json()).setup, false);
-    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password' }, origin: url })).status, 503);
+    assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password', bootstrapToken }, origin: url })).status, 503);
   });
+});
+
+test('concurrent initial password writes across settings caches accept only one owner', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    const first = await openSettings({ db, env: {} });
+    const second = await openSettings({ db, env: {} });
+    const results = await Promise.all([first.setInitialAdminToken('first-password-choice'), second.setInitialAdminToken('second-password-choice')]);
+    assert.deepEqual(results.sort(), [false, true]);
+    const saved = await openSettings({ db, env: {} });
+    assert.equal(Number(saved.checkAdminToken('first-password-choice')) + Number(saved.checkAdminToken('second-password-choice')), 1);
+  } finally { db.close(); }
 });
 
 test('a stored key is sealed in the database, overlays the environment, and funds the next request', async () => {

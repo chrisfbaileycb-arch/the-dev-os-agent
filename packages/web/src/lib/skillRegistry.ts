@@ -1,4 +1,5 @@
 import { sessionSecret, setSessionSecret } from './sessionSecrets';
+import curatedSkills from './curatedSkills.json';
 // Skills are markdown pathways. A file says what the skill does, when to use it, and the steps.
 // Turning one on hands those words to chat and to a workflow. It does not run a server.
 //
@@ -21,6 +22,8 @@ export interface SkillDef {
   markdown?: string;
   url: string;
   fields: SkillField[];
+  provenance?: YourSkill['provenance'];
+  resources?: Record<string, string>;
 }
 
 export interface SkillState {
@@ -36,6 +39,8 @@ export interface YourSkill {
   description: string;
   body: string;
   enabled: boolean;
+  provenance?: { file: string; sha256: string; source?: string; commit?: string; license?: string; author?: string };
+  resources?: Record<string, string>;
 }
 
 const DRILL = `Use when a goal is vague and the next need is dates, not a build.
@@ -64,6 +69,7 @@ const RESEARCHER = `Use when the answer has to come from notes the person suppli
 3. Do not invent a source. If the notes are silent, say so.`;
 
 export const CREW_SKILLS: SkillDef[] = [
+  ...curatedSkills as SkillDef[],
   { id: 'drill', name: 'The Drill', kind: 'instructions', url: '', blurb: 'Turns a vague goal into dated checkpoints.', markdown: DRILL, fields: [] },
   { id: 'ledger', name: 'The Ledger', kind: 'instructions', url: '', blurb: 'Keeps the commitments you state, without punishment.', markdown: LEDGER, fields: [] },
   { id: 'scribe', name: 'Scribe', kind: 'instructions', url: '', blurb: 'Turns a thread into a clean note.', markdown: SCRIBE, fields: [] },
@@ -74,7 +80,8 @@ export const CREW_SKILLS: SkillDef[] = [
 
 const KEY = 'sf-skills';
 const YOURS = 'sf-your-skills';
-const SKILL_CAP = 8_000;
+export const SKILL_CAP = 64_000;
+export const SKILL_FILE_CAP = 500_000;
 
 export function defaultSkillState(): SkillState[] {
   return CREW_SKILLS.map(skill => ({ id: skill.id, enabled: false, config: {} }));
@@ -122,7 +129,9 @@ export function loadYourSkills(): YourSkill[] {
         id: row.id.slice(0, 80),
         name: String(row.name || 'Untitled skill').slice(0, 80),
         description: String(row.description || '').slice(0, 240),
-        body: row.body.slice(0, 12_000),
+        body: row.body,
+        ...(row.provenance ? { provenance: row.provenance } : {}),
+        ...(row.resources ? { resources: row.resources } : {}),
         enabled: row.enabled === true,
       }];
     });
@@ -130,7 +139,9 @@ export function loadYourSkills(): YourSkill[] {
 }
 
 export function saveYourSkills(list: YourSkill[]): void {
-  try { localStorage.setItem(YOURS, JSON.stringify(list.slice(0, 24))); } catch { /* this browser refused storage */ }
+  if (list.length > 24) throw new Error('This browser holds up to 24 skills. Remove a skill first.');
+  if (list.some(skill => skill.body.length > SKILL_FILE_CAP)) throw new Error('A skill exceeds the 500,000-character storage limit. Split it into complete smaller skills.');
+  try { localStorage.setItem(YOURS, JSON.stringify(list)); } catch { throw new Error('Could not save the complete skill. Browser storage may be full. Export your skills first.'); }
 }
 
 export function skillById(id: string): SkillDef | undefined {
@@ -139,7 +150,8 @@ export function skillById(id: string): SkillDef | undefined {
 
 /** Read a SKILL.md. Frontmatter name and description win. Otherwise the first heading. */
 export function parseSkillFile(text: string): { name: string; description: string; body: string } {
-  const raw = text.replace(/^\uFEFF/, '').slice(0, 12_000);
+  if (text.length > SKILL_FILE_CAP) throw new Error('This file exceeds the 500,000-character limit. It was not imported.');
+  const raw = text.replace(/^\uFEFF/, '');
   let name = '';
   let description = '';
   let body = raw;
@@ -162,7 +174,27 @@ export function parseSkillFile(text: string): { name: string; description: strin
     const para = body.split('\n').map(line => line.trim()).find(line => line && !line.startsWith('#') && !line.startsWith('---'));
     description = para || 'Markdown instructions.';
   }
-  return { name: name.slice(0, 80), description: description.slice(0, 240), body: body.trim().slice(0, 12_000) };
+  return { name: name.slice(0, 80), description: description.slice(0, 240), body: text };
+}
+
+/** Restore complete instruction packages. Imported connectors never acquire permissions. */
+export function parseSkillStack(text: string): YourSkill[] {
+  const stack = JSON.parse(text);
+  if (!stack || !Array.isArray(stack.skills)) throw new Error('Choose a Signal Forge skill stack.');
+  const rows = stack.skills.filter((row: { kind?: string }) => row && row.kind === 'instructions');
+  if (rows.length > 24) throw new Error('This stack exceeds the 24-skill limit. Nothing was imported.');
+  return rows.map((row: Record<string, unknown>) => {
+    if (typeof row.markdown !== 'string' || !row.markdown.trim()) throw new Error('A skill in this stack has no instructions.');
+    const parsed = parseSkillFile(row.markdown);
+    const resources: Record<string, string> = {};
+    if (row.resources && typeof row.resources === 'object' && !Array.isArray(row.resources)) {
+      for (const [path, value] of Object.entries(row.resources)) {
+        if (path.startsWith('/') || path.includes('..') || typeof value !== 'string' || value.length > SKILL_FILE_CAP) throw new Error('The stack contains an invalid or oversized resource. Nothing was imported.');
+        resources[path] = value;
+      }
+    }
+    return { id: crypto.randomUUID(), name: typeof row.name === 'string' ? row.name.slice(0, 80) : parsed.name, description: typeof row.description === 'string' ? row.description.slice(0, 240) : parsed.description, body: parsed.body, enabled: false, resources, ...(row.provenance && typeof row.provenance === 'object' ? { provenance: row.provenance as YourSkill['provenance'] } : {}) };
+  });
 }
 
 /** Enabled pathways, capped. Live connectors are not included. */
@@ -177,12 +209,9 @@ export function instructionText(state: SkillState[] = loadSkillState(), yours: Y
     if (!skill.enabled || !skill.body.trim()) continue;
     parts.push(`# ${skill.name}\n${skill.description}\n\n${skill.body}`);
   }
-  let out = '';
-  for (const part of parts) {
-    if (out.length >= SKILL_CAP) break;
-    out += `${out ? '\n\n' : ''}${part.slice(0, 4_000)}`;
-  }
-  return out.slice(0, SKILL_CAP);
+  const out = parts.join('\n\n');
+  if (out.length > SKILL_CAP) throw new Error(`Selected skills need ${out.length.toLocaleString()} characters; the activation budget is ${SKILL_CAP.toLocaleString()}. Turn off some skills before sending. No instructions were truncated.`);
+  return out;
 }
 
 /** Stack JSON the visitor can download. Pathways keep their markdown. Connectors keep the URL. */
@@ -200,6 +229,8 @@ export function exportSkillStack(state: SkillState[], yours: YourSkill[] = []) {
           markdown: skill.kind === 'instructions' ? skill.markdown ?? '' : '',
           url: skill.kind === 'live' ? skill.url : '',
           config: skill.kind === 'live' ? Object.fromEntries(Object.entries(row?.config ?? {}).filter(([key]) => skill.fields.some(field => field.key === key && !field.secret))) : {},
+          provenance: skill.provenance ?? null,
+          resources: skill.resources ?? {},
         };
       }),
       ...yours.map(skill => ({
@@ -208,6 +239,9 @@ export function exportSkillStack(state: SkillState[], yours: YourSkill[] = []) {
         kind: 'instructions' as const,
         enabled: skill.enabled,
         markdown: skill.body,
+        description: skill.description,
+        provenance: skill.provenance ?? null,
+        resources: skill.resources ?? {},
         url: '',
         config: {},
       })),

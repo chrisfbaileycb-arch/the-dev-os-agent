@@ -463,6 +463,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     return errorText(e);
   }
   function preflight(): string | null {
+    try { instructionText(); } catch (e) { return errorText(e); }
     try { validateConnection(connection); } catch (e) { return errorText(e); }
     if (connection.provider === 'ollama' && !pipes.ollamaEnabled) return 'Enable the local model connection in Settings first.';
     if (!online && connection.provider !== 'ollama') return 'You are offline. Hosted models need a connection.';

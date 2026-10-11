@@ -478,8 +478,8 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
           // What OpenRouter itself said was zero-cost, so an operator can see the free pool is
           // being read from the provider and not from a list in this repository.
           openRouterCatalog: openRouterCatalogStatus(),
-          free: freeTierStatus(env),
-          paid: paidTierStatus(env),
+          free: { ...freeTierStatus(env), ...(env.OPERATOR_FUNDING_DISABLED === 'true' ? { enabled: false } : {}) },
+          paid: { ...paidTierStatus(env), ...(env.OPERATOR_FUNDING_DISABLED === 'true' ? { enabled: false } : {}) },
           billing: billingStatus(env),
           storage: storage ?? { durable: false, kind: 'unconfigured', ledger: 'browser' },
         });
@@ -496,6 +496,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       if (window.count > 60) throw new HttpError(429, 'Proxy request limit reached. Wait one minute.');
       const body = await readBody(req, path === '/api/chat' ? 12_000_000 : 256_000);
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Expected an object.');
+      if (env.OPERATOR_FUNDING_DISABLED === 'true' && !(typeof body.apiKey === 'string' && body.apiKey.trim()) && !(path === '/api/models' && body.provider === 'openrouter')) {
+        throw new HttpError(503, 'Owner-funded requests are disabled until dollar budgets are configured. Use your own provider key.', 'operator_funding_disabled');
+      }
       if (path === '/api/chat' && typeof body.model === 'string' && body.model.trim() && !isChatModelId(body.model)) {
         throw new HttpError(400, 'That model is not a text chat model. Image, video, and audio models are not sent through chat.');
       }

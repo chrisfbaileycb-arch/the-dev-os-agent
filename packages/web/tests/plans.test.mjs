@@ -20,7 +20,7 @@ async function withApp(env, fn, options = {}) {
   const db = openDatabase(':memory:');
   setAdminTiers({ mode: 'manual', free: [], paid: [{ id: 'gpt-4o', provider: 'openai', label: 'GPT' }] });
   const proxy = createProxy({ env: { OPENAI_API_KEY: 'operator-key', ...env }, db, discover: async () => {}, discoverOpenRouter: async () => {}, transport: async (_url, options) => reply(), ...options });
-  const state = createState({ env, db });
+  const state = createState({ env: { WORKSPACE_AUTH_REQUIRED: 'false', ...env }, db });
   const server = createServer(async (req, res) => { if (!await proxy(req, res) && !await state(req, res)) { res.writeHead(404); res.end(); } });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const post = (path, body, ws = workspace) => fetch(`http://127.0.0.1:${server.address().port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': ws }, body: JSON.stringify(body) });

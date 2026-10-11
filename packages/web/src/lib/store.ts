@@ -101,9 +101,23 @@ interface Budget { pool: number; freePool: number; freeUsed: number; free: FreeT
 interface ServerState extends Budget { sessions: Session[]; runs: Run[]; ledger: LedgerEntry[]; }
 export interface UsageReading extends Budget { used: number; entry: LedgerEntry | null; }
 export interface PlanReading { plan: { id: string; name: string; price: string; monthlyCredits: number; maxOutputTokens: number }; pool: number; used: number; entry: LedgerEntry | null; }
+let identity: Promise<boolean> | null = null;
+export function ensureWorkspaceSession(): Promise<boolean> {
+  if (!identity) identity = fetch('/api/workspace/session', { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(15_000) })
+    .then(async response => {
+      if (!response.ok) return false;
+      const body = await response.json();
+      if (typeof body.workspaceId !== 'string' || !/^[0-9a-f-]{36}$/.test(body.workspaceId)) return false;
+      setWorkspaceId(body.workspaceId);
+      return true;
+    }).catch(() => false).then(ok => { if (!ok) identity = null; return ok; });
+  return identity;
+}
 async function api<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T | null> {
   try {
+    if (path.startsWith('/api/state') && !await ensureWorkspaceSession()) return null;
     const response = await fetch(path, { ...init, credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(15_000)]), headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId(), ...(init.headers ?? {}) } });
+    if (response.status === 401 || response.status === 403) identity = null;
     if (!response.ok) return null;
     return await response.json() as T;
   } catch { return null; }

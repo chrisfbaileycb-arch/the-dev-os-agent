@@ -2,9 +2,10 @@ import { HttpError } from './proxy.mjs';
 import { freeTierStatus, monthlyPool } from './freetier.mjs';
 import { planAccess } from './plans.mjs';
 import { parseSession } from './auth.mjs';
+import { resolveWorkspace } from './workspace.mjs';
 
-// /api/state: the server copy of a workspace. The X-Workspace-Id header is the only handle;
-// there are no accounts, so the id is a bearer of its own data. Keep it in the browser.
+// /api/state: the server copy of a workspace. A signed account or anonymous cookie proves
+// ownership; the optional X-Workspace-Id header must match that server-issued identity.
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
@@ -50,8 +51,7 @@ export function createState({ env: baseEnv = process.env, db, settings = null, s
     const env = currentEnv();
     try {
       checkOrigin(req, env);
-      const workspace = req.headers['x-workspace-id'];
-      if (typeof workspace !== 'string' || !ID.test(workspace)) throw new HttpError(400, 'A workspace id header is required.');
+      const workspace = resolveWorkspace(req, env);
       if (path === '/api/state' && req.method === 'GET') { json(res, 200, { ...(await db.state(workspace)), ...(await budget(workspace, env, req)) }); return true; }
       // A cheap read the client polls after a zero-config turn, so the credit meter moves in
       // step with the server's own measurement instead of a guess made in the browser.

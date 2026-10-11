@@ -20,6 +20,7 @@ import { catalogStatus, ensureCatalog } from './discovery.mjs';
 import { classifyStorage } from './durability.mjs';
 import { createEngine } from './antigravity.mjs';
 import { cspFor } from './csp.mjs';
+import { createWorkspaceSession } from './workspace.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 // Workspace data: Postgres when DATABASE_URL is set, SQLite otherwise.
 // Jobs are always SQLite — they are transient hand-offs and must never carry credentials.
@@ -43,13 +44,18 @@ const jobs = openJobs(jobsSqlite);
 const settings = await openSettings({ db, env: process.env });
 if (!process.env.ADMIN_TOKEN) console.log('Admin dashboard: off (set ADMIN_TOKEN to open /admin).');
 const auth = createAuth({ db, env: process.env });
-const handlers = [auth, createAdmin({ db, settings, storage }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, settings, storage }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs })];
+const handlers = [auth, createWorkspaceSession(), createAdmin({ db, settings, storage }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, settings, storage }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs })];
 // Finished jobs are a transient hand-off, not a record; the run itself lands in the workspace store.
 setInterval(() => jobs.prune(new Date(Date.now() - 24 * 3_600_000).toISOString()), 3_600_000).unref();
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png' };
 // Hashed assets are immutable; the shell, the manifest, and the service worker must revalidate so a new build reaches installed apps.
 const cacheControl = (file) => file.startsWith(root + 'assets' + sep) ? 'public, max-age=31536000, immutable' : 'no-cache';
 const server = createServer(async (req, res) => {
+  if (req.url === '/api/health' && ['GET', 'HEAD'].includes(req.method)) {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ ok: true, commit: process.env.RENDER_GIT_COMMIT || null, storage: storage.kind, workspaceIdentity: Boolean(process.env.SESSION_SECRET?.length >= 32), operatorFundingDisabled: process.env.OPERATOR_FUNDING_DISABLED === 'true' }));
+    return;
+  }
   for (const handle of handlers) if (await handle(req, res)) return;
   if (!['GET','HEAD'].includes(req.method)) { res.writeHead(405); res.end(); return; }
   try {

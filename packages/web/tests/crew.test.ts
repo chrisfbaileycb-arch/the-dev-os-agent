@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { branchSession } from '../src/lib/branch';
-import { CREW_SKILLS, exportSkillStack, instructionText, liveMcpConnections, liveSkillsForEngine, parseSkillFile, type SkillState } from '../src/lib/skillRegistry';
+import { CREW_SKILLS, exportSkillStack, instructionText, liveMcpConnections, liveSkillsForEngine, parseSkillFile, saveYourSkills, loadYourSkills, SKILL_CAP, parseSkillStack, type SkillState } from '../src/lib/skillRegistry';
 import { ollamaOriginsValue, testLocalEndpoint } from '../src/lib/localNetwork';
 import type { Session } from '../src/lib/store';
 
@@ -24,6 +24,35 @@ describe('branch one message', () => {
 });
 
 describe('skills registry', () => {
+  it('preserves complete long files in storage and exports, and refuses oversized activation', () => {
+    const original = '---\nname: Full workflow\n---\n\n' + 'workflow step\n'.repeat(1500) + 'FINAL ACCEPTANCE CHECK';
+    const parsed = parseSkillFile(original);
+    expect(parsed.body).toBe(original);
+    const skill = { id: 'complete', name: parsed.name, description: parsed.description, body: parsed.body, enabled: true };
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+    saveYourSkills([skill]);
+    expect(loadYourSkills()[0].body).toBe(original);
+    expect(exportSkillStack([], [skill]).skills.find(row => row.id === 'complete')?.markdown).toBe(original);
+    expect(instructionText([], [skill])).toContain('FINAL ACCEPTANCE CHECK');
+    const restored = parseSkillStack(JSON.stringify(exportSkillStack([], [skill])));
+    expect(restored.find(row => row.name === parsed.name)?.body).toBe(original);
+    expect(restored.every(row => !row.enabled)).toBe(true);
+    expect(restored.find(row => row.name === 'Code Reviewer')?.resources?.['LICENSE.txt']).toContain('AgentLand Contributors');
+    expect(() => instructionText([], [{ ...skill, body: 'x'.repeat(SKILL_CAP + 1) }])).toThrow(/No instructions were truncated/);
+    vi.unstubAllGlobals();
+  });
+  it('ships three attributed roles from one pinned source, initially disabled', () => {
+    const roles = CREW_SKILLS.filter(skill => skill.provenance);
+    expect(roles).toHaveLength(3);
+    for (const role of roles) {
+      expect(role.provenance?.commit).toBe('f99f6aa910a442b0197b768ce0ea7751e35e2060');
+      expect(role.provenance?.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(role.resources?.['LICENSE.txt']).toContain('AgentLand Contributors');
+      expect(role.markdown).toContain('---');
+      expect(instructionText([])).not.toContain(role.markdown);
+    }
+  });
   const on: SkillState[] = CREW_SKILLS.map(skill => {
     const config: Record<string, string> = skill.id === 'github' ? { token: 'ghp-secret' } : {};
     return { id: skill.id, enabled: skill.kind === 'live', config };

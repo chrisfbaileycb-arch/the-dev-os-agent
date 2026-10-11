@@ -7,7 +7,7 @@ beforeEach(() => {
   removed = []; fail = false; store = new Map();
   vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) });
   vi.spyOn(storage, 'removeSession').mockImplementation(async (id: string) => { removed.push(id); });
-  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => fail ? new Response('{}', { status: 503 }) : new Response(JSON.stringify({ ok: true, sent: JSON.parse(String(init?.body ?? '{}')) }), { headers: { 'Content-Type': 'application/json' } })));
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => _url === '/api/workspace/session' ? new Response(JSON.stringify({ workspaceId: '11111111-2222-4333-8444-555555555555' })) : fail ? new Response('{}', { status: 503 }) : new Response(JSON.stringify({ ok: true, sent: JSON.parse(String(init?.body ?? '{}')) }), { headers: { 'Content-Type': 'application/json' } })));
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -15,7 +15,7 @@ describe('deleting a session', () => {
   it('removes it locally and tells the server, leaving nothing queued', async () => {
     await removeSessionEverywhere('s1');
     expect(removed).toEqual(['s1']);
-    const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(call => call[0] === '/api/state/delete')!;
     expect(call[0]).toBe('/api/state/delete');
     expect(JSON.parse(call[1].body)).toEqual({ sessions: ['s1'] });
     expect(store.has(KEY)).toBe(false);

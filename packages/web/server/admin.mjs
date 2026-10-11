@@ -108,7 +108,8 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
   const storedToken = () => Boolean(settings?.adminConfigured?.());
   const configured = () => Boolean(envToken()) || storedToken();
   /** A deployment with no storage cannot remember a password, so there is nothing to set up. */
-  const canSetUp = () => !envToken() && !storedToken() && Boolean(settings?.persistent);
+  const bootstrap = () => typeof baseEnv.ADMIN_BOOTSTRAP_TOKEN === 'string' && baseEnv.ADMIN_BOOTSTRAP_TOKEN.length >= 24 ? baseEnv.ADMIN_BOOTSTRAP_TOKEN : '';
+  const canSetUp = () => !envToken() && !storedToken() && Boolean(settings?.persistent) && Boolean(bootstrap());
   const tokenSource = () => envToken() ? 'environment' : storedToken() ? 'dashboard' : 'none';
   /**
    * The environment the session cookie is signed with.
@@ -135,6 +136,7 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
     const rows = settings.keyStatus(baseEnv).map(p => ({ ...p, console: PROVIDER_META[p.provider]?.console ?? null }));
     return {
       persistent: settings.persistent,
+      fundingDisabled: baseEnv.OPERATOR_FUNDING_DISABLED === 'true',
       // The dashboard only manages the US backend lane. A key stored under a provider outside it
       // (from before the lane split) is listed apart, removable and otherwise inert: nothing funds
       // from it any more. An environment-sourced one has no row, since the dashboard cannot remove it.
@@ -161,19 +163,25 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
     if (!path.startsWith('/api/admin/')) return false;
     try {
       if (path === '/api/admin/status' && req.method === 'GET') { json(res, 200, { configured: configured(), authenticated: authenticated(req), persistent: Boolean(settings?.persistent), setup: canSetUp(), source: tokenSource(), storage: Boolean(settings?.persistent) }); return true; }
-      // First-run setup. This is the one write that happens before any credential exists, so the
-      // Origin check below is the whole of its protection: a page on another origin cannot call it
-      // from a victim's browser. It also only works once — the moment a password (or an
-      // environment token) exists, `canSetUp()` is false and this answers 403 forever after.
+      // Initial setup needs the operator's hosting credential. Origin checks alone do not
+      // establish ownership. An atomic insert prevents concurrent password replacement.
       if (path === '/api/admin/setup' && req.method === 'POST') {
         checkOrigin(req, baseEnv);
         if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
         if (envToken() || storedToken()) throw new HttpError(403, 'A dashboard password is already set. Sign in instead.');
         if (!settings?.persistent) throw new HttpError(503, 'This deployment has no settings storage, so a password cannot be saved. Set ADMIN_TOKEN in the hosting environment instead.');
+        if (!bootstrap()) throw new HttpError(503, 'Initial setup is locked. Set ADMIN_BOOTSTRAP_TOKEN in Render to a random value of at least 24 characters.');
+        const ip = req.socket.remoteAddress || 'unknown'; const at = now();
+        const window = attempts.get(ip);
+        const attempt = window && at - window.start <= LOGIN_WINDOW_MS ? window : { start: at, count: 0 };
+        attempt.count++; attempts.set(ip, attempt);
+        if (attempt.count > LOGIN_MAX) throw new HttpError(429, 'Too many setup attempts. Wait fifteen minutes.');
         const body = await readBody(req, 8_192);
+        if (!equal(body.bootstrapToken, bootstrap())) throw new HttpError(403, 'Enter the setup code from the Render environment.');
         const token = typeof body.token === 'string' ? body.token.trim() : '';
         if (token.length < 12) throw new HttpError(400, 'Choose a password of at least 12 characters.');
-        await settings.setAdminToken(token);
+        if (!await settings.setInitialAdminToken(token)) throw new HttpError(409, 'A dashboard password was already created. Sign in instead.');
+        attempts.delete(ip);
         log('[admin] dashboard password set from the setup form');
         res.setHeader('Set-Cookie', cookieHeader(req, makeSession(sessionEnv(), now()), SESSION_MS / 1000));
         json(res, 200, { ok: true }); return true;

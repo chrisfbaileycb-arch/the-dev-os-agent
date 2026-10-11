@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { loadEnv } from 'vite';
 // Shared JavaScript helper, also used by the client gate and the tests (typed by betaHash.d.mts).
@@ -17,6 +18,8 @@ import { openDatabase } from './server/db.mjs';
 // @ts-expect-error Server modules are JavaScript.
 import { createState } from './server/state.mjs';
 // @ts-expect-error Server modules are JavaScript.
+import { createWorkspaceSession } from './server/workspace.mjs';
+// @ts-expect-error Server modules are JavaScript.
 import { createBrowse } from './server/browse.mjs';
 // @ts-expect-error Server modules are JavaScript.
 import { createMcp } from './server/mcp.mjs';
@@ -31,15 +34,16 @@ import { createEngine } from './server/antigravity.mjs';
 // @ts-expect-error Server modules are JavaScript.
 import { classifyStorage } from './server/durability.mjs';
 const api: Plugin = { name: 'signal-forge-api', async configureServer(server) {
+  const env = { ...process.env, SESSION_SECRET: process.env.SESSION_SECRET || randomBytes(32).toString('hex') };
   const dataFile = 'data/dev.sqlite';
   const db = openDatabase(dataFile);
-  const settings = await openSettings({ db });
-  const auth = createAuth({ db });
+  const settings = await openSettings({ db, env });
+  const auth = createAuth({ db, env });
   // Same durability rule as the production server. data/dev.sqlite is outside /tmp, so the local
   // ledger is durable. A DATABASE_URL, when the operator set one, still wins.
   const databaseUrl = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.DATABASE_URL;
   const storage = classifyStorage({ databaseUrl, dataFile });
-  const handlers = [auth, createAdmin({ db, settings, storage }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, settings, storage }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ jobs: openJobs(db.raw()) })];
+  const handlers = [auth, createWorkspaceSession({ env }), createAdmin({ db, settings, storage }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, env, settings, storage }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ env, jobs: openJobs(db.raw()) })];
   server.middlewares.use((req: { url?: string }, res, next) => { if (new URL(req.url ?? '/', 'http://dev').pathname === '/admin') req.url = '/'; void (async () => { for (const handle of handlers) if (await handle(req, res)) return; next(); })().catch(next); });
 } };
 // Emits dist/sw.js with the precache list taken from the real bundle, so the offline shell always matches the build.

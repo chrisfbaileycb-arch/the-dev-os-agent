@@ -122,6 +122,10 @@ export async function openPostgresDb(connectionString) {
       await pool.query('INSERT INTO settings (key,value,updated_at) VALUES ($1,$2,$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at', [key, value, new Date().toISOString()]);
     },
     async deleteSetting(key) { await pool.query('DELETE FROM settings WHERE key=$1', [key]); },
+    async createSetting(key, value) {
+      const result = await pool.query('INSERT INTO settings (key,value,updated_at) VALUES ($1,$2,$3) ON CONFLICT (key) DO NOTHING', [key, value, new Date().toISOString()]);
+      return result.rowCount === 1;
+    },
     async allSettings() {
       const { rows } = await pool.query('SELECT key, value FROM settings ORDER BY key');
       return rows;

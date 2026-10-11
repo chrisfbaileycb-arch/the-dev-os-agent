@@ -19,7 +19,7 @@ interface TierEntry { id: string; provider: string; label?: string; }
 interface Tiers { mode: 'auto' | 'manual'; free: TierEntry[]; paid: TierEntry[]; warnings: string[]; }
 interface Published { free: { enabled: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; monthlyCredits: number; perHour: number }; paid: { enabled: boolean; configured: boolean; models: string[] }; }
 interface ExperimentSlot { provider: string; name: string; env: string; source: Source; hint: string; unreadable: boolean; }
-interface Config { persistent: boolean; durable?: boolean; ledger?: 'browser' | 'server'; experiment?: ExperimentSlot[]; providers: ProviderRow[]; retired: ProviderRow[]; planned: PlannedProvider[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
+interface Config { fundingDisabled?: boolean; persistent: boolean; durable?: boolean; ledger?: 'browser' | 'server'; experiment?: ExperimentSlot[]; providers: ProviderRow[]; retired: ProviderRow[]; planned: PlannedProvider[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
 interface Status { configured: boolean; authenticated: boolean; persistent: boolean; setup: boolean; source: Source; storage: boolean; }
 
 export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; }
@@ -37,6 +37,7 @@ export default function Admin(p: AdminProps) {
   const [status, setStatus] = useState<Status | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [token, setToken] = useState('');
+  const [bootstrapToken, setBootstrapToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState('');
   const [passwordAgain, setPasswordAgain] = useState('');
@@ -64,7 +65,7 @@ export default function Admin(p: AdminProps) {
 
   function signIn() { void run(() => api('/api/admin/login', { method: 'POST', body: JSON.stringify({ token }) }), () => { setToken(''); void refresh().catch(e => p.notify(errorText(e))); }); }
   /** First run: claim the dashboard with a password of the owner's choosing, no environment edit. */
-  function setUp() { void run(() => api('/api/admin/setup', { method: 'POST', body: JSON.stringify({ token: password }) }), () => { setPassword(''); setPasswordAgain(''); p.notify('Dashboard password set. Enter your provider keys below.'); void refresh().catch(e => p.notify(errorText(e))); }); }
+  function setUp() { void run(() => api('/api/admin/setup', { method: 'POST', body: JSON.stringify({ token: password, bootstrapToken }) }), () => { setBootstrapToken(''); setPassword(''); setPasswordAgain(''); p.notify('Dashboard password set. Enter your provider keys below.'); void refresh().catch(e => p.notify(errorText(e))); }); }
   function changePassword() { void run(() => api('/api/admin/password', { method: 'PUT', body: JSON.stringify({ token: password }) }), () => { setPassword(''); setPasswordAgain(''); setChanging(false); p.notify('Dashboard password changed. Use it at the next sign-in.'); }); }
   function signOut() { void run(() => api('/api/admin/logout', { method: 'POST', body: '{}' }), () => { setConfig(null); setStatus(s => s ? { ...s, authenticated: false } : s); p.onSignedIn(false); }); }
   function saveKey(provider: string) { void run(() => api<Config>('/api/admin/keys', { method: 'PUT', body: JSON.stringify({ provider, key: drafts[provider] ?? '' }) }), c => { applyConfig(c); setDrafts(d => ({ ...d, [provider]: '' })); p.notify(`${c.providers.find(x => x.provider === provider)?.name ?? provider} key saved on the server. It funds the next request without a restart.`); }); }
@@ -97,7 +98,7 @@ export default function Admin(p: AdminProps) {
     <div className="page-head"><div><h1><ShieldCheck size={18} strokeWidth={1.75} /> Admin dashboard</h1><p>Provider keys, model tiers and free-tier limits, managed on the server without a redeploy.</p></div></div>
     <section className="panel">
       <h2>Switched off on this deployment</h2>
-      <p className="help">This deployment has no settings storage, so a dashboard password could not be kept between restarts. Set <code>ADMIN_TOKEN</code> in the hosting environment to a long random string (at least 12 characters, <code>openssl rand -hex 24</code> is a good one), restart the service, and sign in here with it. Adding <code>DATABASE_URL</code> or a persistent <code>DATA_FILE</code> switches the in-app setup on instead, so no environment edit is needed.</p>
+      <p className="help">Initial setup is locked until the owner configures a setup code. Set <code>ADMIN_BOOTSTRAP_TOKEN</code> in Render to a random value of at least 24 characters, then reload this page. Settings storage is also required. You can instead configure <code>ADMIN_TOKEN</code> in Render and sign in directly.</p>
       {!status.persistent && <p className="msg-error"><CircleAlert size={12} />This server has no settings storage, so dashboard values could not be kept between restarts.</p>}
     </section>
   </div>;
@@ -108,12 +109,13 @@ export default function Admin(p: AdminProps) {
     <div className="page-head"><div><h1><ShieldCheck size={18} strokeWidth={1.75} /> Set up your dashboard</h1><p>Choose a password for this deployment. It is the only credential; store it somewhere safe.</p></div></div>
     <section className="panel" style={{ maxWidth: 460 }}>
       <h2>Create the admin password</h2>
-      <p className="help">You are the first person here, so this deployment is yours to claim. The password is hashed with scrypt before it is stored and is never sent back to any browser. It opens the provider keys, the model tiers, and the free-tier limits — none of which exist yet.</p>
+      <p className="help">Enter the owner's setup code from Render, then choose your password. The password is hashed before storage.</p>
+      <label>Setup code<input type="password" autoComplete="off" spellCheck={false} value={bootstrapToken} disabled={busy} onChange={e => setBootstrapToken(e.target.value)} /></label>
       <label>Password<input type="password" autoComplete="new-password" spellCheck={false} value={password} disabled={busy} onChange={e => setPassword(e.target.value)} /></label>
-      <label>Repeat password<input type="password" autoComplete="new-password" spellCheck={false} value={passwordAgain} disabled={busy} onChange={e => setPasswordAgain(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && password.length >= 12 && password === passwordAgain) setUp(); }} /></label>
+      <label>Repeat password<input type="password" autoComplete="new-password" spellCheck={false} value={passwordAgain} disabled={busy} onChange={e => setPasswordAgain(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && bootstrapToken && password.length >= 12 && password === passwordAgain) setUp(); }} /></label>
       {password.length > 0 && password.length < 12 && <p className="msg-error"><CircleAlert size={12} />Use at least 12 characters.</p>}
       {passwordAgain.length > 0 && password !== passwordAgain && <p className="msg-error"><CircleAlert size={12} />The two entries do not match.</p>}
-      <div className="row gap"><button className="button primary small" disabled={busy || password.length < 12 || password !== passwordAgain} onClick={setUp}>{busy ? <LoaderCircle size={13} className="spin" /> : <KeyRound size={13} />}Set password and open the dashboard</button></div>
+      <div className="row gap"><button className="button primary small" disabled={busy || !bootstrapToken || password.length < 12 || password !== passwordAgain} onClick={setUp}>{busy ? <LoaderCircle size={13} className="spin" /> : <KeyRound size={13} />}Set password and open the dashboard</button></div>
       <p className="help">Setting a password turns the setup form off permanently. If you also want shell-level access, an <code>ADMIN_TOKEN</code> in the environment takes precedence over this password.</p>
     </section>
   </div>;
@@ -135,6 +137,7 @@ export default function Admin(p: AdminProps) {
       <div><h1><ShieldCheck size={18} strokeWidth={1.75} /> Admin dashboard</h1><p>Keys on the server, models sorted into free and paid, limits on the free tier. Every change applies to the next request; nothing here needs a redeploy.</p></div>
       <div className="row gap"><button className="button small" disabled={busy} onClick={() => void refresh().catch(e => p.notify(errorText(e)))}><RefreshCw size={13} />Reload</button><button className="button small" disabled={busy} onClick={signOut}><LogOut size={13} />Sign out</button></div>
     </div>
+    {config.fundingDisabled && <div className="notice"><ShieldCheck size={13} /><span>Owner-funded requests are disabled for this test deployment until dollar budgets and approved routes are configured. Personal session keys remain available.</span></div>}
     {!config.persistent && <div className="notice"><CircleAlert size={13} /><span>This server has no settings storage: values you enter apply until the next restart only. Set DATABASE_URL or a persistent DATA_FILE to keep them.</span></div>}
     {config.durable === false && <div className="notice"><CircleAlert size={13} /><span>This host forgets its database on restart. The monthly free-tier number is counted in each browser. OpenRouter, Hugging Face, and the execution-engine key stay in Settings on that browser. They are not written here.</span></div>}
     {config.unreadable.length > 0 && <div className="notice"><TriangleAlert size={13} /><span>Stored values for {config.unreadable.join(', ')} were sealed under a secret this server no longer has (ADMIN_TOKEN or SESSION_SECRET changed). Enter them again to reseal.</span></div>}
