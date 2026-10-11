@@ -1,64 +1,67 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ANTIGRAVITY_AGENT, ANTIGRAVITY_MODEL, clampTokenCap, interactionBody, liveMcpTools, needsApproval, runAntigravity } from '../server/antigravity.mjs';
+import { Readable } from 'node:stream';
+import { ANTIGRAVITY_AGENT, ANTIGRAVITY_MODEL, clampTokenCap, createEngine, interactionBody, runAntigravity } from '../server/antigravity.mjs';
 
-test('the interactions body pins the current agent and never sends generation params', () => {
-  const body = interactionBody({ input: 'ship the note', maxTotalTokens: 12, skills: [] });
+test('new and reused environments are offline and never receive connector tools', () => {
+  const body = interactionBody({ input: 'draft the note', maxTotalTokens: 12, skills: [] });
   assert.equal(body.agent, ANTIGRAVITY_AGENT);
-  assert.equal(body.agent, 'antigravity-preview-09-2026');
   assert.equal(body.agent_config.model, ANTIGRAVITY_MODEL);
   assert.equal(body.agent_config.max_total_tokens, clampTokenCap(12));
-  assert.equal(body.environment, 'remote');
-  assert.equal(Object.hasOwn(body, 'temperature'), false);
-  assert.equal(Object.hasOwn(body.agent_config, 'temperature'), false);
+  assert.deepEqual(body.environment, { type: 'remote', network: 'disabled' });
+  assert.deepEqual(body.tools, [{ type: 'code_execution' }]);
   assert.equal(JSON.stringify(body).includes('temperature'), false);
   const reused = interactionBody({ input: 'again', environmentId: 'env-9', skills: [] });
-  assert.equal(reused.environment_id, 'env-9');
-  assert.equal(Object.hasOwn(reused, 'environment'), false);
+  assert.deepEqual(reused.environment, { type: 'remote', network: 'disabled', environment_id: 'env-9' });
+  assert.throws(() => interactionBody({ skills: [{ name: 'lookup', url: 'https://mcp.example' }] }), /External connectors are disabled/);
 });
 
-test('MCP tokens stay in the credentials list, not on the tool the model sees', () => {
-  const { tools, credentials } = liveMcpTools([
-    { name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', token: 'ghp-secret', enabled: true },
-    { name: 'Drill', demo: true, url: '', enabled: true },
-    { name: 'Old', url: 'https://example.com/sse', transport: 'sse', enabled: true },
-  ]);
-  assert.equal(tools.length, 1);
-  assert.equal(JSON.stringify(tools).includes('ghp-secret'), false);
-  assert.equal(credentials[0].token, 'ghp-secret');
-  assert.equal(tools[0].credential, credentials[0].id);
-  assert.equal(needsApproval('code_execution'), false);
-  assert.equal(needsApproval('google_search'), false);
-  assert.equal(needsApproval('send_message'), true);
-  assert.equal(needsApproval('mcp:github'), true);
+test('every enabled external connector is refused before any credential upload or run', async () => {
+  for (const skill of [
+    { name: 'github', url: 'https://api.githubcopilot.com/mcp/', token: 'private-token' },
+    { name: 'innocent_lookup', url: 'https://mcp.example', enabled: true },
+    { name: 'invalid', url: 'http://localhost', transport: 'sse' },
+  ]) {
+    let calls = 0;
+    const result = await runAntigravity({ key: 'engine-key', skills: [skill], fetchImpl: async () => { calls++; throw new Error('must not call'); } });
+    assert.equal(calls, 0);
+    assert.equal(result.status, 403);
+    assert.match(result.events[0].message, /No connector credentials or run request were sent/);
+    assert.equal(result.events.some(event => event.type === 'approval'), false);
+  }
 });
 
-test('credentials are stored before the interaction, and the engine key is only a header', async () => {
+test('a client text approval never bypasses the external tool policy', async () => {
+  let calls = 0;
+  const result = await runAntigravity({ key: 'key', continueApproved: 'github.send_message', fetchImpl: async () => { calls++; } });
+  assert.equal(calls, 0);
+  assert.equal(result.status, 403);
+  assert.match(result.events[0].message, /text approval cannot authorize/);
+});
+
+test('an offline run uses only its explicit key header and reports completed work honestly', async () => {
   const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, body: init.body, key: init.headers['x-goog-api-key'] });
-    return { ok: true, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ output_text: 'done', environment_id: 'sandbox-1' }) };
-  };
-  const result = await runAntigravity({
-    key: 'engine-key',
-    input: 'draft the note',
-    skills: [{ name: 'github', url: 'https://api.githubcopilot.com/mcp/', token: 'ghp-secret', enabled: true }],
-    fetchImpl,
-  });
-  assert.equal(calls[0].url.endsWith('/credentials'), true);
-  assert.equal(calls[1].url.endsWith('/interactions'), true);
-  assert.equal(calls[1].key, 'engine-key');
-  assert.equal(calls[1].body.includes('engine-key'), false);
-  assert.equal(calls[1].body.includes('ghp-secret'), false);
-  assert.equal(calls[1].body.includes('antigravity-preview-09-2026'), true);
-  assert.equal(result.events.some(event => event.type === 'environment' && event.id === 'sandbox-1'), true);
+  const result = await runAntigravity({ key: 'engine-key', input: 'draft the note', skills: [{ demo: true }, { enabled: false }], fetchImpl: async (url, init) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({ output_text: 'done', environment_id: 'sandbox-1', steps: [{ name: 'send_message', result: 'unexpected completed event' }] }), { headers: { 'Content-Type': 'application/json' } });
+  } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.endsWith('/interactions'), true);
+  assert.equal(calls[0].init.headers['x-goog-api-key'], 'engine-key');
+  assert.equal(calls[0].init.body.includes('engine-key'), false);
+  assert.equal(result.events.some(event => event.type === 'approval'), false);
   assert.equal(result.events.at(-1).type, 'done');
 });
 
-test('a missing engine key does not fall through to a fetch', async () => {
-  let called = false;
-  const result = await runAntigravity({ key: '   ', input: 'go', fetchImpl: async () => { called = true; return { ok: false }; } });
-  assert.equal(called, false);
-  assert.equal(result.status, 403);
-  assert.match(result.events[0].message, /Gemini chat key is not used/);
+test('missing personal key never uses an operator environment key', async () => {
+  let calls = 0;
+  const engine = createEngine({ env: { ANTIGRAVITY_API_KEY: 'operator-secret' }, fetchImpl: async () => { calls++; } });
+  const req = Readable.from([Buffer.from('{"input":"go"}')]);
+  Object.assign(req, { url: '/api/engine', method: 'POST', headers: {} });
+  let status, response;
+  const res = { writeHead(value) { status = value; }, end(value) { response = value; } };
+  assert.equal(await engine(req, res), true);
+  assert.equal(calls, 0);
+  assert.equal(status, 403);
+  assert.match(response, /Gemini chat key is not used/);
 });

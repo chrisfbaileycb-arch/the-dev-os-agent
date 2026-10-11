@@ -40,7 +40,7 @@ const TABS: { id: ConnectorTab; label: string; icon: typeof GithubMark; blurb: s
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
 export default function Connectors(p: ConnectorsProps) {
-  const [url, setUrl] = useState(''); const [name, setName] = useState(''); const [token, setToken] = useState(''); const [saveToken, setSaveToken] = useState(false);
+  const [url, setUrl] = useState(''); const [name, setName] = useState(''); const [token, setToken] = useState(''); const saveToken = false;
   const [transport, setTransport] = useState<McpTransport | 'auto'>('auto');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -76,7 +76,7 @@ export default function Connectors(p: ConnectorsProps) {
     catch { p.notify('Enter the server\'s https URL, for example https://mcp.example.com/mcp'); return; }
     const conn: McpConnection = { id: crypto.randomUUID(), name: name.trim() || parsed.host, url: parsed.toString(), transport: transport === 'auto' ? guessTransport(parsed.toString()) : transport, token: token.trim(), saveToken, enabled: true, tools: [] };
     setBusyId(conn.id); const checked = await check(conn); setBusyId(null);
-    p.setMcp([checked, ...p.mcp]); setName(''); setUrl(''); setToken(''); setSaveToken(false); setTransport('auto');
+    p.setMcp([checked, ...p.mcp]); setName(''); setUrl(''); setToken(''); setTransport('auto');
     p.notify(checked.error ? `Added ${checked.name}, but it did not answer: ${checked.error}` : `Connected ${checked.name}: ${checked.tools.length} tool${checked.tools.length === 1 ? '' : 's'} available to your agents.`);
   }
   async function refresh(conn: McpConnection) { setBusyId(conn.id); const checked = await check(conn); setBusyId(null); p.setMcp(p.mcp.map(c => c.id === conn.id ? checked : c)); }
@@ -151,7 +151,6 @@ export default function Connectors(p: ConnectorsProps) {
         <div className="panel-head"><h3>GitHub</h3><label className="switch"><input type="checkbox" checked={p.settings.github.enabled} onChange={e => patch({ github: { ...p.settings.github, enabled: e.target.checked } })} />Enabled</label></div>
         <p className="help">Read-only for your agents: they get <code>github_repo</code> (description, README, or any text file), <code>github_files</code> (the file listing), and <code>github_issues</code> (recent issues, or one issue with its comments) — nothing they call can write to a repository. The one write in this app lives elsewhere: the "Push to GitHub" button on a generated app's Output panel, which commits with this same token and needs one scoped for write access to push.</p>
         <label>Personal access token (optional)<input type="password" autoComplete="off" spellCheck={false} value={p.settings.github.token} placeholder="ghp_… for private repos and a higher rate limit" onChange={e => patch({ github: { ...p.settings.github, token: e.target.value } })} /></label>
-        <label className="check"><input type="checkbox" checked={p.settings.github.saveToken} onChange={e => patch({ github: { ...p.settings.github, saveToken: e.target.checked } })} />Remember this token in this browser</label>
         <p className="help">Without a token GitHub allows 60 calls an hour and public repositories only. A fine-grained token with read-only Contents and Issues access raises that to 5,000 and reaches your private repositories for reading; add write access to Contents on the same token if you also want to use "Push to GitHub". The token is sent to GitHub through this app's proxy and is never stored on the server.</p>
       </section>}
 
@@ -286,9 +285,8 @@ export default function Connectors(p: ConnectorsProps) {
               <option value="sse">HTTP+SSE (legacy /sse)</option>
             </select></label>
           </div>
-          <label className="check"><input type="checkbox" checked={saveToken} onChange={e => setSaveToken(e.target.checked)} />Remember the token in this browser</label>
           <div className="row gap"><button className="button primary small" disabled={!url.trim() || !!urlError || busyId !== null} onClick={() => void addMcp()}>{busyId && !p.mcp.some(c => c.id === busyId) ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}Connect and list tools</button></div>
-          <p className="help">The token is sent securely to that server through this app's proxy and stays in memory unless remembered.</p>
+          <p className="help">The token is sent securely to that server through this app's proxy and stays in page memory until reload or tab close. Never paste it into chat or skills.</p>
         </section>
         {p.mcp.map(c => <section key={c.id} className="panel mcp-row">
           <div className="panel-head"><div><strong>{c.name}</strong><small className="mono"> {host(c.url)} · {c.transport === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'}</small></div><label className="switch"><input type="checkbox" checked={c.enabled} onChange={e => p.setMcp(p.mcp.map(x => x.id === c.id ? { ...x, enabled: e.target.checked } : x))} />Enabled</label></div>

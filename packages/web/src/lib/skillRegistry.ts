@@ -1,3 +1,4 @@
+import { sessionSecret, setSessionSecret } from './sessionSecrets';
 // Skills are markdown pathways. A file says what the skill does, when to use it, and the steps.
 // Turning one on hands those words to chat and to a workflow. It does not run a server.
 //
@@ -89,7 +90,10 @@ export function loadSkillState(): SkillState[] {
       if (!saved) return item;
       const config: Record<string, string> = {};
       if (saved.config && typeof saved.config === 'object') {
-        for (const [k, v] of Object.entries(saved.config)) if (typeof v === 'string') config[k] = v.slice(0, 500);
+        for (const field of skillById(item.id)?.fields ?? []) {
+          const v = field.secret ? sessionSecret(`skill:${item.id}:${field.key}`) : saved.config[field.key];
+          if (typeof v === 'string') config[field.key] = v.slice(0, 500);
+        }
       }
       return { id: item.id, enabled: saved.enabled === true, config };
     });
@@ -97,7 +101,15 @@ export function loadSkillState(): SkillState[] {
 }
 
 export function saveSkillState(list: SkillState[]): void {
-  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { /* this browser refused storage */ }
+  const clean = list.map(row => {
+    const config: Record<string, string> = {};
+    for (const field of skillById(row.id)?.fields ?? []) {
+      if (field.secret) setSessionSecret(`skill:${row.id}:${field.key}`, row.config[field.key] ?? '');
+      else if (typeof row.config[field.key] === 'string') config[field.key] = row.config[field.key];
+    }
+    return { ...row, config };
+  });
+  try { localStorage.setItem(KEY, JSON.stringify(clean)); } catch { /* this browser refused storage */ }
 }
 
 export function loadYourSkills(): YourSkill[] {
@@ -226,7 +238,7 @@ export function liveMcpConnections(state: SkillState[]) {
     url: skill.url,
     transport: 'http' as const,
     token: skill.token ?? '',
-    saveToken: Boolean(skill.token),
+    saveToken: false,
     enabled: true,
     tools: [] as [],
   }));

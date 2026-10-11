@@ -1,3 +1,4 @@
+import { sessionSecret, setSessionSecret } from './sessionSecrets';
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
 export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'nvidia' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
@@ -136,7 +137,7 @@ export function zeroConfigConnection(): Connection {
 }
 export function loadConnection(provider: Provider): Connection {
   if (profiles.has(provider)) return { ...profiles.get(provider)! };
-  const base = defaultConnection(provider);
+  const base = { ...defaultConnection(provider), token: sessionSecret(`provider:${provider}`) };
   try {
     const stored = JSON.parse(localStorage.getItem(`ft-provider-${provider}`) || '{}');
     const model = typeof stored.model === 'string' ? stored.model : base.model;
@@ -146,7 +147,7 @@ export function loadConnection(provider: Provider): Connection {
       && (OUTPUT_LIMITS.includes(stored.maxTokens) || stored.customOutputLimit === true);
     const customOutputLimit = validLimit && (typeof stored.customOutputLimit === 'boolean' ? stored.customOutputLimit : ![1024, 8192, 16384].includes(stored.maxTokens));
     const maxTokens = validLimit && (customOutputLimit || stored.maxTokens > 1024 && stored.maxTokens !== 8192) ? stored.maxTokens : DEFAULT_OUTPUT_TOKENS;
-    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens, customOutputLimit, inference, token: stored.saveKey === true && typeof stored.token === 'string' ? stored.token : '', saveKey: stored.saveKey === true };
+    return { ...base, endpoint: provider === 'custom' && typeof stored.endpoint === 'string' ? stored.endpoint : base.endpoint, model, maxTokens, customOutputLimit, inference, token: sessionSecret(`provider:${provider}`), saveKey: false };
   } catch { return base; }
 }
 /**
@@ -161,24 +162,26 @@ export function initialProvider(): Connection {
 export function switchProvider(current: Connection, provider: Provider): Connection { profiles.set(current.provider || 'custom', { ...current }); return { ...loadConnection(provider), mode: 'remote' }; }
 export function persistConnection(c: Connection): void {
   const provider = c.provider || 'custom';
-  localStorage.setItem(`ft-provider-${provider}`, JSON.stringify({ endpoint: c.endpoint, model: c.model, maxTokens: c.maxTokens, customOutputLimit: Boolean(c.customOutputLimit), inference: MODES.includes(c.inference as InferenceMode) ? c.inference : 'byok', saveKey: Boolean(c.saveKey), ...(c.saveKey ? { token: c.token } : {}) }));
-  localStorage.setItem('ft-active-provider', provider); profiles.set(provider, { ...c });
+  setSessionSecret(`provider:${provider}`, c.token);
+  try {
+    localStorage.setItem(`ft-provider-${provider}`, JSON.stringify({ endpoint: c.endpoint, model: c.model, maxTokens: c.maxTokens, customOutputLimit: Boolean(c.customOutputLimit), inference: MODES.includes(c.inference as InferenceMode) ? c.inference : 'byok', saveKey: false }));
+    localStorage.setItem('ft-active-provider', provider);
+  } catch { /* Preferences can remain in page memory when storage is unavailable. */ }
+  profiles.set(provider, { ...c, saveKey: false });
 }
 export function forgetKeys(): void {
-  const active = localStorage.getItem('ft-active-provider');
-  for (const provider of Object.keys(providers) as Provider[]) { const c = loadConnection(provider); c.token = ''; c.saveKey = false; c.serverAccessToken = ''; profiles.set(provider, c); persistConnection(c); }
-  if (active) localStorage.setItem('ft-active-provider', active); else localStorage.removeItem('ft-active-provider');
+  for (const provider of Object.keys(providers) as Provider[]) {
+    setSessionSecret(`provider:${provider}`, '');
+    const c = loadConnection(provider); c.token = ''; c.saveKey = false; c.serverAccessToken = '';
+    profiles.set(provider, c);
+    try {
+      const stored = JSON.parse(localStorage.getItem(`ft-provider-${provider}`) || '{}');
+      delete stored.token; delete stored.serverAccessToken; stored.saveKey = false;
+      localStorage.setItem(`ft-provider-${provider}`, JSON.stringify(stored));
+    } catch { /* Restricted storage. */ }
+  }
 }
-/**
- * The keyring: one saved key per provider, which is what a visitor with accounts at several of
- * them actually has. Keys were always stored per provider — switching provider has always
- * restored the key you last saved for it — but only the active one could be typed, so setting
- * up three meant switching three times and remembering to save in between.
- *
- * Reading returns a key for every provider, '' where none is saved, so a form can bind directly
- * to it. Nothing here reaches the network or the server: a key is attached to a request only
- * when that provider is the one running it.
- */
+/** One personal key per provider, held in page memory and never persisted. */
 export type Keyring = Record<Provider, string>;
 export const emptyKeyring = (): Keyring => Object.fromEntries((Object.keys(providers) as Provider[]).map(id => [id, ''])) as Keyring;
 
@@ -186,27 +189,23 @@ export function loadKeyring(): Keyring {
   const ring = emptyKeyring();
   for (const id of Object.keys(providers) as Provider[]) {
     const saved = loadConnection(id);
-    if (saved.saveKey && saved.token) ring[id] = saved.token;
+    if (saved.token) ring[id] = saved.token;
   }
   return ring;
 }
 
-/**
- * Write the keyring back, one stored profile per provider. A key that has been cleared clears
- * `saveKey` with it, so "delete this key" leaves nothing behind rather than an empty string
- * under a flag that says a key is remembered.
- */
+/** Keep each personal key in memory; persist only its non-secret connection preferences. */
 export function saveKeyring(ring: Partial<Keyring>): void {
-  for (const [id, key] of Object.entries(ring) as [Provider, string][]) {
-    if (!Object.hasOwn(providers, id)) continue;
-    const value = key.trim();
-    const saved = { ...loadConnection(id), token: value, saveKey: value.length > 0 };
+  for (const id of Object.keys(providers) as Provider[]) {
+    if (!Object.hasOwn(ring, id)) continue;
+    const value = typeof ring[id] === 'string' ? ring[id]!.trim() : '';
+    const saved = { ...loadConnection(id), token: value, saveKey: false };
+    setSessionSecret(`provider:${id}`, value);
     profiles.set(id, saved);
-    try { localStorage.setItem(`ft-provider-${id}`, JSON.stringify({ endpoint: saved.endpoint, model: saved.model, maxTokens: saved.maxTokens, inference: saved.inference ?? 'byok', saveKey: saved.saveKey, ...(saved.saveKey ? { token: value } : {}) })); } catch { /* storage unavailable */ }
+    try { localStorage.setItem(`ft-provider-${id}`, JSON.stringify({ endpoint: saved.endpoint, model: saved.model, maxTokens: saved.maxTokens, customOutputLimit: saved.customOutputLimit, inference: saved.inference ?? 'byok', saveKey: false })); } catch { /* Restricted storage. */ }
   }
 }
-
-export function clearProviderStorage(): void { profiles.clear(); for (const p of Object.keys(providers)) localStorage.removeItem(`ft-provider-${p}`); localStorage.removeItem('ft-active-provider'); }
+export function clearProviderStorage(): void { profiles.clear(); for (const p of Object.keys(providers)) { setSessionSecret(`provider:${p}`, ''); localStorage.removeItem(`ft-provider-${p}`); } localStorage.removeItem('ft-active-provider'); }
 
 /**
  * The connection as it goes over the wire. A zero-config run carries no secret at all — the

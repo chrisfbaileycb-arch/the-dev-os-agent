@@ -57,14 +57,10 @@ export default function Settings(p: SettingsProps) {
     p.setKeys({ ...p.keys, [id]: value });
     if (id === provider) set({ provider: id, endpoint: providers[id].endpoint, token: value, inference: 'byok', ...(c.provider !== id ? { model: flagshipFor(id) } : {}) });
   }
-  /**
-   * Switching provider keeps the Remember choice. It used to load the new provider's own flag —
-   * false for one never saved — and because Save writes the whole keyring under that one flag,
-   * switching to a new provider (say, xAI) and pressing Save wiped every key saved before it.
-   */
+  // A provider switch keeps only non-secret preferences across page sessions.
   function pickProvider(id: Provider) {
     const next = switchProvider(c, id);
-    p.setConnection({ ...next, serverAccessToken: c.serverAccessToken, mode: 'remote', inference: 'byok', saveKey: Boolean(c.saveKey || next.saveKey), model: next.model || flagshipFor(id) });
+    p.setConnection({ ...next, serverAccessToken: c.serverAccessToken, mode: 'remote', inference: 'byok', saveKey: false, model: next.model || flagshipFor(id) });
   }
   function pickModel(id: string) {
     if (id) set({ model: id, inference: 'byok' });
@@ -137,7 +133,6 @@ export default function Settings(p: SettingsProps) {
               </select></label>
             </div>
             <p className="help" role="status">{p.planChecking ? 'Verifying your plan…' : p.subscription ? `${p.subscription.plan.name} verified · ${p.subscription.pool.toLocaleString()} credits per month · up to ${p.subscription.plan.maxOutputTokens.toLocaleString()} output tokens per reply.` : p.planError || 'Enter your individual plan token to verify its tier and allowance.'}</p>
-            <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember this token in this browser</label>
           </> : <>
             <p className="help">Orator sends requests through its protected gateway. Select the provider you already use and enter its key — that is all. It starts on the provider's flagship model and reads the live catalog by itself; change the model here or from the dropdown on the prompt bar whenever you like. Your key is used only for that provider and is never bundled into the app.</p>
             <details className="free-keys">
@@ -170,15 +165,14 @@ export default function Settings(p: SettingsProps) {
             {live && !live.error && <p className="help">{choices.length.toLocaleString()} models this {providers[provider].name} key can call, read {new Date(live.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. The same list is in the chat window.</p>}
             {!live?.error && !choices.length && <p className="help">{checking ? 'Reading the models this key can call…' : 'Enter a key. The list is only the models that key can call.'}</p>}
             {live?.error && <p className="help" role="alert">Could not read the live list: {live.error}.</p>}
-            <label className="check"><input type="checkbox" disabled={p.busy} checked={Boolean(c.saveKey)} onChange={e => set({ saveKey: e.target.checked })} />Remember personal keys in this browser</label>
-            <p className="help">Keys stay in this browser only when you choose Remember. They are not sent to third-party scripts, placed in the app bundle, or returned by the server.</p>
           </>}
+            <p className="help">Security notice: personal keys and plan tokens stay in page memory and clear on reload or tab close. Hosted requests pass through this server to the selected provider. Never paste keys into chat or skills. Clearing a key here does not revoke it or stop a request already running; set spending limits at the provider.</p>
           <label>Longest reply<select aria-describedby="reply-length-help" value={effectiveOutputLimit(c, outputCap)} disabled={p.busy} onChange={e => set({ maxTokens: Number(e.target.value), customOutputLimit: true })}>
             {outputOptions.map(n => <option key={n} value={n}>{n.toLocaleString()} tokens{n === DEFAULT_OUTPUT_TOKENS ? ' (recommended)' : ''}</option>)}
           </select></label>
           <p className="help" id="reply-length-help">Managed replies use the backend limit by default. Choose a shorter reply here if you prefer. Remaining allowance and model limits can reduce the reply window. Personal keys are billed by the provider for actual usage.</p>
           {(managed || plan) && c.customOutputLimit && <button className="button small" disabled={p.busy} onClick={() => set({ maxTokens: outputCap, customOutputLimit: false })}>Use backend reply limit</button>}
-          <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={p.save}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={p.forget}><Trash2 size={13} />Forget saved keys</button></div>
+          <div className="row gap"><button className="button primary small" disabled={p.busy} onClick={p.save}><Check size={13} />Save connection</button><button className="button small" disabled={p.busy} onClick={p.forget}><Trash2 size={13} />Clear personal keys</button></div>
         </section>
 
         <section className="panel">
@@ -187,8 +181,7 @@ export default function Settings(p: SettingsProps) {
           <label className="check"><input type="checkbox" checked={p.pipes.ollamaEnabled} onChange={e => { p.setPipes({ ...p.pipes, ollamaEnabled: e.target.checked }); if (e.target.checked) p.discover('ollama'); }} />Connect a model running on this computer</label>
           {p.pipes.ollamaEnabled && <>
             <label>Local server API key (optional)<input type="password" autoComplete="off" spellCheck={false} value={p.keys.ollama || ''} placeholder="Only if your local server requires a token" onChange={e => { p.setKeys({ ...p.keys, ollama: e.target.value }); if (c.provider === 'ollama') set({ token: e.target.value }); }} /></label>
-            <label className="check"><input type="checkbox" checked={Boolean(c.saveKey)} disabled={p.busy} onChange={e => set({ saveKey: e.target.checked })} />Remember personal keys in this browser</label>
-            <p className="help">This token is sent only to the local server address below. Use Save connection with Remember enabled to keep it in this browser.</p>
+            <p className="help">This token is sent only to the local server address below. It stays in page memory and clears on reload or tab close.</p>
             <label>Address<input value={p.pipes.ollamaUrl} spellCheck={false} aria-invalid={Boolean(localEndpointError(p.pipes.ollamaUrl))} placeholder="http://localhost:1234/v1 (LM Studio) or http://localhost:11434/v1 (Ollama)" onChange={e => p.setPipes({ ...p.pipes, ollamaUrl: e.target.value })} onBlur={e => { if (!localEndpointError(e.target.value)) p.setPipes({ ...p.pipes, ollamaUrl: normalizeLocalEndpoint(e.target.value) }); }} /></label>
             {localEndpointError(p.pipes.ollamaUrl) && <p className="msg-error" role="alert">{localEndpointError(p.pipes.ollamaUrl)}</p>}
             <div className="row gap">
@@ -202,7 +195,7 @@ export default function Settings(p: SettingsProps) {
 
         <section className="panel">
           <h2><KeyRound size={15} strokeWidth={1.75} /> Experiment</h2>
-          <p className="help">{EXPERIMENT_SUBTITLE} These keys stay in this browser. They are not the free tier and they are not Shield.</p>
+          <p className="help">{EXPERIMENT_SUBTITLE} These keys stay in page memory and clear on reload or tab close. They are not the free tier and they are not Shield.</p>
           <label>OpenRouter<input type="password" autoComplete="off" spellCheck={false} value={p.keys.openrouter || ''} placeholder="sk-or-…" onChange={e => p.setKeys({ ...p.keys, openrouter: e.target.value })} /></label>
           <label>Hugging Face<input type="password" autoComplete="off" spellCheck={false} value={p.keys.huggingface || ''} placeholder="hf_… Inference Providers router" onChange={e => p.setKeys({ ...p.keys, huggingface: e.target.value })} /></label>
           <p className="help">Hugging Face uses router.huggingface.co. Pin a model from its catalog inside the Experiment menu.</p>
@@ -210,7 +203,7 @@ export default function Settings(p: SettingsProps) {
 
         <section className="panel">
           <h2><KeyRound size={15} strokeWidth={1.75} /> Execution engine</h2>
-          <p className="help">Google's hosted Linux sandbox. Not a chat model, and not the Gemini chat key unless you paste that key into this box. Off until it is saved. Shield-eligible because Google hosts it in the US. Not on the free tier.</p>
+          <p className="help">Google's hosted execution sandbox uses its own session key. Sandbox network access and live connectors are disabled until per-action approvals are available. Runs can still incur provider charges; a token cap is not a dollar spending limit.</p>
           <label>Engine key<input type="password" autoComplete="off" spellCheck={false} value={p.engineKey ?? ''} placeholder="A Gemini API key, used only for this slot" onChange={e => p.setEngineKey?.(e.target.value)} /></label>
         </section>
 

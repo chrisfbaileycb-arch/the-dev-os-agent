@@ -12,7 +12,7 @@ import type { Knowledge } from './types';
 //   mcp        tools exposed by remote Model Context Protocol servers, through /api/mcp
 //
 // Each connector's settings live in localStorage; secrets (a GitHub token, an MCP bearer) stay
-// in memory for the session unless the person explicitly asks to remember them.
+// in memory for the session and are never written to browser storage.
 //
 // `pushProject` below is the one write path in the whole hub: the Output panel's "Push to
 // GitHub" button, not a model-callable tool, and it always sends the visitor's own token —
@@ -41,8 +41,8 @@ export function loadSettings(): ConnectorSettings {
     return {
       github: {
         enabled: stored.github?.enabled === true,
-        token: stored.github?.saveToken && typeof stored.github.token === 'string' ? stored.github.token : sessionToken,
-        saveToken: stored.github?.saveToken === true,
+        token: sessionToken,
+        saveToken: false,
         repos: Array.isArray(stored.github?.repos) ? stored.github.repos.filter(r => typeof r === 'string').slice(0, 10) : [],
       },
       web: { enabled: stored.web?.enabled !== false },
@@ -53,7 +53,7 @@ export function loadSettings(): ConnectorSettings {
 
 export function saveSettings(settings: ConnectorSettings): void {
   sessionToken = settings.github.token;
-  try { localStorage.setItem(KEY, JSON.stringify({ ...settings, github: { ...settings.github, token: settings.github.saveToken ? settings.github.token : '' } })); }
+  try { localStorage.setItem(KEY, JSON.stringify({ ...settings, github: { ...settings.github, token: '', saveToken: false } })); }
   catch { /* storage unavailable; settings hold for this session */ }
 }
 export function clearSettings(): void { sessionToken = ''; try { localStorage.removeItem(KEY); } catch { /* storage unavailable */ } }

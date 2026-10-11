@@ -9,20 +9,20 @@
 export const ANTIGRAVITY_AGENT = 'antigravity-preview-09-2026';
 export const ANTIGRAVITY_MODEL = 'gemini-3.8-flash';
 export const ANTIGRAVITY_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
-export const CREDENTIALS_URL = 'https://generativelanguage.googleapis.com/v1beta/credentials';
 export const DEFAULT_MAX_TOTAL_TOKENS = 50_000;
 const TOKEN_FLOOR = 1_000;
 const TOKEN_CEILING = 200_000;
+// External tools cannot be safely gated once Google's managed loop owns them.
+// Keep execution offline until an app-controlled, per-action approval dispatcher exists.
+const DEFAULT_TOOLS = [{ type: 'code_execution' }];
 
-const DEFAULT_TOOLS = [
-  { type: 'code_execution' },
-  { type: 'google_search' },
-  { type: 'url_context' },
-];
-
-// A tool whose name says it spends money, sends a message, or is an MCP call the sandbox
-// would make on the visitor's behalf. The default tools stay inside Google's sandbox.
-const LEAVES_SANDBOX = /(pay|stripe|charge|invoice|billing|checkout|sms|twilio|send[_-]?mail|send[_-]?message|slack|email|discord|whatsapp)/i;
+export function enginePolicyError({ skills, continueApproved } = {}) {
+  if (continueApproved) return 'A text approval cannot authorize an external tool. Start a new offline run; connector approvals require the application-controlled dispatcher.';
+  if (Array.isArray(skills) && skills.some(skill => skill && !skill.demo && skill.enabled !== false)) {
+    return 'External connectors are disabled for the managed engine until per-action approvals are implemented. Turn off live connectors to run offline. No connector credentials or run request were sent.';
+  }
+  return '';
+}
 
 export function clampTokenCap(value) {
   const n = Number(value);
@@ -30,66 +30,25 @@ export function clampTokenCap(value) {
   return Math.min(TOKEN_CEILING, Math.max(TOKEN_FLOOR, Math.floor(n)));
 }
 
-/** MCP tool names must match ^[a-z0-9_-]+$. Anything else is rewritten, never forwarded raw. */
-export function mcpToolName(name) {
-  const clean = String(name ?? '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
-  return clean || 'skill';
-}
-
-/**
- * Live skills only. Demo entries, empty URLs, and SSE transports are dropped.
- * The token is not placed on the tool. It is stored with the Credentials API and referenced by id.
- * @param {Array<{ name?: string, url?: string, token?: string, transport?: string, demo?: boolean, enabled?: boolean }>} skills
- */
-export function liveMcpTools(skills) {
-  const tools = [];
-  const credentials = [];
-  const seen = new Set();
-  for (const skill of Array.isArray(skills) ? skills : []) {
-    if (!skill || skill.demo || skill.enabled === false) continue;
-    if (skill.transport === 'sse') continue;
-    const url = typeof skill.url === 'string' ? skill.url.trim() : '';
-    if (!/^https:\/\//.test(url)) continue;
-    let name = mcpToolName(skill.name);
-    while (seen.has(name)) name = `${name}-${seen.size}`.slice(0, 48);
-    seen.add(name);
-    const tool = { type: 'mcp_server', name, url };
-    const token = typeof skill.token === 'string' ? skill.token.trim() : '';
-    if (token) {
-      const id = `sf-${name}`.slice(0, 64);
-      tool.credential = id;
-      credentials.push({ id, type: 'bearer_token', token });
-    }
-    tools.push(tool);
-  }
-  return { tools, credentials };
-}
-
-/** The interactions body. Temperature and other generation params are never copied in. */
+/** Offline interactions only. A reused environment also has its network rules replaced. */
 export function interactionBody({ input, environmentId, maxTotalTokens, skills, continueApproved }) {
-  const { tools } = liveMcpTools(skills);
-  const body = {
+  const error = enginePolicyError({ skills, continueApproved });
+  if (error) throw new Error(error);
+  return {
     agent: ANTIGRAVITY_AGENT,
-    input: typeof input === 'string' && input.trim() ? input.trim().slice(0, 32_000) : 'Continue the current task inside the sandbox.',
+    input: typeof input === 'string' && input.trim() ? input.trim().slice(0, 32_000) : 'Continue the current task inside the offline sandbox.',
     agent_config: {
       type: 'antigravity',
       model: ANTIGRAVITY_MODEL,
       max_total_tokens: clampTokenCap(maxTotalTokens),
     },
-    tools: [...DEFAULT_TOOLS, ...tools],
+    tools: DEFAULT_TOOLS.map(tool => ({ ...tool })),
+    environment: {
+      type: 'remote',
+      network: 'disabled',
+      ...(typeof environmentId === 'string' && environmentId.trim() ? { environment_id: environmentId.trim().slice(0, 200) } : {}),
+    },
   };
-  if (typeof environmentId === 'string' && environmentId.trim()) body.environment_id = environmentId.trim().slice(0, 200);
-  else body.environment = 'remote';
-  if (continueApproved) body.input = `The operator approved "${String(continueApproved).slice(0, 80)}". Continue inside the sandbox. Do not spend money, send a message, or call a connector that leaves the sandbox unless that approval names it.`;
-  return body;
-}
-
-/** True when a streamed tool should stop for the visitor before it leaves the sandbox. */
-export function needsApproval(toolName) {
-  const name = String(toolName ?? '');
-  if (!name) return false;
-  if (['code_execution', 'google_search', 'url_context', 'filesystem'].includes(name)) return false;
-  return LEAVES_SANDBOX.test(name) || name.startsWith('mcp:') || name.startsWith('sf-');
 }
 
 function textFrom(value) {
@@ -131,7 +90,7 @@ async function readJson(response) {
 
 /**
  * Run one interactions call. `fetchImpl` is injectable. Emits our own SSE events:
- * plan, tool, environment, delta, approval, error, done.
+ * plan, tool, environment, delta, error, done.
  * The engine key is sent only as x-goog-api-key. It is never written into the JSON body.
  */
 export async function runAntigravity({ key, input, environmentId, maxTotalTokens, skills, continueApproved, fetchImpl = fetch, signal }) {
@@ -139,21 +98,9 @@ export async function runAntigravity({ key, input, environmentId, maxTotalTokens
   if (!trimmed) {
     return { status: 403, events: [{ type: 'error', message: 'The execution engine is off until its own key is saved. The Gemini chat key is not used.' }] };
   }
-  const { credentials } = liveMcpTools(skills);
+  const policyError = enginePolicyError({ skills, continueApproved });
+  if (policyError) return { status: 403, events: [{ type: 'error', message: policyError }] };
   const events = [];
-  for (const credential of credentials) {
-    const saved = await fetchImpl(CREDENTIALS_URL, {
-      method: 'POST',
-      signal,
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': trimmed },
-      body: JSON.stringify(credential),
-    });
-    if (!saved.ok) {
-      const body = await readJson(saved);
-      const message = body?.error?.message || `Could not store a connector credential (HTTP ${saved.status}). The run was not started.`;
-      return { status: 502, events: [{ type: 'error', message }] };
-    }
-  }
   const body = interactionBody({ input, environmentId, maxTotalTokens, skills, continueApproved });
   const upstream = await fetchImpl(ANTIGRAVITY_URL, {
     method: 'POST',
@@ -187,12 +134,7 @@ export async function runAntigravity({ key, input, environmentId, maxTotalTokens
       }
     }
   }
-  for (const event of events) {
-    if (event.type === 'tool' && needsApproval(event.name)) {
-      events.push({ type: 'approval', name: event.name, detail: event.detail || '' });
-      return { status: 200, events, held: true };
-    }
-  }
+  // Tool events describe completed upstream work; they are never presented as approvals.
   events.push({ type: 'done' });
   return { status: 200, events, held: false };
 }
@@ -208,7 +150,7 @@ export function writeSse(res, events) {
   res.end();
 }
 
-export function createEngine({ env: baseEnv = process.env, settings = null } = {}) {
+export function createEngine({ fetchImpl = fetch } = {}) {
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://engine').pathname;
     if (path !== '/api/engine') return false;
@@ -223,15 +165,13 @@ export function createEngine({ env: baseEnv = process.env, settings = null } = {
     let body = {};
     try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { res.writeHead(400); res.end('{"error":{"message":"Invalid JSON."}}'); return true; }
     const headerKey = typeof req.headers['x-engine-key'] === 'string' ? req.headers['x-engine-key'] : '';
-    const env = settings?.env ? settings.env(baseEnv) : baseEnv;
-    const stored = typeof env.ANTIGRAVITY_API_KEY === 'string' ? env.ANTIGRAVITY_API_KEY : '';
-    // The header is the browser slot. The stored admin secret is used only when the header is empty.
-    // GOOGLE_API_KEY is intentionally not consulted.
-    const key = headerKey.trim() || stored.trim();
+    // Only the visitor's explicit session credential is used. No operator-funded fallback.
+    const key = headerKey.trim();
     const skills = Array.isArray(body.skills) ? body.skills.slice(0, 24) : [];
     try {
       const result = await runAntigravity({
         key,
+        fetchImpl,
         input: body.input,
         environmentId: body.environmentId,
         maxTotalTokens: body.maxTotalTokens,

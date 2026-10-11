@@ -129,7 +129,7 @@ export default function GithubSyncDrawer(p: GithubSyncDrawerProps) {
           <button className="icon-button" aria-label={revealToken ? 'Hide token' : 'Show token'} title={revealToken ? 'Hide token' : 'Show token'} onClick={() => setRevealToken(v => !v)}>{revealToken ? <Eye size={13} /> : <FileCode2 size={13} />}</button>
         </span>
       </label>
-      <p className="help">Create one at github.com → Settings → Developer settings → Fine-grained or classic tokens, with <code>repo</code> read/write. It is stored in this browser only and sent straight to api.github.com — never to this app's server.</p>
+      <p className="help">Create one at github.com → Settings → Developer settings → Fine-grained or classic tokens, with <code>repo</code> read/write. It stays in page memory until reload or tab close and is sent directly to api.github.com. Clearing it here does not revoke the token; use a limited-scope token and never paste it into chat.</p>
 
       <div className="form-grid">
         <label className="grow">Repository

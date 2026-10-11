@@ -1,5 +1,7 @@
 # Signal Forge OS: deployment diagnosis and execution harness assessment
 
+Follow-up: [Agent libraries, session-only keys, engine restrictions, and next execution milestone](agent-libraries-and-execution-next-steps.md). The follow-up supersedes the engine approval/operator-fallback findings below.
+
 Reviewed October 10, 2026 (America/Denver). This is a source inspection and deployment HTTP assessment, not a certification of every model or integration.
 
 Source snapshots:

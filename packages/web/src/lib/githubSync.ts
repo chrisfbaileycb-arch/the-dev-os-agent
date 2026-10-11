@@ -1,3 +1,4 @@
+import { sessionSecret, setSessionSecret } from './sessionSecrets';
 // GitHub Repository Sync: the browser-side half of pushing and pulling a single workspace file.
 //
 // The connectors hub already has a write path — `pushProject` in lib/connectors.ts posts to
@@ -204,7 +205,7 @@ export function loadSyncSettings(): GithubSyncSettings {
   try {
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') as Partial<GithubSyncSettings>;
     return {
-      token: typeof stored.token === 'string' ? stored.token : '',
+      token: sessionSecret('github-sync'),
       repo: typeof stored.repo === 'string' ? stored.repo : '',
       branch: typeof stored.branch === 'string' && stored.branch.trim() ? stored.branch : DEFAULT_BRANCH,
       path: typeof stored.path === 'string' ? stored.path : '',
@@ -213,16 +214,11 @@ export function loadSyncSettings(): GithubSyncSettings {
   } catch { return base; }
 }
 
-/**
- * Save the sync settings. The token goes to localStorage with everything else on this device.
- *
- * That is the same trade the provider keyring already makes, and it is the only way this feature
- * works at all: the app ships a zero-backend static build too, and a token held in memory alone
- * would mean re-pasting it on every reload. It is also why the field is masked, why the drawer
- * says plainly that the token is stored in this browser, and why "Forget" sits next to Save.
- */
+/** Save preferences, keeping the personal token only in page memory. */
 export function saveSyncSettings(settings: GithubSyncSettings): void {
-  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* storage unavailable; the settings hold for this session */ }
+  setSessionSecret('github-sync', settings.token);
+  const { token: _token, ...preferences } = settings;
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(preferences)); } catch { /* Restricted storage. */ }
 }
 
-export function clearSyncSettings(): void { try { localStorage.removeItem(SETTINGS_KEY); } catch { /* storage unavailable */ } }
+export function clearSyncSettings(): void { setSessionSecret('github-sync', ''); try { localStorage.removeItem(SETTINGS_KEY); } catch { /* storage unavailable */ } }

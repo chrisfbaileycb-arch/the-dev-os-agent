@@ -426,12 +426,7 @@ describe('native provider stream shapes', () => {
 });
 
 describe('the provider keyring', () => {
-  // A visitor who already pays OpenAI and Anthropic holds two keys, not one. Keys were always
-  // stored per provider; what was missing was a way to enter more than the active one.
-  //
-  // Each case reloads the module after writing, because the round trip being tested is through
-  // localStorage — an in-process cache answering from memory would prove nothing about what a
-  // returning visitor gets.
+  // Keys remain available during this page session, but a new module graph represents reload.
   function stubStorage() {
     const data = new Map<string, string>();
     vi.stubGlobal('localStorage', {
@@ -446,8 +441,8 @@ describe('the provider keyring', () => {
 
   it('keeps one key per provider and hands each back to its own provider', async () => {
     stubStorage();
-    (await reload()).saveKeyring({ openai: 'sk-openai', anthropic: 'sk-ant', google: 'goog' });
     const fresh = await reload();
+    fresh.saveKeyring({ openai: 'sk-openai', anthropic: 'sk-ant', google: 'goog' });
     const ring = fresh.loadKeyring();
     expect(ring.openai).toBe('sk-openai');
     expect(ring.anthropic).toBe('sk-ant');
@@ -455,6 +450,7 @@ describe('the provider keyring', () => {
     // Switching to a provider picks up that provider's key, so the model decides which is spent.
     expect(fresh.switchProvider(fresh.defaultConnection('groq'), 'anthropic').token).toBe('sk-ant');
     expect(fresh.switchProvider(fresh.defaultConnection('groq'), 'openai').token).toBe('sk-openai');
+    expect((await reload()).loadKeyring().openai).toBe('');
   });
 
   it('clears the stored key rather than remembering an empty one', async () => {

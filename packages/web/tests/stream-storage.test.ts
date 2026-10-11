@@ -45,7 +45,7 @@ describe('incremental streaming edge cases', () => {
 describe('per-provider browser key storage', () => {
   function setup() { const values = new Map<string,string>(); vi.stubGlobal('localStorage',{getItem:(k:string)=>values.get(k)??null,setItem:(k:string,v:string)=>values.set(k,v),removeItem:(k:string)=>values.delete(k)}); clearProviderStorage(); return values; }
   it('does not persist keys unless explicitly enabled and never persists server access tokens',()=>{const values=setup();persistConnection({...defaultConnection('groq'),token:'user-secret',serverAccessToken:'server-access'});expect(values.get('ft-provider-groq')).not.toContain('user-secret');expect(values.get('ft-provider-groq')).not.toContain('server-access');});
-  it('persists opted-in keys separately and remembers active provider',()=>{const values=setup();persistConnection({...defaultConnection('groq'),token:'user-secret',saveKey:true});expect(JSON.parse(values.get('ft-provider-groq')!).token).toBe('user-secret');expect(initialProvider().provider).toBe('groq');const openrouter=switchProvider(initialProvider(),'openrouter');expect(openrouter.token).toBe('');});
+  it('keeps keys in memory even for a legacy opt-in and remembers provider preferences',()=>{const values=setup();persistConnection({...defaultConnection('groq'),token:'user-secret',saveKey:true});expect(values.get('ft-provider-groq')).not.toContain('user-secret');expect(initialProvider().token).toBe('user-secret');expect(initialProvider().provider).toBe('groq');const openrouter=switchProvider(initialProvider(),'openrouter');expect(openrouter.token).toBe('');});
   it('removes saved keys when persistence is disabled',()=>{const values=setup();persistConnection({...defaultConnection('groq'),token:'user-secret',saveKey:true});persistConnection({...defaultConnection('groq'),token:'user-secret',saveKey:false});expect(values.get('ft-provider-groq')).not.toContain('user-secret');});
   it('forget all clears keys without changing active provider',()=>{const values=setup();persistConnection({...defaultConnection('groq'),token:'groq-test',saveKey:true});persistConnection({...defaultConnection('cohere'),token:'cohere-test',saveKey:true});forgetKeys();expect(values.get('ft-active-provider')).toBe('cohere');expect([...values.values()].join(' ')).not.toContain('groq-test');expect([...values.values()].join(' ')).not.toContain('cohere-test');});
 });
@@ -120,10 +120,10 @@ describe('loadConnection', () => {
     expect(effectiveOutputLimit({ ...migrated, inference: 'byok' }, 65000)).toBe(16384);
   });
 
-  it('loads token only if saveKey is true', () => {
+  it('never restores a legacy saved token', () => {
     const storage = setup();
     storage.set('ft-provider-cohere', JSON.stringify({ saveKey: true, token: 'my-secret' }));
-    expect(loadConnection('cohere').token).toBe('my-secret');
+    expect(loadConnection('cohere').token).toBe('');
 
     storage.set('ft-provider-cohere', JSON.stringify({ saveKey: false, token: 'my-secret' }));
     expect(loadConnection('cohere').token).toBe('');

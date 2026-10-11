@@ -2,7 +2,7 @@ import { workspaceId } from './store';
 import type { ToolSpec } from './tools';
 
 // Connected MCP servers. Connections live in localStorage; the bearer token stays in memory
-// unless the person chooses to remember it. Calls go through /api/mcp, which does the
+// and is never written to browser storage. Calls go through /api/mcp, which does the
 // handshake and the safety checks. Tools from enabled servers become chat tools.
 //
 // Two transports, because servers in the wild speak both: Streamable HTTP (MCP 2025-06-18, one
@@ -21,12 +21,13 @@ const tokens = new Map<string, string>();
 export function loadConnections(): McpConnection[] {
   try {
     const list = JSON.parse(localStorage.getItem(KEY) || '[]') as Partial<McpConnection>[];
-    return list.filter(c => typeof c.id === 'string' && typeof c.url === 'string').map(c => ({ id: c.id!, name: typeof c.name === 'string' ? c.name : 'MCP server', url: c.url!, transport: c.transport === 'sse' ? 'sse' : 'http', token: c.saveToken && typeof c.token === 'string' ? c.token : (tokens.get(c.id!) ?? ''), saveToken: Boolean(c.saveToken), enabled: c.enabled !== false, tools: Array.isArray(c.tools) ? c.tools as McpTool[] : [], checkedAt: c.checkedAt, error: c.error }));
+    return list.filter(c => typeof c.id === 'string' && typeof c.url === 'string').map(c => ({ id: c.id!, name: typeof c.name === 'string' ? c.name : 'MCP server', url: c.url!, transport: c.transport === 'sse' ? 'sse' : 'http', token: tokens.get(c.id!) ?? '', saveToken: false, enabled: c.enabled !== false, tools: Array.isArray(c.tools) ? c.tools as McpTool[] : [], checkedAt: c.checkedAt, error: c.error }));
   } catch { return []; }
 }
 export function saveConnections(list: McpConnection[]): void {
+  tokens.clear();
   for (const c of list) tokens.set(c.id, c.token);
-  try { localStorage.setItem(KEY, JSON.stringify(list.map(c => ({ ...c, token: c.saveToken ? c.token : '' })))); } catch { /* storage unavailable; connections stay for this session */ }
+  try { localStorage.setItem(KEY, JSON.stringify(list.map(c => ({ ...c, token: '', saveToken: false })))); } catch { /* storage unavailable; connections stay for this session */ }
 }
 export function clearConnections(): void { tokens.clear(); try { localStorage.removeItem(KEY); } catch { /* storage unavailable */ } }
 

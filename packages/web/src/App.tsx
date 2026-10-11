@@ -1,3 +1,4 @@
+import { sessionSecret, setSessionSecret, clearSessionSecrets } from './lib/sessionSecrets';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CircleAlert, CircleCheck, Download, GitBranch, KeyRound, MonitorDown, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
 import Rail, { type Page } from './ui/Rail';
@@ -93,7 +94,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const canInstall = useInstallAvailable(); const online = useOnline(); const updateReady = useUpdateReady();
   const [engineKey, setEngineKey] = useState(loadEngineKey);
   const [engineOn, setEngineOn] = useState(false);
-  const [connection, setConnection] = useState<Connection>(() => { const c = initialProvider(); try { const t = localStorage.getItem('hb-plan-token'); if (t) c.serverAccessToken = t; } catch { /* storage unavailable */ } return c; });
+  const [connection, setConnection] = useState<Connection>(() => { const c = initialProvider(); try { const t = sessionSecret('plan'); if (t) c.serverAccessToken = t; } catch { /* storage unavailable */ } return c; });
   /**
    * One saved key per provider, owned here rather than inside Settings.
    *
@@ -545,31 +546,26 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     if (event.type === 'environment' && event.id) updateRun({ ...current, environmentId: event.id });
     else if (event.type === 'plan' || event.type === 'delta') updateRun({ ...current, steps: [...current.steps, step(event.type === 'plan' ? 'Plan' : 'Result', event.text || '')] });
     else if (event.type === 'tool') updateRun({ ...current, steps: [...current.steps, step(event.name || 'tool', event.detail || '')] });
-    else if (event.type === 'approval') updateRun({ ...current, status: 'awaiting_approval', gate: { phase: 1, phases: 2 }, steps: [...current.steps, step(`Hold: ${event.name || 'tool'}`, event.detail || 'This leaves the sandbox. Approve to continue.')] });
+    else if (event.type === 'approval') updateRun({ ...current, status: 'failed', completedAt: now(), steps: [...current.steps, step('Stopped', 'This adapter cannot authorize external actions. Start a new offline run.', 'failed')] });
     else if (event.type === 'error') updateRun({ ...current, status: 'failed', completedAt: now(), steps: [...current.steps, step('Stopped', event.message || 'The execution engine failed.', 'failed')] });
     else if (event.type === 'done') updateRun({ ...current, status: 'completed', completedAt: now() });
   }
 
-  async function runEngine(session: Session, user: ChatMessage, text: string, title: string, continueApproved?: string, existingRunId?: string) {
-    const runId = existingRunId ?? crypto.randomUUID();
-    const existing = runsRef.current.find(r => r.id === runId);
-    if (!existing) {
-      const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: 'Execution engine', model: 'gemini-3.8-flash', runId };
-      patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
-      updateRun({ id: runId, goal: text, title: 'Execution engine', workflow: workMode === 'plan' ? plan : 'build', mode: 'remote', model: 'gemini-3.8-flash', status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id, origin: 'server' });
-    } else updateRun({ ...existing, status: 'running' });
+  async function runEngine(session: Session, user: ChatMessage, text: string, title: string) {
+    const runId = crypto.randomUUID();
+    const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', at: now(), persona: 'Execution engine', model: 'gemini-3.8-flash', runId };
+    patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
+    updateRun({ id: runId, goal: text, title: 'Execution engine', workflow: workMode === 'plan' ? plan : 'build', mode: 'remote', model: 'gemini-3.8-flash', status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id, origin: 'server' });
     const controller = new AbortController(); abortRef.current = controller; setBusy(true);
     try {
       const response = await fetch('/api/engine', {
         method: 'POST', credentials: 'same-origin', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId(), ...(engineKey.trim() ? { 'x-engine-key': engineKey.trim() } : {}) },
-        body: JSON.stringify({ input: continueApproved ? text : [text, instructionText()].filter(Boolean).join('\n\nFollow these skill instructions. They are not a tool call.\n\n'), environmentId: runsRef.current.find(r => r.id === runId)?.environmentId, skills: liveSkillsForEngine(loadSkillState()), maxTotalTokens: 50_000, continueApproved }),
+        body: JSON.stringify({ input: [text, instructionText()].filter(Boolean).join('\n\nFollow these skill instructions. They are not a tool call.\n\n'), environmentId: runsRef.current.find(r => r.id === runId)?.environmentId, skills: liveSkillsForEngine(loadSkillState()), maxTotalTokens: 50_000 }),
       });
-      let held = false;
-      await readEngineStream(response, event => { if (event.type === 'approval') held = true; applyEngineEvent(runId, event); });
+      await readEngineStream(response, event => applyEngineEvent(runId, event));
       const finished = runsRef.current.find(r => r.id === runId);
       if (finished && finished.status !== 'running') void persistRun(finished).catch(e => setNotice(errorText(e)));
-      if (held) setNotice('The execution engine is waiting. Approve only if this step should spend money, send a message, or leave the sandbox.');
     } catch (e) {
       if (!controller.signal.aborted) {
         applyEngineEvent(runId, { type: 'error', message: errorText(e) });
@@ -700,13 +696,10 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   }
 
   function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
-  /** Release the plan's current approval gate so the next phase runs. An engine hold starts a new turn in the same sandbox. */
+  /** Browser plan gates release the next phase; legacy managed-engine holds cannot grant access. */
   function approveRun(run?: Run) {
     if (run?.title === 'Execution engine') {
-      const session = sessionsRef.current.find(s => s.id === run.sessionId);
-      if (!session) return;
-      const held = [...run.steps].reverse().find(s => s.title.startsWith('Hold:'))?.title.replace(/^Hold:\s*/, '') || 'the held step';
-      void runEngine(session, session.messages[0], run.goal, session.title, held, run.id);
+      applyEngineEvent(run.id, { type: 'error', message: 'External approvals are disabled for this adapter. Start a new offline run.' });
       return;
     }
     worker.current?.postMessage({ type: 'approve' });
@@ -777,25 +770,34 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     navigator.serviceWorker?.addEventListener('message', onShare);
     return () => navigator.serviceWorker?.removeEventListener('message', onShare);
   }, []);
-  /**
-   * Save the connection and the whole keyring together. The remember checkbox governs every key,
-   * not just the active one: unticked means nothing is written and anything previously stored is
-   * cleared, while the keys stay usable in this tab until it closes.
-   */
+  // Non-secret preferences persist. Every personal credential stays in page memory.
   function saveSettingsForm() {
     try {
       if (connection.mode === 'remote') validateConnection(connection);
-      saveKeyring(connection.saveKey ? keys : emptyKeyring());
       persistConnection(connection);
-      try { if (connection.saveKey && connection.serverAccessToken?.trim()) localStorage.setItem('hb-plan-token', connection.serverAccessToken.trim()); else localStorage.removeItem('hb-plan-token'); } catch { /* storage unavailable */ }
-      setNotice(connection.saveKey && inference === 'byok' ? 'Connection saved, including your provider keys in this browser.' : 'Connection saved. Keys and tokens stay in memory for this session.');
+      saveKeyring(keys);
+      setSessionSecret('plan', connection.serverAccessToken ?? '');
+      setNotice('Connection preferences saved. Personal keys stay in page memory and clear on reload or tab close.');
     } catch (e) { setNotice(errorText(e)); }
   }
-  function forget() { try { forgetKeys(); clearDiscovered(); setDiscovered({}); try { localStorage.removeItem('hb-plan-token'); } catch { /* storage unavailable */ } setKeys(emptyKeyring()); setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' })); setNotice('All saved provider keys removed from this browser.'); } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); } }
+  function forget() {
+    try {
+      forgetKeys(); clearSessionSecrets(); setEngineKey('');
+      saveSettings({ ...settings, github: { ...settings.github, token: '', saveToken: false } });
+      setSettingsState(loadSettings());
+      const clearedMcp = mcp.map(c => ({ ...c, token: '', saveToken: false }));
+      saveConnections(clearedMcp); setMcpState(clearedMcp);
+      clearDiscovered(); setDiscovered({});
+      try { localStorage.removeItem('hb-plan-token'); } catch { /* Restricted storage. */ }
+      setKeys(emptyKeyring());
+      setConnection(c => ({ ...c, token: '', saveKey: false, serverAccessToken: '' }));
+      setNotice('Personal keys and connector tokens cleared from this page.');
+    } catch { setNotice('Could not clear browser storage. Clear this site\'s data in browser settings.'); }
+  }
   async function clearAll() {
     setConfirm(null);
     try {
-      await clearWorkspaceData(); clearPipes(); setPipesState(loadPipes()); commitMemories([]); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents();
+      await clearWorkspaceData(); forgetKeys(); clearSessionSecrets(); setEngineKey(''); clearPipes(); setPipesState(loadPipes()); commitMemories([]); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents();
       setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]); setCustom([]); setPersonaId(defaultPersonaId);
       runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null);
       setBalance(b => computeBalance([], b.pool, b.source)); setFreeBalance(b => computeBalance([], b.pool, 'local', undefined, 'free'));
