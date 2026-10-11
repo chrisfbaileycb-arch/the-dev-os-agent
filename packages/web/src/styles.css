@@ -552,3 +552,25 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .free-key-list h3 { margin: 0 0 4px; font-size: 14px; }
 .free-key-list ol { margin: 0 0 8px; padding-left: 20px; }
 .preview-runtime-error { margin: 6px 8px; font-size: 12px; }
+
+/* Public API discovery: local filters, dated reviews, and explicit read actions. */
+.api-directory { width: 100%; }
+.api-directory-intro p { max-width: 850px; }
+.api-directory-stats { display: flex; gap: 20px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+.api-directory-stats strong { color: var(--ink); }
+.api-directory label > span { display: inline-flex; align-items: center; gap: 5px; }
+.api-directory-toggles, .api-directory-actions, .api-directory-pagination, .api-directory-reading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.api-directory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.api-directory-card { min-width: 0; }
+.api-directory-card-head { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.api-directory-card h2 { font-size: 14px; flex: 1; }
+.api-directory-card p, .api-directory-result p { overflow-wrap: anywhere; }
+.api-directory-actions { margin-top: auto; }
+.api-directory-actions a { text-decoration: none; }
+.api-access { padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 4px; font-size: 11px; color: var(--muted); }
+.api-access-none { color: var(--ok); }
+.api-review { font-size: 11.5px; color: var(--ok); }
+.api-unreviewed { font-size: 11.5px; color: var(--warn); }
+.api-directory-result pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font: 11.5px/1.5 var(--mono); background: var(--panel-2); padding: 10px; border-radius: 5px; }
+.api-directory-pagination { justify-content: center; }
+@media (max-width: 700px) { .api-directory-grid { grid-template-columns: minmax(0, 1fr); } }

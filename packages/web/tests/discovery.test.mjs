@@ -178,6 +178,8 @@ test('/api/providers publishes the discovered catalogue with the tier of every m
     env,
     transport: async () => { throw Error('must not call'); },
     discover: (e, options) => ensureCatalog(e, { ...options, fetchImpl }),
+    // This is a fixture-only provider response; do not also start live OpenRouter discovery.
+    discoverOpenRouter: async () => {},
   });
   const server = createServer((req, res) => { handler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -208,7 +210,7 @@ test('/api/providers publishes the discovered catalogue with the tier of every m
  * `moonshotai/kimi-k2.7-code` were paid or premium. So CI reaches the real catalogue and checks
  * that what this code would fund is what the gateway says it gives away.
  *
- * Set SKIP_UPSTREAM_TESTS=1 to skip it on a machine with no outbound network. CI does not.
+ * Set SKIP_UPSTREAM_TESTS=1 to skip it. CI sets this flag as well.
  */
 test('the live gateway catalogue agrees with what this build would fund', { skip: process.env.SKIP_UPSTREAM_TESTS === '1' ? 'SKIP_UPSTREAM_TESTS=1' : false }, async () => {
   resetCatalog();

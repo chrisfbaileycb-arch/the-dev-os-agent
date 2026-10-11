@@ -127,9 +127,9 @@ export function createFetcher({ env = process.env, resolve = lookup, transport =
         continue;
       }
       const type = String(response.headers['content-type'] || '');
-      if (!/^(text\/|application\/(json|xml|xhtml))/i.test(type) && type) { response.destroy(); throw new HttpError(415, `That URL returned ${type.split(';')[0]}, which this connector cannot read as text.`); }
+      if (!/^(text\/[^;\s]+|application\/(?:json|[a-z0-9.+-]+\+json|xml|xhtml\+xml))(?:\s*;|\s*$)/i.test(type) && type) { response.destroy(); throw new HttpError(415, `That URL returned ${type.split(';')[0]}, which this connector cannot read as text.`); }
       const body = (await readAll(response)).toString('utf8');
-      const report = /html|xml/i.test(type) ? extract(body, url.toString()) : { title: '', description: '', headings: [], wordCount: body.split(/\s+/).length, text: body.slice(0, MAX_TEXT), truncated: body.length > MAX_TEXT, links: [] };
+      const report = /^(?:text\/(?:html|xml)|application\/(?:xml|xhtml\+xml))(?:\s*;|\s*$)/i.test(type) ? extract(body, url.toString()) : { title: '', description: '', headings: [], wordCount: body.split(/\s+/).length, text: body.slice(0, MAX_TEXT), truncated: body.length > MAX_TEXT, links: [] };
       return { url: url.toString(), status, contentType: type.split(';')[0] || 'text/plain', ...report };
     }
     throw new HttpError(502, 'That URL redirected too many times.');
