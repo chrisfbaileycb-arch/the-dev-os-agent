@@ -1,12 +1,14 @@
 import { hasPlanAccess, freeOutputTokens } from './plans.mjs';
+import { createHash, randomBytes } from 'node:crypto';
 // The zero-config tier: what a visitor with no API key is allowed to run on this deployment's
 // own provider keys. Everything here is a hard server-side boundary. The browser may ask for a
 // free model, but only this module decides whether the request is funded, and at what price.
 //
-// Three gates, all enforced in the proxy before a single upstream byte is sent:
+// Independent gates enforced in the proxy before inference dispatch:
 //   1. the requested model is on FREE_MODELS (an exact allowlist, never a prefix match),
 //   2. the deployment actually holds the provider key for it,
 //   3. the workspace still has free credits this month, and the caller is under the IP burst cap.
+//   4. durable USD accounting reserves the full reviewed maximum for each attempt.
 //
 // The gateway half of the pool is discovered rather than declared: server/discovery.mjs reads
 // GET {base}/models and hands back the ids the gateway itself reports as free at zero cost. The
@@ -114,15 +116,14 @@ export const openRouterCatalog = () => [...discoveredOpenRouter];
  * an operator can narrow what the gateway offers, never widen it or invent an id. Narrowing is the
  * real use — "fund only these two of the forty" — and inventing was only ever a way to get billed.
  *
- * Before discovery has answered there is nothing to intersect with, so a configured list is taken
- * as given; that window is one HTTP request wide at boot, and /api/providers waits for it.
+ * An empty/cold catalogue leaves the pool closed. Match case-insensitively without deleting
+ * punctuation, and return the gateway's canonical id for the outbound request.
  */
 export function xkiroPool(env = process.env, discovered = discoveredXkiro) {
   const configured = (env.XKIRO_FREE_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
   if (!configured.length) return [...discovered];
-  if (!discovered.length) return configured;
-  const live = new Set(discovered.map(id => id.toLowerCase()));
-  return configured.filter(id => live.has(id.toLowerCase()));
+  const live = new Map(discovered.map(id => [id.toLowerCase(), id]));
+  return [...new Set(configured.map(id => live.get(id.toLowerCase())).filter(Boolean))];
 }
 
 /**
@@ -497,7 +498,7 @@ export function freeTierStatus(env = process.env, discovered = discoveredXkiro) 
 }
 
 export const monthlyPool = (env = process.env) => Math.max(0, Number(env.FREE_CREDIT_MONTHLY_POOL ?? 0) || 0);
-export const burstLimit = (env = process.env) => Math.max(1, Number(env.FREE_MAX_PER_HOUR ?? 40) || 40);
+export const burstLimit = (env = process.env) => Math.min(1000, Math.max(1, Math.floor(Number(env.FREE_MAX_PER_HOUR ?? 40) || 40)));
 
 /** Credits for a completed free-tier request, rounded up to two decimals like the client ledger. */
 export const creditsForTokens = tokens => Math.ceil((Math.max(0, tokens) * FREE_WEIGHT) / 10) / 100;
@@ -523,23 +524,30 @@ export function routeFreeRequest(entry) {
 }
 
 /**
- * Per-IP burst limiter for unauthenticated traffic. The workspace id is minted by the browser
- * and can be rotated at will, so the monthly credit pool alone cannot bound total spend; this
- * caps how fast one network address can consume the deployment's keys. It is a speed bump, not
- * an identity check — a deployment expecting real abuse should sit behind a CDN or add auth.
+ * Rolling-hour, bounded in-memory quotas. Hash the server-observed IP + User-Agent with a
+ * per-process salt; also cap the IP alone so changing User-Agent cannot buy a fresh allowance.
+ * Fresh entries are never evicted to grant new quotas: a full cache fails closed until expiry.
+ * This is an abuse speed bump; the persistent daily USD ledger is the spending boundary.
  */
-export function createBurstLimiter(env = process.env, now = () => Date.now()) {
+export function createBurstLimiter(env = process.env, now = () => Date.now(), maxEntries = 10_000) {
   const windows = new Map();
+  const salt = randomBytes(32).toString('hex');
+  const keyFor = (kind, value) => createHash('sha256').update(`${salt}\0${kind}\0${value}`).digest('hex');
   // `env` may be a getter, so a cap changed in the admin dashboard applies to the next request
   // rather than to the next restart.
   const current = () => burstLimit(typeof env === 'function' ? env() : env);
-  return function take(ip) {
+  return function take(ip, userAgent = '') {
     const limit = current();
     const at = now();
-    for (const [key, value] of windows) if (at - value.start > 3_600_000) windows.delete(key);
-    const window = windows.get(ip) ?? { start: at, count: 0 };
-    window.count++;
-    windows.set(ip, window);
-    return { ok: window.count <= limit, limit, remaining: Math.max(0, limit - window.count) };
+    for (const [key, values] of windows) {
+      while (values.length && values[0] <= at - 3_600_000) values.shift();
+      if (!values.length) windows.delete(key);
+    }
+    const keys = [keyFor('ip', ip), keyFor('fingerprint', `${ip}\0${String(userAgent).slice(0, 1024)}`)];
+    const lists = keys.map(key => windows.get(key) ?? []);
+    const missing = keys.filter(key => !windows.has(key)).length;
+    if (windows.size + missing > maxEntries || lists.some(values => values.length >= limit)) return { ok: false, limit, remaining: 0 };
+    lists.forEach((values, i) => { values.push(at); windows.delete(keys[i]); windows.set(keys[i], values); });
+    return { ok: true, limit, remaining: Math.max(0, limit - Math.max(...lists.map(values => values.length))) };
   };
 }

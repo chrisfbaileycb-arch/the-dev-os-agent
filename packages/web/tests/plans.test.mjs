@@ -1,3 +1,4 @@
+import { fixtureBudgetEnv } from './budget-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -19,7 +20,7 @@ const reply = (body = events) => { const r = Readable.from([body]); r.statusCode
 async function withApp(env, fn, options = {}) {
   const db = openDatabase(':memory:');
   setAdminTiers({ mode: 'manual', free: [], paid: [{ id: 'gpt-4o', provider: 'openai', label: 'GPT' }] });
-  const proxy = createProxy({ env: { OPENAI_API_KEY: 'operator-key', ...env }, db, discover: async () => {}, discoverOpenRouter: async () => {}, transport: async (_url, options) => reply(), ...options });
+  const proxy = createProxy({ env: { ...fixtureBudgetEnv, OPENAI_API_KEY: 'operator-key', ...env }, db, storage: { durable: true }, discover: async () => {}, discoverOpenRouter: async () => {}, transport: async (_url, options) => reply(), ...options });
   const state = createState({ env: { WORKSPACE_AUTH_REQUIRED: 'false', ...env }, db });
   const server = createServer(async (req, res) => { if (!await proxy(req, res) && !await state(req, res)) { res.writeHead(404); res.end(); } });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -35,7 +36,7 @@ test('three plans publish their actual configurable limits and never reuse old c
   assert.equal(status.plans[0].checkout, null);
   assert.equal(status.plans[2].checkout, 'https://buy.stripe.com/studio');
   assert.equal(planLimits('starter', { PLAN_STARTER_CREDITS: '0' }).monthlyCredits, 0);
-  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '1024' }), 16384);
+  assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '1024' }), 1024);
 });
 
 test('existing deployment and dashboard defaults upgrade while custom caps remain effective', async () => {
@@ -45,10 +46,10 @@ test('existing deployment and dashboard defaults upgrade while custom caps remai
     const settings = await openSettings({ db, env });
     await settings.setTunable('FREE_MAX_OUTPUT_TOKENS', '8192');
     await settings.setTunable('PLAN_PRO_MAX_OUTPUT_TOKENS', '32768');
-    assert.equal(freeOutputCapFor(settings.env()), 16384);
+    assert.equal(freeOutputCapFor(settings.env()), 8192);
     assert.deepEqual(billingStatus(settings.env()).plans.map(p => p.maxOutputTokens), [16384, 32768, 65536]);
     const displayed = Object.fromEntries(settings.tunableStatus().map(row => [row.name, row.value]));
-    assert.equal(displayed.FREE_MAX_OUTPUT_TOKENS, '16384'); assert.equal(displayed.PLAN_PRO_MAX_OUTPUT_TOKENS, '65536');
+    assert.equal(displayed.FREE_MAX_OUTPUT_TOKENS, '8192'); assert.equal(displayed.PLAN_PRO_MAX_OUTPUT_TOKENS, '65536');
     assert.equal(freeOutputCapFor({ FREE_MAX_OUTPUT_TOKENS: '12000' }), 12000);
     assert.equal(planLimits('premium', { PLAN_PREMIUM_MAX_OUTPUT_TOKENS: '24000' }).maxOutputTokens, 24000);
   } finally { db.close(); }
@@ -78,7 +79,7 @@ for (const [id, limit, pool] of [['starter', 16384, 1000], ['premium', 32768, 25
     let sent;
     const env = { [`PLAN_${id.toUpperCase()}_ACCESS_TOKENS`]: token };
     await withApp(env, async ({ post, db }) => {
-      const r = await post('/api/chat', { ...request, provider: 'openrouter' }); assert.equal(r.status, 200); await r.text();
+      const r = await post('/api/chat', { ...request, provider: 'groq' }); assert.equal(r.status, 200); await r.text();
       assert.equal(sent.max_tokens, 16384, 'GPT-4o has a smaller window than some plans');
       assert.equal(db.usedThisMonth(planHolder(token, env)), 8.25);
       const balance = await (await post('/api/state/plan', { token, plan: 'pro', pool: 1e9 })).json();

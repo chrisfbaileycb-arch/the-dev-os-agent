@@ -1,136 +1,118 @@
-# Signal Forge OS, web edition
+# Signal Forge OS Web Edition
 
-A browser workspace for one person or a small business: a chat with a business agent, three multi-agent workflows, a connectors hub, a knowledge hub that stays on the device, a model hub, a credit ledger, and a sandboxed browser agent. Runs on a Chromebook or any modern browser, installs as an app, and needs no account.
+A browser workspace with streaming chat, five-stage workflows, a model hub, a Knowledge Hub,
+read-only GitHub and web connectors, and optional browser inspection. The frontend is React
+and Vite; the proxy is a long-lived Node 22 service. Static hosting alone cannot serve its API.
 
-**Zero-config by default.** On a deployment with server provider keys, a first-time visitor types a prompt and gets a live streaming reply — no sign-up, no API key, nothing to configure. The server funds free and plan models only from the **US backend** — Anthropic, OpenAI, Google, xAI, Groq and Cerebras (Meta, Azure and Bedrock once they are integrated) — using the keys and model picks the operator sets in the admin dashboard. The dock has three model menus: **Models** (the US labs and whatever this deployment funds), **Experiment** (OpenRouter and Hugging Face only; subtitle "Your key. May route outside the US. Not the free tier."), and **On this machine**. Experiment keys are excluded from `shieldProviders()` and from the free-tier allowlist. The monthly free-tier number is counted in the browser unless storage is durable. The live host has no disk.
+The live Render test app is https://hey-buddy-web.onrender.com. Owner funding is disabled;
+visitors can use their own provider keys. Read the [root README](../../README.md) for the
+current funding defenses, cost-bound configuration and USB limitations, and
+[Render setup](../../docs/render-setup.md) for owner access and deployment details.
 
-Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio. Original code and prompts; the Apache and MIT notices for the FreeToken and Ruflo code carried in this directory are in `THIRD_PARTY_NOTICES.md`. Carol Ann is the owner's own reference for the skills registry, not an upstream.
+## Execution and storage
 
-## What is in the box
-
-- **Workspace.** Sessions on the left, one conversation canvas scrolling top to bottom, and a floating prompt dock pinned to the bottom of the viewport. The dock carries an auto-expanding textarea, one attach button for files and photos (drag, paste, or click), a microphone toggle (Web Speech API where the browser has it), the agent picker, the mode picker, the model dropdown with its free/your-key badge, the connectors button, and live token counters. Enter sends; Shift+Enter breaks a line. On a phone the chip labels collapse to icons, the row wraps, and the send button stays under the thumb. Photos are resized in the browser (1280 px, JPEG) and sent as image parts to a vision model; a small thumbnail stays in the session.
-- **Multi-agent pipeline strip.** A running workflow reports as one compact horizontal strip of stage badges above the output — Plan, Research, Design, Review, Write — with exactly one stage's text underneath. Click a badge to read that stage; a finished run folds itself to a single line so the conversation stays readable.
-- **Agent roster.** Operational Executive, Financial Auditor, Content and Reputation Specialist, and the Browser Agent lead a chat. Dispatcher, Researcher, Architect, Reviewer, and Scribe run the workflows *Plan it*, *Look into it*, and *Check my work* as a five-stage dependency graph on browser-adapted Ruflo entities, in the lead agent's focus. Every prompt starts with the same safety baseline (`src/lib/roster.ts`).
-- **Knowledge hub.** Notes and imported text files in IndexedDB, retrieved by keyword and attached to messages and runs. Never sent to the server store.
-- **Model hub, three ways to pay.** The dropdown on the dock leads with the *free* group, which is whatever this deployment actually funds — read live from the gateway, not compiled in — and needs no key at all. Below it sit the deep-reasoning models (Claude 3.5 Sonnet, DeepSeek R1, GPT-4o), shown but marked locked until you add your own key in Settings. *Platform credits* is the third mode: the full pool behind an administrator access token. A key-only model picked with no key opens Settings and says what is missing rather than failing on send.
-- **xKiro gateway, discovered rather than declared.** One OpenAI-compatible endpoint (`https://api.xkiro.com/v1`) fronting many model families, wired as a first-class provider: set `XKIRO_API_KEY` (and optionally `XKIRO_BASE_URL`) and it funds the free tier on its own, no Groq or OpenRouter account needed. **No model ids are hardcoded.** `server/discovery.mjs` reads `GET {base}/models` at boot and hourly, keeps the entries the gateway reports as `access_tier: "free"` with zero input *and* output pricing, and publishes them through `/api/providers`; the browser renders that list and holds no free-model list of its own. This replaced six hand-written ids, all wrong — three the gateway did not serve at all and three that were paid or premium — which is why the free tier answered `404 Model "deepseek/deepseek-chat" does not exist` while advertising itself as ready. A catalogue kept by hand drifts; one that is asked cannot. `XKIRO_FREE_MODELS` still narrows the pool from the dashboard, but it now *intersects* with what was discovered instead of replacing it, so an unchecked id can no longer be conjured onto the operator's bill.
-- **Plans page and the xKiro referral.** A three-card view (`src/ui/Pricing.tsx`) reachable from the rail. Only the Free card is a Signal Forge OS plan — the app has no billing, takes no payment and has no account to upgrade — so the Pro and Ultimate cards say plainly that they are *xKiro's* plans: you buy a key there and paste it in here. That wording is load-bearing, not decoration: a visitor who pays xKiro believing they upgraded Signal Forge OS has been misled. Every outbound link goes through `src/lib/referral.ts`, which supplies `target="_blank" rel="noopener noreferrer"` centrally so no call site can forget them, and renders an FTC-style disclosure beside each one. Setting `REFERRAL_URL` to an empty string removes every referral link and callout from the UI. The advertised free-token figure is a third-party claim this project cannot verify; it lives in that same file as editable copy and is attributed to xKiro wherever it appears.
-- **Zero-config tier, enforced on the server.** Which models a keyless visitor may run is a hard allowlist in `server/freetier.mjs`, matched exactly — no prefix, namespace, or case trick reaches a paid model. Gateway entries reach that list only via discovery, so their admission is a fact about price rather than a guess from a name; the `FRONTIER` name-pattern now guards the two static Groq and OpenRouter pools only, which is where a name is all we know. It was also wrong about the gateway: `openai/gpt-5.3-codex-spark` is free at $0/$0 there and `gpt-[45]` matched it, so the tier refused a model that costs nothing. `openrouter/auto` is never forwarded to OpenRouter's paid router: the proxy substitutes a concrete `:free` model and passes the rest of the pool as fallbacks. Output is capped at `FREE_MAX_OUTPUT_TOKENS` whatever the browser asks for.
-- **Graceful degradation when the tier cannot serve.** Keys unset, provider rate-limiting, upstream down — all three look identical from a keyless browser and none is the visitor's key to fix, so all three produce one message: *"Public free tier warming up — enter your own key in Settings or try again shortly."* An upstream 401 on a server-funded request is deliberately **not** reported as "invalid API key", which would send the visitor hunting for a fault that is not theirs; the real status stays in the operator's logs. The proxy tags each refusal with a code (`free_tier_unavailable`, `free_tier_busy`, `free_tier_exhausted`, `key_required`) so the browser branches on cause rather than on prose, and a test compares the server and client strings so the wording cannot drift.
-- **A key always wins, and so does your choice of how to pay.** Supplying your own key overrides the server's funding for every model, including the free ones. `inferenceFor()` decides from the funded list reported by `/api/providers` rather than from the model id — but only when nothing has been decided already: choosing *Bring your own key* or *Platform credits* is now respected verbatim, where it used to be silently overridden the moment you picked a model the deployment happened to fund. A free model this deployment does *not* fund still runs on your key rather than routing through a tier that would strip it.
-- **Credit ledger.** Every request is logged with tokens and credits: fast models 0.5 credits per 1K tokens, standard 3, reasoning 15; BYOK and the scripted preview log at zero. Free-tier usage is measured **on the server**, from the bytes that actually crossed the wire (`server/meter.mjs` reads the provider's own `usage` block and falls back to a byte estimate), so a browser cannot under-report what the deployment paid for; the free allowance and the credit pool are separate budgets. The status bar shows the model, payment mode, time to first token, output speed, remaining credits, whether a background worker is online, and sync state.
-- **Browser Agent.** `POST /api/browse` opens one public page in headless Chromium and returns title, description, canonical, robots, headings, social tags, visible text, and links. Guardrails: an explicit host allowlist (`BROWSE_ALLOWED_HOSTS`), public IPv4 only (re-checked on every request the page makes), no downloads or credentials, timeouts, and a per-workspace hourly budget. The agent asks for it with a single `TOOL {...}` line; at most three calls per message.
-- **Connectors hub.** One expandable menu on the dock, four kinds of reach, each switchable on its own. Every call shows as a trace under the reply.
-  - **GitHub** — `github_repo` (metadata, README, or any text file), `github_files` (the file listing), `github_issues` (recent issues, or one issue with its comments). Read-only *by construction*: the upstream method is hard-coded to GET and the route only builds URLs from a closed operation map, so a token pasted here cannot become a commit or a comment. Optional personal access token raises GitHub's limit from 60 to 5,000 calls an hour and reaches private repositories.
-  - **Web scraping and URL crawler** — `fetch_url` takes a text snapshot of any public URL through `POST /api/fetch`, which is how the browser reads external pages at all: CORS forbids it doing this itself. A plain GET, no JavaScript, no cookies; the resolved public IPv4 is pinned for the connection so a name cannot rebind between the check and the request, redirects are re-validated at every hop, and the body is capped at 1.5 MB. This is deliberately *not* the Browser Agent, which runs real Chromium and stays behind an allowlist.
-  - **File and document knowledge hub** — drag and drop text, Markdown, CSV, JSON, or HTML straight into the local index, and `search_documents` lets an agent go looking for a document the message did not surface. Bounded lexical scoring, held in IndexedDB: honest keyword retrieval, no embeddings and no vector database.
-  - **Custom MCP** — remote Model Context Protocol servers over Streamable HTTP (name, https URL, optional bearer token). `POST /api/mcp` runs the initialize handshake, keeps the session id, and forwards `tools/list` and `tools/call`; every tool on an enabled server becomes a chat tool named `<server>.<tool>`. Guardrails: https and public hosts only, no redirects, bounded responses, `MCP_MAX_PER_HOUR` per workspace. Tokens stay in memory unless remembered.
-- **Persistence.** Sessions, runs, and the ledger are saved in IndexedDB and mirrored to SQLite on the server (`server/db.mjs`, Node's built-in `node:sqlite`) under an anonymous workspace id the browser mints. A refresh, a reinstall, or a cleared cache keeps history and balances as long as the id survives in localStorage; there are no accounts.
-- **Dual-service ready, single-service by default.** The deployed topology is one Node web service: SSE streaming and agent tasks are consolidated there, and workflows run in the visitor's own browser Web Worker. The backend also supports a second Render Background Worker that claims heavier multi-step runs over the private network and posts results back (`server/jobs.mjs`, `server/worker.mjs`) — it is written and tested, but no worker service is deployed, so `/api/jobs` reports `worker: false` and the queue stays idle. Adding one later needs no rewrite. Queued jobs sit on disk until claimed, so the queue accepts zero-config runs only and refuses anything carrying a key.
-- **Installable.** Web app manifest, Signal Forge OS's icon set, an Install button in Settings, and a shell service worker generated at build time so an installed app opens offline (the scripted preview keeps working; hosted models need a connection).
+- The tool-enabled chat loop permits three model requests and two tool calls per message. Each workflow has five
+  fixed stages, with at most three attempts per stage and fifteen client requests overall.
+  Browser limits are independent of the server's request and spending controls.
+- Personal provider keys stay in page memory and clear on reload. A supplied personal key
+  takes priority over free or plan funding, including a legacy client funding preference.
+- Experiment requests carry `X-Forge-Is-Experimental: true`. The server checks that flag,
+  metadata and provider classification before routing; a personal key is required. Stored
+  owner keys and plan access tokens cannot fund an Experiment route.
+- Knowledge documents live in IndexedDB. Matching excerpts are sent with model requests.
+  IndexedDB is not an encrypted hardware vault. File import can copy text documents from
+  a USB drive; direct WebUSB storage needs a compatible device and a reviewed protocol.
+- Sessions, runs and credit history can be mirrored into Postgres or SQLite. Server state and
+  job APIs require a signed workspace cookie or configured OAuth identity, not just a UUID.
+  SQLite under `/tmp` is transient. The daily USD ledger is separate from workspace clearing.
+- The live service has Postgres but no Chromium or background worker. `/api/browse` needs
+  Chromium and a host allowlist; server jobs remain transient and cannot claim resumability.
+  Browser workflows run in the visitor's Web Worker.
 
 ## Run locally
 
-Requires Node 22.
+Run these commands from this package, or use the root workspace scripts:
 
 ```sh
 npm ci
-npx playwright install chromium   # only for the Browser Agent and its test
-npm run dev                       # Vite with the API, workspace store, and every connector route wired in
-npm test && npm run test:server   # unit tests, then server tests (free tier, proxy, SQLite, connectors, jobs)
-npm run build && npm start        # production server on PORT (default 10000)
-npm run worker                    # optional background worker; needs WEB_SERVICE_URL and WORKER_TOKEN
-```
-
-To see the zero-config tier locally, export a real `GROQ_API_KEY`, `OPENROUTER_API_KEY` or `XKIRO_API_KEY` before `npm run dev` and open the app in a private window: the dock should already show a free model, and the first prompt should stream with nothing entered in Settings. The startup log reports what discovery found (`Gateway catalogue: 112 models, 40 free.`), and `/api/providers` carries the same figures plus the reason if it failed — both are the first place to look when the free list is smaller than expected.
-
-`npm run test:server` includes one test that reaches the real gateway and asserts that every id this build would fund exists upstream, is labelled free, and costs nothing. That test is the whole reason the fabricated ids are gone, so it runs in CI; set `SKIP_UPSTREAM_TESTS=1` to skip it on a machine with no outbound network.
-
-## Deploy
-
-The server streams provider responses as Server-Sent Events and keeps a SQLite file, so the host must run a long-lived Node process with a writable disk. Static hosting cannot serve `/api/chat`.
-
-- **Render (recommended).** The root `render.yaml` provisions both services: a Docker web service with a 1 GB disk at `/data`, and an optional Node background worker sharing a generated `WORKER_TOKEN`. Leave `APP_ORIGIN` unset — the server already matches the request origin against its own host, and a wrong value makes every API call fail with 403. Set `GROQ_API_KEY` or `OPENROUTER_API_KEY` in the dashboard to switch the free tier on; set `BROWSE_ALLOWED_HOSTS` if you want the Browser Agent. Delete the worker block if you do not want a second service.
-- **Docker anywhere.** `Dockerfile` builds on `mcr.microsoft.com/playwright`, so Chromium is present for the Browser Agent. Mount a volume at `/data`.
-- **Any Node host without Chromium.** `/api/browse` answers 503 and the rest of the app works.
-
-## Environment
-
-See `.env.example`.
-
-| Variable | Purpose |
-|---|---|
-| `GROQ_API_KEY`, `XKIRO_API_KEY` | Fund the zero-config free tier when the dashboard has not listed models of its own. OpenRouter and Hugging Face keys do not. Leave the US keys unset and the app opens without a funded tier. |
-| `XKIRO_FREE_MODELS` | Optional comma-separated allowlist that **narrows** the discovered free pool. Ids the gateway does not give away are refused, so this can restrict what the deployment funds but never widen it. Blank means the whole discovered pool. |
-| `XKIRO_BASE_URL` | The gateway base, default `https://api.xkiro.com/v1`. HTTPS only; a malformed value falls back to the default rather than failing the tier. |
-| `FREE_CREDIT_MONTHLY_POOL` | Free credits per workspace per month at 0.5 per 1K tokens (default 400 ≈ 800,000 tokens). |
-| `FREE_MAX_PER_HOUR` | Per-IP burst cap on keyless requests (default 40). The workspace id is browser-minted, so this is what bounds total spend. |
-| `FREE_MAX_OUTPUT_TOKENS` | Output ceiling for a server-funded reply (default 16,384; old 1,024 / 8,192 settings upgrade to 16,384), applied whatever the browser asks for. |
-| `FREE_TIER_DISABLED` | `true` switches the tier off without removing the provider keys. Visitors then see the same warming-up message as an unfunded tier. |
-| `APP_ORIGIN` | Optional. Pins one external origin; leave unset on Render. Also used for OpenRouter attribution. |
-| `DATA_DIR` / `DATA_FILE` | Where the SQLite file lives. A path under `/tmp` or `/var/tmp` is wiped on restart; the monthly free-tier ledger then stays in the browser and experiment keys are not written to that file. A path outside those directories, or `DATABASE_URL`, is durable. |
-| `PLAN_STARTER_CREDITS` / `PLAN_PREMIUM_CREDITS` / `PLAN_PRO_CREDITS` | Server-enforced monthly plan allowances (defaults 1,000 / 2,500 / 6,000). |
-| `FETCH_ALLOWED_HOSTS`, `FETCH_MAX_PER_HOUR` | URL crawler scope (empty means any public host) and budget (default 60). |
-| `GITHUB_TOKEN`, `GITHUB_MAX_PER_HOUR` | Optional server token for the GitHub connector, and its hourly budget (default 120). |
-| `BROWSE_ALLOWED_HOSTS` | Hosts the sandbox browser may open. Empty disables it; `*` allows any public host. |
-| `BROWSE_MAX_PER_HOUR` | Per-workspace page budget (default 30). |
-| `MCP_MAX_PER_HOUR` | Per-workspace budget for MCP calls (default 120). |
-| `CUSTOM_API_ORIGINS`, `OLLAMA_BRIDGE_URL` | Approved custom endpoints and an administrator bridge to a home model server. |
-| `SERVER_CREDIT_ACCESS_TOKEN`, `COHERE_API_KEY`, `CUSTOM_API_KEY` | Server keys used only for requests carrying the access token (platform credits). |
-| `ADMIN_TOKEN` | Opens the admin dashboard at `/admin` (at least 12 characters; `openssl rand -hex 24`). Unset, every `/api/admin` route answers 503 and the page says so. |
-| `SETTINGS_SECRET` | Optional. Seals the provider keys entered in the dashboard before they are stored. Falls back to `SESSION_SECRET`, then `ADMIN_TOKEN`; older seals are still opened by whichever secret made them. |
-| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `AIHUBMIX_API_KEY` | Server keys for direct vendors. A key here can fund a model the dashboard puts on the free or paid tier only when that provider is on the US backend. `HF_TOKEN` and `OPENROUTER_API_KEY` are experiment slots: they never fund the free tier. `ANTIGRAVITY_API_KEY` is the execution engine, a different slot from `GOOGLE_API_KEY`, and it is stored only when storage is durable. |
-| `WORKER_TOKEN` | Shared secret between the web service and the background worker. Unused without a worker. |
-| `WEB_SERVICE_URL`, `WORKER_POLL_MS` | Worker service only: the web service's internal address and poll interval. |
-
-## API
-
-- `POST /api/chat` streams SSE from OpenRouter, Groq, Cohere, or an approved custom endpoint. Funding is decided server-side in this order: the visitor's own key, then the administrator access token, then the zero-config allowlist; nothing else is funded (`fundingFor` in `server/proxy.mjs`). `POST /api/models` lists models. `GET /api/providers` reports the free tier this deployment can fund and any Ollama bridge — it never returns a key, and answers 200 with nothing configured, which is why it is the health check.
-- `GET /api/state` returns the workspace's sessions, runs, ledger, credit pool, and free allowance; `GET /api/state/usage` is a cheap read of just the budgets plus the newest server-metered row; `POST /api/state` upserts; `POST /api/state/clear` deletes. Requires `X-Workspace-Id`.
-- `POST /api/fetch` with `{ "url": "https://..." }` returns a text snapshot: title, description, headings, readable text, and links.
-- `POST /api/github` with `{ "operation", "params", "token"? }` runs one read-only GitHub call. Operations: `repo`, `readme`, `tree`, `file`, `issues`, `issue`, `comments`.
-- `POST /api/jobs` enqueues a background workflow and `GET /api/jobs?id=…` polls it (both need `X-Workspace-Id`); `GET /api/jobs` alone reports whether a worker is online. `POST /api/jobs/claim`, `/update`, and `/finish` are the worker's side and need `Authorization: Bearer $WORKER_TOKEN`.
-- `POST /api/browse` with `{ "url": "https://..." }` returns a page report or a 4xx/5xx with a plain message.
-- `POST /api/mcp` with `{ "url", "method": "tools/list" | "tools/call", "params", "authorization"? }` forwards one JSON-RPC call to a remote MCP server and returns its `result`.
-- `POST /api/models` with `{ "provider", "apiKey" }` returns `{ "data": [{ "id", "label"?, "free"? }] }` — everything the key reaches at that provider, with the provider's own label and free flag where it publishes them. The browser calls this by itself the moment a key is entered, and the dropdown lists the result.
-- `GET /api/providers` also reports `paid`: the plan tier the operator drew up in the dashboard (`enabled`, `configured`, `models`, `providers`, `labels`).
-- `/api/admin/*` is the operator dashboard, gated by `ADMIN_TOKEN`: `GET status`, `POST login` (sets a twelve-hour cookie scoped to `/api/admin`; a `Bearer` header works too), `POST logout`, `GET config`, `PUT keys` `{ provider, key }` (empty key removes), `PUT tunables` `{ name, value }`, `PUT tiers` `{ mode, free, paid }`, `POST discover` `{ provider }`. Writes check the Origin header. Keys are sealed with AES-256-GCM before they reach the database and are never returned; `config` shows the source (dashboard, environment, none) and the last four characters.
-- `/api/chat` messages may carry OpenAI-style content parts: text plus up to five bounded `image_url` parts (data URLs or https). Native Cohere refuses image parts.
-
-## Admin dashboard
-
-Open `/admin` (or Settings → *Open the admin dashboard*) and sign in with `ADMIN_TOKEN`. Three things live there, and each applies to the next request with no redeploy:
-
-- **Provider keys.** The US backend keys (OpenAI, Anthropic, Google, Groq, xAI) can be sealed and stored. OpenRouter, Hugging Face, and the execution engine are separate slots and are refused on a host whose database does not survive a restart. A stored key is sealed before it is stored (`server/secrets.mjs`), laid over the same environment variable for every request (`server/settings.mjs`), and never sent back to a browser. Remove it and the environment value, if any, applies again.
-- **Model tiers.** Load a connected provider's live model list and mark each model *Free* (any visitor, no key, on the deployment's key, metered against the free allowance), *Paid* (subscribers holding the plan access token, on the deployment's key, against the plan allowance) or *BYOK* (the default: the visitor brings a key). *Automatic + your picks* adds your free picks to the pool the server discovers on its own; *Only your picks* makes the free tier exactly your list. A model marked paid leaves the automatic free pool. Frontier-class picks are flagged, not refused: the burst and monthly caps are what bound the spend.
-- **Limits.** The free credit pool, the per-network hourly cap, the output cap, the on/off switch, the plan credit pool, the plan access token, and the owner key.
-
-The page ends with what `/api/providers` is publishing right now, so a change can be checked against its effect. Settings are stored in the workspace database (`settings` table, Postgres or SQLite), so on a diskless deployment without `DATABASE_URL` they last until the next restart; the page says so.
-
-## Security and privacy
-
-- Provider keys travel over HTTPS to this proxy and on to the provider; the server never stores or logs them. The optional "remember key" setting uses unencrypted localStorage on the device. A zero-config request carries no secret at all — the browser strips both the visitor key and the deployment token before sending.
-- The zero-config tier spends the deployment's own money, so it is bounded in four independent ways: an exact model allowlist, a server-measured monthly credit quota per workspace, a per-IP hourly burst cap, and an output-token ceiling. Be aware of the honest limit: the workspace id is minted by the browser and can be rotated, so the monthly quota alone does not bound total spend — the per-IP cap does, and a deployment expecting real abuse should sit behind a CDN or add authentication.
-- The GitHub connector cannot write. Its upstream method is hard-coded to GET and it only builds URLs from a closed operation map, so a token pasted into it cannot be turned into a commit, a comment, or a request to any other host.
-- The URL crawler resolves the target, checks the address is public IPv4, and pins that address for the connection, so a hostname cannot rebind to a private address between the check and the request. Redirects are followed manually and re-validated at every hop.
-- Background jobs are stored on disk until a worker claims them, so the queue refuses any request carrying an API key or access token; runs on your own key stay in your browser.
-- The workspace id is a bearer of its own data: anyone holding it can read that workspace's sessions from the server. It never leaves the browser except in the request header, and "Clear everything" deletes the server copy too.
-- Knowledge notes never reach the server store; matching excerpts go only to the model provider with a message you send.
-- The sandbox browser enforces the allowlist and public-address check on the main document and on every sub-request, blocks downloads, and runs with a fresh context per page.
-- CSP on the production server restricts scripts and connections to the app origin; model output is rendered as text.
-
-## Verification
-
-```sh
-npm test            # catalog weights, ledger and merge, roster, tool protocol, chat tool loop, orchestrator, streaming, shell worker
-npm run test:server # free-tier allowlist and metering, proxy routing and SSRF, image parts, SQLite state routes,
-                    # connector extraction and guardrails, job queue and worker stages, browse allowlist with a
-                    # real Chromium inspection, MCP handshake against a fake server
+npm run dev
+npm test
+SKIP_UPSTREAM_TESTS=1 npm run test:server
 npm run build
+npm start
 ```
 
-The free tier has its own suite (`tests/freetier.test.mjs`). One test reads `src/lib/catalog.ts` and compares its zero-config ids against `FREE_MODELS` literally, so the build fails if the dropdown ever offers a model the server would refuse to fund. Others assert that a keyless request streams only for an allowlisted model, that `openrouter/auto` never reaches the paid router, that the ledger is billed from the streamed bytes, and that an exhausted quota or a tripped burst cap is refused before any upstream call.
+Node 22 or newer is required. `npx playwright install chromium` enables optional local
+browser inspection tests. The server listens on `PORT`, default 10000. A local server without
+Chromium returns 503 for browser inspection; other connectors remain available.
 
-## Monthly plans
+Live gateway discovery tests only retrieve model metadata. `SKIP_UPSTREAM_TESTS=1` skips
+them when network access is unavailable. Unit tests use synthetic keys and cost bounds;
+those fixtures are not real provider prices and must never configure a deployment.
 
-The $25 Starter, $50 Builder, and $100 Studio plans use separate server-enforced allowances and output ceilings. Configure provider keys in Admin; personal keys and local models in Settings. See [monthly plan setup](../../docs/monthly-plans.md) for prices, credit rates, token issuance, new checkout URLs, and the current manual activation process.
+## Funding configuration
+
+Owner-funded inference requires durable storage, a positive `DAILY_SERVER_BUDGET_USD`,
+reviewed `MANAGED_MODEL_COST_BOUNDS_JSON`, an approved model/provider route, output caps,
+and an enabled funding policy. Missing or invalid configuration fails closed. The Render
+test environment keeps the daily cap at zero and `OPERATOR_FUNDING_DISABLED=true`.
+
+Reservations include the reviewed full input ceiling, maximum output including reasoning,
+and request fees. Every upstream retry reserves again, with at most three attempts. Failed,
+unknown or incomplete responses retain the whole reservation. Only complete provider usage
+qualifies for one settlement; usage outside the bounds freezes the day. Provider-side key
+limits remain necessary if vendor prices or billing semantics change.
+
+The anonymous limiter stores salted IP + User-Agent fingerprints and a companion IP quota
+in a bounded, nonpersistent rolling-hour cache. Recent quotas are not evicted to admit new
+clients. It uses the observed socket IP, ignoring untrusted forwarding headers; a reverse
+proxy may therefore share one conservative limit among visitors. It resets on process restart.
+The shared database daily cap does not reset on restart.
+
+`FREE_MAX_OUTPUT_TOKENS` bounds free replies regardless of client requests. Smaller explicit
+settings, including 1,024 and 8,192, are retained. `FREE_MAX_PER_HOUR` defaults to 40 and is
+bounded at 1,000. Monthly credits support product quotas; they are not dollar accounting.
+For the complete current schema and configuration examples, use the root README.
+
+xKiro discovery accepts only explicit `access_tier: "free"` entries with zero input and output
+prices. `XKIRO_FREE_MODELS` narrows that live pool; it cannot supply models before discovery.
+Matching is case insensitive and returns the canonical gateway ID, preserving punctuation.
+xKiro is an unknown relay and does not become an approved operator route through discovery.
+
+## API and connectors
+
+- `POST /api/chat` streams model responses; `POST /api/models` lists models. Provider keys,
+  routes and budgets are resolved server-side. `GET /api/providers` publishes safe model
+  capabilities; `GET /api/health` reports storage, deployed commit, identity and funding policy.
+- `/api/workspace/session` issues anonymous workspace proof. `/api/state`, `/api/state/usage`
+  and `/api/state/clear` require ownership. Client credit entries cannot fund a provider request.
+- `/api/admin/*` manages sealed owner settings, keys and tiers. Initial setup requires a
+  Render bootstrap secret and a password of at least twelve characters. Remove the bootstrap
+  variable after setup. Keep `SESSION_SECRET` and `SETTINGS_SECRET` stable across redeploys.
+- `POST /api/github` only supports closed, read-only operations. `POST /api/fetch` fetches
+  bounded text from public addresses, with pinned DNS and rechecked redirects.
+- `POST /api/browse` uses a fresh Chromium context, public-address checks and
+  `BROWSE_ALLOWED_HOSTS`; it blocks downloads and credentials.
+- `POST /api/mcp` forwards bounded remote MCP calls to public HTTPS hosts. Imported skills
+  and connector descriptions do not grant execution or spending permissions.
+- `/api/jobs` supports an optional worker protocol. No worker is deployed. Jobs refuse
+  requests carrying personal API keys or access tokens.
+
+The root `render.yaml` creates a free Node test service plus a free Postgres test database.
+It is not automatically applied to the existing service. The live service builds through
+`web/package.json`, a compatibility bridge to this package. Its main-branch auto-deploy is
+configured in Render. Docker and worker files remain available for separately reviewed setups.
+
+## Verification and remaining work
+
+Run frontend tests, hermetic server tests and a production build before release. The budget
+suite checks concurrent requests, retained retry charges, UTC reset, idempotent settlement,
+reopening, cache churn, experimental isolation and discovery normalization. Workflow tests
+exercise three attempts at every stage and a recursively requesting tool response.
+
+Production repository execution still needs an isolated sandbox, server-owned action approvals,
+reviewed provider adapters and durable resumable jobs/artifacts. The current deployment does
+not execute arbitrary repositories or expose hardware storage through a server browser.
+
+See [monthly plan setup](../../docs/monthly-plans.md) for the existing manual activation flow.
+Plan credit allowances do not override the global USD gate or permit Experiment funding.

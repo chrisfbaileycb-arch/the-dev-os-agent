@@ -1,30 +1,28 @@
 # Render Blueprint for the Signal Forge OS web edition.
 # Create it from the dashboard: New > Blueprint, pick this repo, branch main.
 #
-# ONE standard Node web service. No Docker, no persistent disk, no background worker — this
-# file matches the service actually running at https://hey-buddy-web.onrender.com so that
-# recreating it from the Blueprint reproduces what is live, rather than a different topology.
+# One standard Node web service and a free test Postgres database. No Docker, persistent
+# disk or worker. The existing live service retains its instance plan and compatibility
+# build commands; creating this Blueprint provisions a separate free test topology.
 #
 # What that costs, stated plainly so it is a choice and not a surprise:
 #
 #   No Chromium.      The Browser Agent persona cannot run; /api/browse answers 503. Everything
 #                     else works, including the URL crawler connector, which needs no browser.
 #
-#   No disk.          SQLite at DATA_FILE=/tmp is wiped on every restart. The monthly free-tier
-#                     number is counted in the browser, not remembered by this process. Admin
-#                     settings in that file do not survive. FREE_MAX_PER_HOUR is the in-memory
-#                     spend bound. If DATABASE_URL from the free Postgres below is set, admin
-#                     settings and the server ledger do survive, and experiment keys may be
-#                     stored. The page says which case you are in.
+#   No disk.          DATABASE_URL below makes workspace data, owner settings and the daily
+#                     USD reservation ledger durable in Postgres. Without durable storage,
+#                     owner-funded inference fails closed. The rolling anonymous request
+#                     cache resets on restart; the database spending ledger does not.
+#                     The free test database expires after 30 days and has no backups.
 #
 #   No worker.        Multi-step agent workflows run in the visitor's own browser Web Worker,
 #                     which is the default path regardless. /api/jobs reports `worker: false`
 #                     and the queue stays idle. The worker code (server/worker.mjs) is kept and
 #                     tested so a second service can be added later without a rewrite.
 #
-# To get the durable version — Chromium for the Browser Agent, a 1 GB disk so the ledger and the
-# free-tier quota persist, and a background worker for heavy runs — see "Scaling up" in
-# web/README.md, which describes the Docker-plus-disk topology this file previously declared.
+# Chromium, a worker and durable resumable execution need separate provisioning and testing.
+# See docs/render-setup.md for owner setup and current limitations.
 
 databases:
   - name: hey-buddy-db
@@ -46,7 +44,7 @@ services:
     autoDeploy: true
     buildCommand: npm ci && cd packages/web && npm run build
     startCommand: node packages/web/server/index.mjs
-    # Probe the workspace page: a healthy API alone can hide a broken static-file server.
+    # Verify the static workspace page separately during release checks.
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
@@ -113,12 +111,17 @@ services:
       # Raising this pool, and setting FREE_TIER_DISABLED to "false", is how an operator turns it back on.
       - key: FREE_CREDIT_MONTHLY_POOL
         value: "0"
-      # Per-IP burst cap. With no disk this is the binding constraint on free-tier spend, since
-      # the workspace id is browser-minted and the monthly quota does not survive a restart.
+      # Rolling IP + User-Agent cap. This resets with the process; the USD ledger does not.
       - key: FREE_MAX_PER_HOUR
         value: "40"
       - key: FREE_MAX_OUTPUT_TOKENS
         value: "16384"
+      # No new spending authorized. Positive caps additionally require durable storage and
+      # reviewed per-route pricing/context bounds. Owner funding stays disabled independently.
+      - key: DAILY_SERVER_BUDGET_USD
+        value: "0"
+      - key: MANAGED_MODEL_COST_BOUNDS_JSON
+        value: "[]"
       # There is no longer a switch for US-only funding: the server funds only the backend lane
       # (OpenAI, Anthropic, Google, Groq, xAI; see server/providerRegistry.mjs). Add those keys, and pick
       # which of their models are free or paid, in the admin dashboard. Every other provider is

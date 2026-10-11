@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS ledger (workspace_id TEXT NOT NULL, id TEXT NOT NULL,
 CREATE INDEX IF NOT EXISTS ledger_workspace_at ON ledger (workspace_id, at);
 CREATE INDEX IF NOT EXISTS sessions_workspace_updated ON sessions (workspace_id, updated_at);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS daily_server_budget (day TEXT PRIMARY KEY, charged_nanos INTEGER NOT NULL DEFAULT 0 CHECK(charged_nanos >= 0), blocked INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS server_budget_attempts (id TEXT PRIMARY KEY, day TEXT NOT NULL, charged_nanos INTEGER NOT NULL, settled INTEGER NOT NULL DEFAULT 0);
 `;
 
 export function openDatabase(file = ':memory:') {
@@ -44,6 +46,26 @@ export function openDatabase(file = ':memory:') {
   };
   const parse = rows => rows.map(r => { try { return JSON.parse(r.body); } catch { return null; } }).filter(Boolean);
   return {
+    reserveDailyBudget({ id, day, nanos, limit }) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('INSERT OR IGNORE INTO daily_server_budget (day) VALUES (?)').run(day);
+        const accepted = db.prepare('UPDATE daily_server_budget SET charged_nanos=charged_nanos+? WHERE day=? AND blocked=0 AND charged_nanos<=?').run(nanos, day, limit - nanos).changes === 1;
+        if (accepted) db.prepare('INSERT INTO server_budget_attempts (id,day,charged_nanos) VALUES (?,?,?)').run(id, day, nanos);
+        db.exec('COMMIT'); return accepted;
+      } catch (e) { db.exec('ROLLBACK'); throw e; }
+    },
+    settleDailyBudget(id, actual, blocked = false) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const row = db.prepare('SELECT day,charged_nanos FROM server_budget_attempts WHERE id=? AND settled=0').get(id);
+        if (row) {
+          db.prepare('UPDATE daily_server_budget SET charged_nanos=charged_nanos+?,blocked=MAX(blocked,?) WHERE day=?').run(actual - row.charged_nanos, blocked ? 1 : 0, row.day);
+          db.prepare('UPDATE server_budget_attempts SET charged_nanos=?,settled=1 WHERE id=?').run(actual, id);
+        }
+        db.exec('COMMIT');
+      } catch (e) { db.exec('ROLLBACK'); throw e; }
+    },
     upsertSessions(workspace, list) { const tx = db.prepare('BEGIN'); tx.run(); try { for (const s of list) statements.session.run(workspace, s.id, s.updatedAt, JSON.stringify(s)); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },
     /** Forget specific sessions for one workspace. The pull would otherwise hand them straight back. */
     removeSessions(workspace, ids) { db.exec('BEGIN'); try { for (const id of ids) statements.removeSession.run(workspace, id); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },

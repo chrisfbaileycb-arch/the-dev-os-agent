@@ -21,6 +21,7 @@ import { classifyStorage } from './durability.mjs';
 import { createEngine } from './antigravity.mjs';
 import { cspFor } from './csp.mjs';
 import { createWorkspaceSession } from './workspace.mjs';
+import { dailyBudgetNanos, NANOS_PER_USD } from './budget.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 // Workspace data: Postgres when DATABASE_URL is set, SQLite otherwise.
 // Jobs are always SQLite — they are transient hand-offs and must never carry credentials.
@@ -53,7 +54,7 @@ const cacheControl = (file) => file.startsWith(root + 'assets' + sep) ? 'public,
 const server = createServer(async (req, res) => {
   if (req.url === '/api/health' && ['GET', 'HEAD'].includes(req.method)) {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ ok: true, commit: process.env.RENDER_GIT_COMMIT || null, storage: storage.kind, workspaceIdentity: Boolean(process.env.SESSION_SECRET?.length >= 32), operatorFundingDisabled: process.env.OPERATOR_FUNDING_DISABLED === 'true' }));
+    res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ ok: true, commit: process.env.RENDER_GIT_COMMIT || null, storage: storage.kind, workspaceIdentity: Boolean(process.env.SESSION_SECRET?.length >= 32), operatorFundingDisabled: process.env.OPERATOR_FUNDING_DISABLED === 'true', dailyServerBudgetUsd: dailyBudgetNanos(process.env) / NANOS_PER_USD }));
     return;
   }
   for (const handle of handlers) if (await handle(req, res)) return;

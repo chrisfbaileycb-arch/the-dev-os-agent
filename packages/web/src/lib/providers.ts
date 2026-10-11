@@ -121,7 +121,7 @@ export function inferenceFor(model: string, current?: InferenceMode, funded?: st
   if (current === 'byok' || current === 'credits') return current;
   if (!Array.isArray(funded)) return current ?? 'byok';
   const id = model.trim().toLowerCase();
-  return funded.some(f => f.toLowerCase() === id) ? 'free' : 'byok';
+  return funded.some(f => f.trim().toLowerCase() === id) ? 'free' : 'byok';
 }
 
 /**

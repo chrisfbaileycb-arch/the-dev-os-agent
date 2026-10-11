@@ -9,6 +9,8 @@ import type { Completion, Run, StageModels, StartMessage, Workflow } from './typ
 
 // Stage roles come from the Signal Forge OS roster; `roles` keeps the old shape for callers and tests.
 export const roles: { name: string; role: AgentRole; capabilities: string[]; instruction: string }[] = skills.map(s => ({ name: s.name, role: s.role, capabilities: s.capabilities, instruction: s.prompt }));
+export const MAX_STAGE_TURNS = 3;
+export const MAX_WORKFLOW_CALLS = 15;
 const specifications: Record<Workflow, { title: string; type: string; deps: number[] }[]> = {
   build: [{ title: 'Plan the work', type: 'planning', deps: [] }, { title: 'Analyze requirements', type: 'research', deps: [0] }, { title: 'Design the solution', type: 'design', deps: [0] }, { title: 'Review & challenge', type: 'review', deps: [1, 2] }, { title: 'Produce the deliverable', type: 'synthesis', deps: [0, 1, 2, 3] }],
   research: [{ title: 'Frame the question', type: 'planning', deps: [] }, { title: 'Examine the evidence', type: 'research', deps: [0] }, { title: 'Explore alternatives', type: 'design', deps: [0] }, { title: 'Challenge assumptions', type: 'review', deps: [1, 2] }, { title: 'Write the brief', type: 'synthesis', deps: [0, 1, 2, 3] }],
@@ -20,7 +22,8 @@ export function selectAgent(agents: Agent[], task: Task): Agent | undefined {
 }
 export function makeTasks(workflow: Workflow): Task[] {
   const tasks: Task[] = [];
-  for (const spec of specifications[workflow]) tasks.push(Task.create({ title: spec.title, description: spec.title, type: spec.type, dependencies: spec.deps.map(i => tasks[i].id), maxRetries: 2 }));
+  // Ruflo's maxRetries is the total failure count, including the initial attempt.
+  for (const spec of specifications[workflow]) tasks.push(Task.create({ title: spec.title, description: spec.title, type: spec.type, dependencies: spec.deps.map(i => tasks[i].id), maxRetries: MAX_STAGE_TURNS }));
   return tasks;
 }
 export function wait(ms: number, signal: AbortSignal): Promise<void> {
@@ -68,7 +71,7 @@ export async function executeRun(message: StartMessage, signal: AbortSignal, emi
   const run: Run = { id: message.runId, goal, workflow, mode: connection.mode, model: connection.model, status: 'running', startedAt: new Date().toISOString(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: context.map(d => d.title), sessionId: message.sessionId, persona: message.persona };
   const snapshot = () => { run.steps = tasks.map((t, index) => { const model = modelForStage(stageModels, t.type, connection.model); return { id: t.id, title: t.title, agent: agents.find(a => a.id === t.assignedAgentId)?.name ?? roles.find(r => r.capabilities.includes(t.type))?.name ?? 'Agent', status: t.status, output: typeof t.output === 'string' ? t.output : partial.get(t.id), error: t.error, attempts: t.retryCount, phase: depths[index], ...(model !== connection.model ? { model } : {}) }; }); emit(structuredClone(run)); };
   async function runTask(task: Task): Promise<void> {
-    while (true) {
+    for (let turn = 0; turn < MAX_STAGE_TURNS; turn++) {
       signal.throwIfAborted(); const agent = selectAgent(agents, task); if (!agent) throw new Error('No agent available for task.');
       partial.delete(task.id); task.assign(agent.id); agent.assignTask(task.id); task.start(); snapshot();
       try {
@@ -82,7 +85,7 @@ export async function executeRun(message: StartMessage, signal: AbortSignal, emi
         const cacheKey = JSON.stringify([stageConnection.endpoint, stageConnection.model, stageConnection.maxTokens, system, prompt]);
         const cached = cache.get(cacheKey); let result: Completion;
         if (cached !== undefined) { run.cacheHits++; result = { text: cached, tokens: 0 }; }
-        else { run.calls++; result = await call(stageConnection, system, prompt, signal, text => { partial.set(task.id, text); const now = Date.now(); if (now - (streamedAt.get(task.id) || 0) > 75) { streamedAt.set(task.id, now); snapshot(); } }); cache.set(cacheKey, result.text); }
+        else { if (run.calls >= MAX_WORKFLOW_CALLS) throw new ProviderError('Workflow reached its request limit.'); run.calls++; result = await call(stageConnection, system, prompt, signal, text => { partial.set(task.id, text); const now = Date.now(); if (now - (streamedAt.get(task.id) || 0) > 75) { streamedAt.set(task.id, now); snapshot(); } }); cache.set(cacheKey, result.text); }
         signal.throwIfAborted(); run.tokens += result.tokens; task.complete(result.text); agent.completeTask(task.id); snapshot(); return;
       } catch (e) {
         if (signal.aborted) { task.cancel(); agent.terminate(); snapshot(); return; }
@@ -91,10 +94,11 @@ export async function executeRun(message: StartMessage, signal: AbortSignal, emi
         const retryable = e instanceof ProviderError && e.retryable;
         if (retryable && task.status === 'queued') { snapshot(); await wait(750 * task.retryCount, signal); continue; }
         // Ruflo fail() requeues until retry limit: exhaust non-retryable failures explicitly.
-        while (task.status === 'queued') { task.assign(agent.id); task.start(); task.fail(error); }
+        for (let failure = 0; task.status === 'queued' && failure < MAX_STAGE_TURNS; failure++) { task.assign(agent.id); task.start(); task.fail(error); }
         snapshot(); return;
       }
     }
+    if (!['completed', 'failed', 'cancelled'].includes(task.status)) task.cancel();
   }
   snapshot();
   try {

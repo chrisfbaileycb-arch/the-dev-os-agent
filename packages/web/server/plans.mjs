@@ -11,7 +11,7 @@ const previousOutputLimits = { starter: 8192, premium: 16384, pro: 32768 };
 const bounded = (value, fallback, min, max) => value === undefined || value === '' || !Number.isFinite(Number(value))
   ? fallback : Math.min(max, Math.max(min, Math.floor(Number(value))));
 export function freeOutputTokens(env = process.env) {
-  return [1024, 8192].includes(Number(env.FREE_MAX_OUTPUT_TOKENS)) ? 16384 : bounded(env.FREE_MAX_OUTPUT_TOKENS, 16384, 64, 65536);
+  return bounded(env.FREE_MAX_OUTPUT_TOKENS, 16384, 64, 65536);
 }
 export function planLimits(id, env = process.env) {
   const plan = PLANS.find(p => p.id === id) ?? PLANS[0];

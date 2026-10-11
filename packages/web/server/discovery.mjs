@@ -56,7 +56,8 @@ export function isFreeModel(model) {
   if (model.access_tier !== 'free') return false;
   const pricing = model.pricing;
   if (!pricing || typeof pricing !== 'object') return false;
-  return Number(pricing.input) === 0 && Number(pricing.output) === 0;
+  const zero = value => (typeof value === 'number' && value === 0) || (typeof value === 'string' && /^0(?:\.0+)?$/.test(value.trim()));
+  return zero(pricing.input) && zero(pricing.output);
 }
 
 /**

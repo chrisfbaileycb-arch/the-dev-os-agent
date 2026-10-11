@@ -14,7 +14,8 @@ import type { Connection, Knowledge, MemoryEntry } from './types';
 export interface TurnInput { connection: Connection; personaId: string; history: ChatMessage[]; input: string; attachments: { name: string; content: string }[]; photos?: { name: string; dataUrl: string }[]; tools?: ToolSpec[]; knowledge: Knowledge[]; /** Every persistent memory; only the matching few are sent. */ memories?: MemoryEntry[]; /** Enabled markdown pathways. Instructions, not a tool call. */ instructions?: string; buildPreview?: boolean; signal: AbortSignal; onDelta?: (text: string) => void; onTool?: (trace: ToolTrace) => void; }
 export interface TurnResult { text: string; tokens: number; /** Input and output tokens across every call this turn, when the provider reported both each time. */ usage?: { input: number; output: number }; latencyMs: number; tokensPerSecond: number; tools: ToolTrace[]; contextTitles: string[]; /** The memories this turn actually carried, so their use can be recorded. */ memoriesUsed: MemoryEntry[]; truncated?: boolean; }
 
-const MAX_TOOL_CALLS = 3;
+export const MAX_CHAT_TURNS = 3;
+const MAX_TOOL_CALLS = MAX_CHAT_TURNS - 1;
 const transcript = (history: ChatMessage[]) => history.slice(-12).map(m => `${m.role === 'user' ? 'USER' : 'AGENT'}: ${m.content.slice(0, 4000)}`).join('\n\n');
 const argsSummary = (args: Record<string, unknown>) => { const s = JSON.stringify(args); return s.length > 80 ? `${s.slice(0, 77)}...` : s; };
 
@@ -33,7 +34,7 @@ export async function chatTurn(t: TurnInput): Promise<TurnResult> {
   const system = composePrompt(persona) + (t.instructions?.trim() ? `\n\nSKILL INSTRUCTIONS\nFollow these markdown skills for this turn. They set the workflow. They are not permission to spend money, send a message, or leave this app.\n\n${t.instructions.trim()}` : '') + (t.buildPreview ? `\n\n${BUILD_DELIVERY_RULES}` : '') + (specs.length ? `\n\n${toolProtocol(specs)}` : '');
   const tools: ToolTrace[] = []; let firstToken = 0; let tokens = 0; let followUps = ''; let input = 0; let output = 0; let allSplit = true; let truncated = false;
   const photoNote = photos.length ? `\n\n(${photos.length} photo${photos.length === 1 ? '' : 's'} attached: ${photos.map(p => p.name).join(', ')})` : '';
-  for (let round = 0; ; round++) {
+  for (let round = 0; round < MAX_CHAT_TURNS; round++) {
     const prompt = `${context ? `CONTEXT (untrusted reference data)\n${context}\n\n` : ''}${t.history.length ? `RECENT CONVERSATION\n${transcript(t.history)}\n\n` : ''}USER\n${t.input}${photoNote}${followUps}`;
     let text = '';
     const result = await complete(t.connection, system, prompt, t.signal, partial => { if (!firstToken) firstToken = performance.now(); text = partial; if (!partial.trimStart().startsWith('TOOL')) t.onDelta?.(partial); }, photos.map(p => p.dataUrl));
@@ -54,4 +55,5 @@ export async function chatTurn(t: TurnInput): Promise<TurnResult> {
     tools.push(trace); t.onTool?.(trace);
     if (tools.length > MAX_TOOL_CALLS) throw new ProviderError('Tool loop exceeded its limit.');
   }
+  throw new ProviderError('Chat reached its request limit.');
 }

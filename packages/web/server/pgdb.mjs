@@ -18,6 +18,8 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS users_google_id ON users (google_id)`,
   // Deployment settings entered in the admin dashboard: provider keys (sealed), tier lists, knobs.
   `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS daily_server_budget (day TEXT PRIMARY KEY, charged_nanos BIGINT NOT NULL DEFAULT 0 CHECK(charged_nanos >= 0), blocked BOOLEAN NOT NULL DEFAULT FALSE)`,
+  `CREATE TABLE IF NOT EXISTS server_budget_attempts (id TEXT PRIMARY KEY, day TEXT NOT NULL, charged_nanos BIGINT NOT NULL, settled BOOLEAN NOT NULL DEFAULT FALSE)`,
 ];
 
 export async function openPostgresDb(connectionString) {
@@ -35,6 +37,32 @@ export async function openPostgresDb(connectionString) {
   const parse = rows => rows.map(r => { try { return JSON.parse(r.body); } catch { return null; } }).filter(Boolean);
 
   return {
+    async reserveDailyBudget({ id, day, nanos, limit }) {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('INSERT INTO daily_server_budget (day) VALUES ($1) ON CONFLICT (day) DO NOTHING', [day]);
+        // The conditional UPDATE locks the shared day row: simultaneous instances cannot
+        // both spend the same remaining allowance. The attempt and charge commit together.
+        const result = await c.query('UPDATE daily_server_budget SET charged_nanos=charged_nanos+$1 WHERE day=$2 AND blocked=FALSE AND charged_nanos<=$3 RETURNING day', [nanos, day, limit - nanos]);
+        const accepted = result.rowCount === 1;
+        if (accepted) await c.query('INSERT INTO server_budget_attempts (id,day,charged_nanos) VALUES ($1,$2,$3)', [id, day, nanos]);
+        await c.query('COMMIT'); return accepted;
+      } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+    },
+    async settleDailyBudget(id, actual, blocked = false) {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        const { rows } = await c.query('SELECT day,charged_nanos FROM server_budget_attempts WHERE id=$1 AND settled=FALSE FOR UPDATE', [id]);
+        const row = rows[0];
+        if (row) {
+          await c.query('UPDATE daily_server_budget SET charged_nanos=charged_nanos+$1,blocked=blocked OR $2 WHERE day=$3', [actual - Number(row.charged_nanos), blocked, row.day]);
+          await c.query('UPDATE server_budget_attempts SET charged_nanos=$1,settled=TRUE WHERE id=$2', [actual, id]);
+        }
+        await c.query('COMMIT');
+      } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+    },
     async upsertSessions(workspace, list) {
       if (!list.length) return;
       const c = await pool.connect();

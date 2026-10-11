@@ -1,91 +1,154 @@
 # Signal Forge OS, web edition
 
-The October 11 test deployment adds owner-only bootstrap setup, signed workspace ownership,
-a hosting-controlled funding stop switch, and complete pinned skill packages. See
-[Render setup and remaining execution requirements](docs/render-setup.md).
+A React/Node workspace with chat, five-stage agent workflows, local knowledge and memories,
+full attributed skills, a generated-app preview, and optional read connectors.
 
-Your AI crew. Always in your corner. A privacy-first workspace for one person or a small business: business agents you chat with, three multi-agent workflows on a browser-adapted subset of Ruflo's Agent and Task entities, a connectors hub, a knowledge hub that stays on the device, a model hub, a credit ledger, and a sandboxed browser agent. Hosted inference goes through one streaming proxy. The funded free tier is US labs only.
+Live test host: **https://hey-buddy-web.onrender.com**. Render auto-deploys GitHub `main`.
+Application code is in `packages/web/`; the root `web/` package is a Render build bridge.
+See [owner setup and deployment details](docs/render-setup.md).
 
-**Open it and type.** On a deployment with server provider keys, a first-time visitor gets a live streaming reply with no sign-up, no API key, and nothing to configure: the server funds models only from US providers (Anthropic, OpenAI, Google, xAI, Groq, Cerebras), chosen in the admin dashboard. The dock has three model groups: **Models** (those US labs, plus whatever this deployment funds), **Experiment** (OpenRouter and Hugging Face, your key, not the free tier, and not Shield), and **On this machine**. The monthly free-tier number is counted in the browser unless this host has durable storage (Postgres via `DATABASE_URL`, or a SQLite file outside `/tmp`). The live Render service has no disk, so it does not claim to remember that quota. `FREE_MAX_PER_HOUR` is the in-memory cap that bounds spend on the deployment's keys, and it dies with the process.
+The current deployment uses Postgres for server state and settings, signed workspace cookies,
+owner bootstrap protection, and `/api/health` monitoring. Owner-funded inference is **disabled**.
+Visitors can use their own provider keys in Settings or an explicitly enabled local model server.
+Personal keys stay in page memory and clear on reload; never include them in prompts or skills.
 
-Everything an operator configures — provider keys, which models are free and which are on the paid plan, the free-tier limits — is entered in an admin dashboard at `/admin` (gated by `ADMIN_TOKEN`) and applies to the next request without a redeploy. A visitor who brings a key sees every model that key reaches, listed live from the provider in the prompt bar's model menu.
+## xKiro Gateway & Discovery Protocol
 
-Built in the United States as an original alternative to the well-known clients. Inspired by FreeToken Web, Ruflo, AnythingLLM, LobeHub, and Cherry Studio; original code and prompts throughout, with the Apache and MIT notices for the FreeToken and Ruflo code carried in `packages/web/`. Carol Ann is the owner's own reference for the skills registry, not an upstream.
+- **Dynamic discovery:** the server reads `GET {base}/models` at boot and refreshes its cached
+  catalogue on demand after one hour. xKiro's discovered free subset requires both
+  `access_tier: "free"` and explicit numeric or numeric-string zero input/output prices.
+  Missing, null, boolean, blank and nonzero pricing is rejected.
+- **Drift protection:** `XKIRO_FREE_MODELS` narrows the live discovered free subset. A cold or
+  empty catalogue admits nothing. Matching ignores casing and surrounding whitespace while
+  preserving `/`, `-`, `.`, `_` and `:`; punctuation is not deleted or prefix-matched.
+  Outbound requests use the gateway's canonical ID. A failed refresh retains the last good
+  catalogue and retries after a minute; cached metadata is not a permanent price guarantee.
+- **Funding policy:** discovery is catalogue information, not permission to spend. The operator
+  backend currently permits OpenAI, Anthropic, Google, Groq and xAI. xKiro, OpenRouter and
+  Hugging Face are excluded from operator-funded pools. A provider's headquarters does not
+  establish the model developer's nationality, processing region, or data-retention terms.
+- **Experimental isolation:** Experiment chat and discovery requests send
+  `X-Forge-Is-Experimental: true`. The proxy also recognizes `experimental: true` metadata and
+  the OpenRouter/Hugging Face provider IDs, so omitting the header cannot enable those routes.
+  Without a personal key it returns HTTP 401, `key_required`, before discovery or routing.
+  Server access tokens and stored owner keys cannot substitute for the personal key. Experiment
+  providers are excluded from `shieldProviders()` and funded free/paid model lists.
 
-The application lives in [`packages/web/`](packages/web/). Read [`packages/web/README.md`](packages/web/README.md) for what is in the box, the API, environment variables, security boundaries, and verification steps. The earlier Floot-hosted edition has been removed; `packages/web/` is the only edition, and Render is the deployment target.
+## Financial Defenses & Graceful Degradation
 
-`web/` at the repo root is only a Render build bridge (a two-script package.json). Do not edit application code there.
+- **Personal-key priority:** a supplied valid personal key always wins over a plan token or a
+  funded model match. It never silently falls back to the operator's key after a provider failure.
+- **Token capping:** `FREE_MAX_OUTPUT_TOKENS` caps funded free replies on the server. Explicit
+  smaller caps, including 1,024 and 8,192, stay in effect. Browser parameters cannot raise them.
+- **Rolling rate limits:** `FREE_MAX_PER_HOUR` limits hashed server-observed IP + User-Agent
+  fingerprints and the IP alone over the preceding hour. Changing User-Agent or a workspace
+  header does not reset the IP allowance. The salted cache has at most 10,000 entries and fails
+  closed when full; it stores no raw fingerprint and resets with the process. Behind a proxy,
+  the observed peer may represent several visitors; untrusted forwarding headers are ignored.
+  Fingerprints are an abuse speed bump, not durable identity or the dollar spending boundary.
+- **Daily USD cap:** all operator-funded chat attempts, free and paid-plan alike, must atomically
+  reserve cost against `DAILY_SERVER_BUDGET_USD` in the shared database before dispatch. The cap
+  resets by UTC dispatch day. Missing/invalid/zero caps deny funded work with
+  `free_tier_exhausted`. Non-durable storage, missing cost bounds or unknown routes fail closed.
+  Workspace clearing and web-service restarts do not reset the separate USD ledger.
+- **Concurrency and retries:** pending reservations count against the cap immediately, across
+  processes sharing Postgres. Each credential retry reserves separately; at most three upstream
+  attempts are allowed per proxy request. Interrupted/failed/unmetered attempts retain their
+  full reservation. Only a fully drained completion with valid provider-reported input/output
+  usage qualifies for reconciliation; repeated settlement cannot refund twice. Usage above
+  approved bounds freezes the shared day's allowance.
+- **Bounded execution:** each workflow stage permits at most three model calls, including
+  retries; five stages permit at most fifteen. The tool-enabled chat loop permits three model calls and
+  two tool calls. These browser limits improve normal execution; a modified client still faces
+  the independent server quotas and USD reservations.
+- **Stable error shape:** failures return `{error: {message, code}}`. Keyless paths use
+  `free_tier_unavailable`, `free_tier_busy`, or `free_tier_exhausted`; upstream credential bodies
+  are not returned to the browser. The hosting emergency stop returns `operator_funding_disabled`.
+  Error codes do not claim that credits are equivalent to dollars.
 
-It is an installable progressive web app. On a Chromebook, or in Chrome on any desktop, the address-bar install icon (or the Install button in Settings) adds the workspace to the shelf or dock, where it opens in its own window. It ships an offline shell, so an installed copy opens without a connection and the scripted preview keeps working; hosted provider runs still need the network.
+### Required managed-cost configuration
 
-## Layout
+| Environment variable | Meaning |
+| --- | --- |
+| `OPERATOR_FUNDING_DISABLED` | Hosting-controlled emergency stop; currently `true`. |
+| `DAILY_SERVER_BUDGET_USD` | Shared daily USD ceiling, at most 10,000; currently `0`. |
+| `MANAGED_MODEL_COST_BOUNDS_JSON` | Reviewed route bounds; currently `[]`, so no route is approved for spending. |
+| `FREE_MAX_PER_HOUR` | Rolling network/fingerprint quota, default 40, maximum 1,000. |
+| `FREE_MAX_OUTPUT_TOKENS` | Server reply cap, default 16,384, range 64–65,536. |
+| `FREE_CREDIT_MONTHLY_POOL` | Separate monthly credit allowance; currently `0`. |
+| `FREE_TIER_DISABLED` | Free-tier switch; currently `true`. |
 
-```
-packages/web/            Vite + React 19 front end, Web Worker orchestrator, Node 22 server
-packages/web/src/ui/     Rail, Dock, ModelPicker, RunCard (pipeline strip), Connectors, Roster, Knowledge, Settings, StatusBar
-packages/web/src/lib/    catalog (models, tiers, credit weights), providers (connection profiles), deployment (what this host funds),
-                connectors (GitHub, URL crawler, documents, MCP as agent tools), roster (personas, safety baseline),
-                store (IndexedDB + server sync), chat (single-agent turn with tool loop), orchestrator (five-stage workflows)
-packages/web/server/     index.mjs (static + API), proxy.mjs (SSE provider proxy and funding decision), admin.mjs (/api/admin dashboard
-                routes), settings.mjs (dashboard keys, knobs and tiers laid over the environment), secrets.mjs (AES-GCM
-                sealing for stored keys), models.mjs (one shape for every provider's model list), freetier.mjs (zero-config
-                allowlist and quotas), meter.mjs (server-side token metering), db.mjs (SQLite), state.mjs (/api/state),
-                fetch.mjs (/api/fetch), github.mjs (/api/github), mcp.mjs (/api/mcp), browse.mjs (/api/browse),
-                jobs.mjs (/api/jobs queue), worker.mjs (Render background worker)
-packages/web/public/     manifest.webmanifest, icons/ (Signal Forge OS icon set), licences
-packages/web/pwa/        service-worker.js template and build-worker.mjs, which emits dist/sw.js with the real precache list
-packages/web/src/vendor/ruflo/   Browser-adapted Ruflo Agent and Task domain entities
-packages/web/tests/      vitest unit tests and node:test server tests (mocked upstreams, a local fixture page for Chromium)
-render.yaml     Render Blueprint: one free Node web service, no disk, optional free Postgres. The monthly free-tier ledger stays in the browser unless DATABASE_URL or a durable DATA_FILE is set.
-.github/workflows/web.yml   CI: npm ci, Chromium install, npm test, npm run test:server, npm run build
-```
+Each cost-bound entry identifies the exact outbound `provider` and `model` and supplies
+`inputUsdPerMillion`, `outputUsdPerMillion`, `requestUsd`, `maxInputTokens`, and
+`outputIncludesReasoning: true`. These are operator-reviewed **upper bounds**, not browser
+prices or inferred catalogue labels. The input ceiling must cover the provider's full supported
+input context and all billable cache/input variants; output pricing must cover reasoning tokens
+within the enforced generation limit. Include any fixed request fees. Unknown pricing, additional
+modalities, and unsupported bounds are refused rather than treated as free.
 
-## Run locally
+Reservations initially cover the entire approved input-token ceiling plus capped generation and
+request fees. This is deliberately conservative; actual provider-reported tokens can reduce the
+reservation after a complete response. The ledger stores integer billionths of a dollar and rounds
+reservations up. Provider-enforced key limits remain necessary protection against price changes,
+incorrect reviewed bounds, or provider behavior; this is not a guarantee against an unrestricted
+vendor bill. No positive spending allowance or new model-provider key was configured by this update.
 
-Requires Node 22 or newer.
+## Knowledge Hub and physical USB
+
+Knowledge and memories are stored in this browser's IndexedDB. That does not itself encrypt them.
+Retrieved excerpts are sent to the selected model when the user starts a message or workflow.
+
+A normal USB drive can supply a text/Markdown/CSV/JSON file through **Knowledge hub → Import file**.
+The user reviews and saves it; this copies the selected content into IndexedDB. It does not mount a
+live hardware-backed knowledge database or read a hardware authentication key's secret material.
+
+[WebUSB](https://developer.chrome.com/docs/capabilities/usb) can communicate with compatible custom
+USB interfaces after an HTTPS page, user gesture, device selection and permission. Standard USB
+mass-storage and other protected interface classes are not generic WebUSB targets. Dedicated hardware
+integration requires the device's vendor/product IDs, interface/endpoints, firmware protocol,
+cryptographic design and device tests. Agent text cannot grant device permissions.
+
+USB storage alone does **not** make the web edition air-gapped. Hosted inference and server session
+sync still use the network. A hardware-only/offline mode needs a separately implemented storage
+adapter, explicit sync/network controls and local inference. No WebUSB hardware adapter is shipped.
+
+## Owner setup and live deployment
+
+1. Enter the existing private-beta access passcode at the live app.
+2. Copy `ADMIN_BOOTSTRAP_TOKEN` from Render's Environment settings, open `/admin`, and choose
+   your own password of at least twelve characters. Initial password creation is atomic.
+3. Remove the bootstrap variable after successful setup. Keep `SESSION_SECRET` and
+   `SETTINGS_SECRET` stable across redeployments.
+
+The current web service has no Chromium, disk or worker. `/api/browse` cannot execute without
+Chromium; browser-side workflows and reviewed URL reads remain available. Postgres persists server
+state and settings, but server jobs are still transient. The free database expires **November 10,
+2026, 06:31 UTC**; upgrade, migrate or export before expiry. A Blueprint is a reproducible setup,
+not an automatic update of an independently created service.
+
+The remaining developer-harness milestone needs server-owned exact-action approvals, per-user
+controls and provider-enforced spending/route policies, reviewed adapters, and isolated resumable
+repository jobs/artifacts. Deployment and prompt roles do not establish that execution loop.
+
+## Run and verify locally
+
+Requires Node 22 or newer. From the repository root:
 
 ```sh
-cd web
 npm ci
-npx playwright install chromium   # for the Browser Agent
-npm run dev        # Vite dev server with the API, workspace store, and every connector route wired in
-npm test           # unit tests
-npm run test:server
-npm run build && npm start   # production server on PORT (default 10000)
-npm run worker     # optional background worker (needs WEB_SERVICE_URL and WORKER_TOKEN)
+npm run dev --workspace=packages/web
+npm test --workspace=packages/web
+npm run test:server --workspace=packages/web
+npm run build --workspace=packages/web
+npm start --workspace=packages/web
 ```
 
-Export a real `GROQ_API_KEY` or `OPENROUTER_API_KEY` before `npm run dev` to see the zero-config tier: open the app in a private window, type a prompt, and it should stream without anything entered in Settings.
-
-## Live deployment
-
-**https://hey-buddy-web.onrender.com** — Render service `hey-buddy-web`, auto-deploying from `main`.
-
-One standard Node web service — no Docker, no persistent disk, no background worker. `render.yaml`
-now declares exactly this, so recreating from the Blueprint reproduces what is running. Two
-consequences worth knowing:
-
-- **No Chromium**, so the Browser Agent cannot run and `/api/browse` answers 503. Everything else
-  works, including the URL crawler connector, which needs no browser.
-- **No disk**, so `DATA_FILE=/tmp/heybuddy.sqlite` is wiped on every restart and redeploy. Sessions still sync when the process is up, and each browser keeps IndexedDB. The monthly free-tier quota is counted in the browser and is not a server memory. Admin settings written only to that SQLite file do not survive. OpenRouter, Hugging Face, and the execution-engine key stay in the browser unless storage is durable. `FREE_MAX_PER_HOUR` remains the only server-side spend bound, and it resets when the process does. If the blueprint's free Postgres is attached (`DATABASE_URL`), admin settings and the server ledger do survive; the page says which one you are on.
-
-Both are reversible without a rewrite; see **Scaling up** in [`packages/web/README.md`](packages/web/README.md).
-
-The zero-config free tier is off until a US-lab key such as `GROQ_API_KEY` is set in the Render dashboard. OpenRouter and Hugging Face do not fund that tier. Until a US key is set, visitors see *"Public free tier warming up — enter your own key in Settings or try again shortly."* and can supply their own key or use a local model.
-
-## Hosting
-
-The server streams provider responses as Server-Sent Events. On a host with no durable database the monthly free-tier ledger lives in the browser. A durable host (`DATABASE_URL`, or `DATA_FILE` outside `/tmp`) may keep that ledger itself. The host must run a long-lived Node process and must not buffer responses. Static-only hosting and buffered serverless routers cannot serve `/api/chat`.
-
-- **Render** (recommended): in the dashboard choose **New > Blueprint**, pick this repository, and select branch `main`. Render reads `render.yaml` and provisions two services — a Docker web service with a 1 GB disk at `/data`, and an optional Node background worker for heavier multi-step runs, sharing a generated `WORKER_TOKEN`. A disk requires a paid instance, so the blueprint pins the `starter` plan. Delete the worker block if you want a single service; workflows then run in the browser, which is the default anyway.
-  - Set `ADMIN_TOKEN` in the dashboard, open `/admin`, and enter provider keys and model tiers there — or set `GROQ_API_KEY` or `OPENROUTER_API_KEY` directly to switch the zero-config free tier on. Without them the app still deploys and works, but opens in the scripted preview and asks each visitor for their own key.
-  - Leave `APP_ORIGIN` unset: the server already matches the request origin against its own host, and a wrong value makes every API call fail with 403.
-  - Set `BROWSE_ALLOWED_HOSTS` afterwards only if you want the Browser Agent switched on.
-- **Any container host**: build `packages/web/Dockerfile` (Playwright base image with Chromium); the image listens on port 8080 and stores data under `/data`.
-- **Any Node host**: from `packages/web/`, run `npm ci && npm run build && npm start`; without Chromium the browse route answers 503 and everything else works.
-
-Copy `packages/web/.env.example` for the full list of server environment variables. Never prefix secrets with `VITE_`.
+For a local Browser Agent, install Chromium with `npx playwright install chromium` and configure
+its allowed destinations. Production API keys belong in the host's secret store; never prefix
+secrets with `VITE_`. See [`packages/web/README.md`](packages/web/README.md) for connector details.
 
 ## Licenses
 
-Apache 2.0 for this project (see [`LICENSE`](LICENSE)). Third-party notices, including the MIT-licensed Ruflo subset, are in [`packages/web/THIRD_PARTY_NOTICES.md`](packages/web/THIRD_PARTY_NOTICES.md).
+Apache 2.0 for this project: [`LICENSE`](LICENSE). Third-party notices are in
+[`packages/web/THIRD_PARTY_NOTICES.md`](packages/web/THIRD_PARTY_NOTICES.md).
+Agency Agents' pinned role files include SHA-256/source metadata and their MIT attribution.

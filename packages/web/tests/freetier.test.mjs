@@ -1,3 +1,4 @@
+import { fixtureBudgetEnv } from './budget-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -33,11 +34,11 @@ async function withProxy(options, fn) {
   // else's uptime. tests/discovery.test.mjs is where the real catalogue is exercised.
   // The production default pool is 0. These tests prove the funding mechanism, so they fund a pool
   // unless the case sets its own.
-  const env = { FREE_CREDIT_MONTHLY_POOL: '400', ...(options.env ?? {}) };
-  const handler = createProxy({ discover: async () => {}, discoverOpenRouter: async () => {}, ...options, env });
+  const env = { ...fixtureBudgetEnv, FREE_CREDIT_MONTHLY_POOL: '400', ...(options.env ?? {}) };
+  const ownedDb = options.db === undefined ? openDatabase(':memory:') : null; const handler = createProxy({ db: ownedDb, storage: { durable: true }, discover: async () => {}, discoverOpenRouter: async () => {}, ...options, env });
   const server = createServer((req, res) => { handler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
-  try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); }
+  try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); ownedDb?.close(); }
 }
 const chat = (url, body, headers = {}) => fetch(url + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspace, ...headers }, body: JSON.stringify(body) });
 
@@ -284,7 +285,7 @@ test('an allowlisted model this deployment cannot fund reads as a warming tier, 
 
 test('an upstream failure on a server-funded request is never reported as the visitor key', async () => {
   for (const status of [401, 403, 429, 500]) {
-    await withProxy({ env: { GROQ_API_KEY: 'expired-server-key' }, db: null, transport: async () => stream('nope', status) }, async url => {
+    await withProxy({ env: { GROQ_API_KEY: 'expired-server-key' }, transport: async () => stream('nope', status) }, async url => {
       const response = await chat(url, base);
       assert.equal(response.status, 503, `upstream ${status}`);
       const body = await response.json();
@@ -336,9 +337,8 @@ test('XKIRO_FREE_MODELS narrows the discovered pool and can no longer widen it',
   assert.deepEqual(xkiroPool({ XKIRO_FREE_MODELS: ' qwen/qwen3.8-max:free , deepseek/deepseek-v4-flash ' }, DISCOVERED), ['qwen/qwen3.8-max:free', 'deepseek/deepseek-v4-flash']);
   assert.deepEqual(xkiroPool({ XKIRO_FREE_MODELS: 'anthropic/claude-sonnet-4.6' }, DISCOVERED), [], 'an id the gateway did not give away is refused');
   assert.deepEqual(xkiroPool({ XKIRO_FREE_MODELS: '   ' }, DISCOVERED), DISCOVERED, 'blank means no narrowing');
-  // Before discovery answers there is nothing to intersect with, so a configured list is honoured
-  // rather than treated as empty — a one-request window at boot that /api/providers waits out.
-  assert.deepEqual(xkiroPool({ XKIRO_FREE_MODELS: 'a/b' }, []), ['a/b']);
+  // Before discovery answers there is nothing to intersect with; configuration cannot grant access.
+  assert.deepEqual(xkiroPool({ XKIRO_FREE_MODELS: 'a/b' }, []), []);
 
   const env = { XKIRO_API_KEY: 'k', XKIRO_FREE_MODELS: 'deepseek/deepseek-v4-flash', FREE_CREDIT_MONTHLY_POOL: '400' };
   assert.equal(freeModel('deepseek/deepseek-v4-flash', env, DISCOVERED)?.provider, 'xkiro');

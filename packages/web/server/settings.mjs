@@ -52,8 +52,8 @@ export const PROVIDER_META = {
  */
 export const TUNABLES = {
   FREE_CREDIT_MONTHLY_POOL: { kind: 'number', min: 0, max: 10_000_000, label: 'Free credits per workspace per month' },
-  FREE_MAX_PER_HOUR: { kind: 'number', min: 1, max: 100_000, label: 'Free requests per hour from one network' },
-  FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Output cap on a free reply (default 16,384; legacy 1,024 / 8,192 are upgraded)' },
+  FREE_MAX_PER_HOUR: { kind: 'number', min: 1, max: 1000, label: 'Free requests per rolling hour from one network' },
+  FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Output cap on a free reply (default 16,384; explicit smaller caps are respected)' },
   FREE_TIER_DISABLED: { kind: 'boolean', label: 'Free tier switched off' },
   FREE_TIER_ALLOW_FRONTIER: { kind: 'boolean', label: 'Allow frontier ids in the automatic free pool' },
   PLAN_STARTER_CREDITS: { kind: 'number', min: 0, max: 100_000_000, label: '$25 Starter: monthly credits (default 1,000)' },

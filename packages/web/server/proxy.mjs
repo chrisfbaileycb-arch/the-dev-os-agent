@@ -5,7 +5,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { planAccess, planHolder, planCredits, planRates, freeOutputTokens } from './plans.mjs';
 export { planHolder } from './plans.mjs';
-import { isBackendProvider } from './providerRegistry.mjs';
+import { isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeModels, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { isChatModelId, isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
 import { accountProbe } from './keyProbe.mjs';
@@ -14,6 +14,7 @@ import { parseSession } from './auth.mjs';
 import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog, ensureOpenRouterCatalog, openRouterCatalogStatus } from './discovery.mjs';
 import { billingStatus } from './billing.mjs';
 import { createMeter } from './meter.mjs';
+import { BudgetError, createDailyBudget } from './budget.mjs';
 
 export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
 export function publicAddress(ip) {
@@ -105,7 +106,7 @@ export function cleanKey(value) {
 export const malformed = value => typeof value === 'string' && value.trim().length > 0 && !cleanKey(value);
 
 export function keyFor(body, env = process.env) {
-  if (body.apiKey !== undefined && (typeof body.apiKey !== 'string' || body.apiKey.length > 8192 || /[\r\n]/.test(body.apiKey))) throw new HttpError(400, 'Invalid API key format.');
+  if (body.apiKey !== undefined && (typeof body.apiKey !== 'string' || body.apiKey.length > 8192 || /[\r\n]/.test(body.apiKey) || (body.apiKey.trim() && !cleanKey(body.apiKey)))) throw new HttpError(400, 'Invalid API key format.');
   if (body.apiKey?.trim()) return cleanKey(body.apiKey);
   // Never expose environment-funded requests to anonymous visitors.
   if (!planHolder(body.serverAccessToken, env)) return '';
@@ -127,6 +128,7 @@ export function keyFor(body, env = process.env) {
  * a server-funded request at a paid model.
  */
 export function fundingFor(body, env = process.env) {
+  if ((body.experimental === true || isExperimentProvider(body.provider)) && !cleanKey(body.apiKey)) return { mode: 'none', apiKey: '' };
   const supplied = keyFor(body, env);
   if (supplied) return { mode: typeof body.apiKey === 'string' && body.apiKey.trim() ? 'byok' : 'credits', apiKey: supplied };
   if (env.FREE_TIER_DISABLED === 'true') return { mode: 'none', apiKey: '' };
@@ -434,6 +436,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
   // entered in the dashboard funds the very next message with no restart.
   const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
   const takeBurst = createBurstLimiter(currentEnv);
+  const dailyBudget = createDailyBudget({ db, storage, env: currentEnv });
   const activePlans = new Set();
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://proxy').pathname;
@@ -496,6 +499,8 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       if (window.count > 60) throw new HttpError(429, 'Proxy request limit reached. Wait one minute.');
       const body = await readBody(req, path === '/api/chat' ? 12_000_000 : 256_000);
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Expected an object.');
+      const experimental = req.headers['x-forge-is-experimental'] === 'true' || body.experimental === true || isExperimentProvider(body.provider);
+      if (experimental && !cleanKey(body.apiKey)) throw new HttpError(401, 'Experiment needs a key. Add your own provider key in Settings.', 'key_required');
       if (env.OPERATOR_FUNDING_DISABLED === 'true' && !(typeof body.apiKey === 'string' && body.apiKey.trim()) && !(path === '/api/models' && body.provider === 'openrouter')) {
         throw new HttpError(503, 'Owner-funded requests are disabled until dollar budgets are configured. Use your own provider key.', 'operator_funding_disabled');
       }
@@ -564,7 +569,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       const planWorkspace = subscription?.workspace ?? null;
       let planRemaining = null;
       if (funding.mode === 'free' && path === '/api/chat') {
-        const burst = takeBurst(ip);
+        const burst = takeBurst(ip, req.headers['user-agent']);
         if (!burst.ok) throw new HttpError(429, `Free tier limit reached: ${burst.limit} requests an hour from one network. Add your own key in Settings, or try again later.`, 'free_tier_busy');
         const pool = monthlyPool(env);
         const used = db ? await db.usedThisMonth(workspace, new Date(), 'free') : 0;
@@ -596,7 +601,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
         catch (error) { throw new HttpError(502, `Could not reach Hugging Face: ${error?.message || 'connection failed'}`); }
         if (!who.ok) throw new HttpError(who.status === 401 || who.status === 403 ? 401 : 502, who.status === 401 || who.status === 403 ? 'The provider rejected this key.' : `The provider answered HTTP ${who.status}.`);
       }
-      let payload; let suffix;
+      let payload; let suffix; let budgetModel; let budgetMax;
       if (path === '/api/chat') {
         if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || !validContent(m.content))) throw new HttpError(400, 'messages must contain standard role/content text pairs, optionally with up to five image parts.');
         if (target.nativeCohere && body.messages.some(m => Array.isArray(m.content))) throw new HttpError(400, 'Cohere native chat does not accept images here. Choose a vision model on OpenRouter or Groq.');
@@ -620,6 +625,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
           max = Math.min(max, affordableOutput);
         }
         const routed = funding.mode === 'free' ? routeFreeRequest(funding.entry) : { model: normalizeModel(provider, body.model) };
+        budgetModel = routed.model; budgetMax = max;
         payload = target.nativeAnthropic
           ? JSON.stringify(anthropicPayload(routed.model, messages, max))
           : JSON.stringify({ model: routed.model, ...(routed.models ? { models: routed.models } : {}), messages: messages, stream: true, ...outputLimit(provider, routed.model, max), ...(usageReportable(provider, target) ? { stream_options: { include_usage: true } } : {}) });
@@ -640,15 +646,17 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       const upstreamUrl = path === '/api/models' ? modelsUrl(provider, target.base) : target.base + suffix;
       if (target.nativeAnthropic && path === '/api/models') headers.Accept = 'application/json';
       const setKey = key => { if (target.nativeAnthropic) headers['x-api-key'] = key; else headers.Authorization = `Bearer ${key}`; };
-      // How many keys this request may try. A free-tier chat request funded from a stacked field
-      // gets one attempt per key, so a rate-limited account rolls over to the next instead of
-      // failing the visitor; everything else, and every single-key deployment, gets exactly one
-      // attempt and behaves as it did before.
+      // Stacked free keys may retry a 429, at most three times per request. Each attempt
+      // gets its own reservation; all other requests get one upstream attempt.
       const pool = funding.mode === 'free' && path === '/api/chat' ? freeKeyPool(funding.entry, env) : [];
-      const maxAttempts = Math.max(1, pool.length);
+      const maxAttempts = Math.min(3, Math.max(1, pool.length));
+      let reservation = null;
       let response;
       let status = 502;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        // Reserve separately for every attempt, including credential retries. Uncertain
+        // failures retain their reservation; another external call cannot reuse it.
+        if (path === '/api/chat' && funding.mode !== 'byok' && apiKey) reservation = await dailyBudget.reserve(provider, budgetModel, body.messages, budgetMax);
         try {
           response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
         } catch (error) {
@@ -745,12 +753,15 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       const pipedStream = meter ? response.pipe(interceptor).pipe(meter) : response.pipe(interceptor);
       // Finish the server ledger before the browser sees EOF and refreshes its allowance.
       pipedStream.pipe(res, { end: false });
-      await new Promise((resolve, reject) => { pipedStream.on('end', resolve); response.on('error', reject); res.on('close', resolve); });
+      let streamFinished = false;
+      await new Promise((resolve, reject) => { pipedStream.on('end', () => { streamFinished = true; resolve(); }); response.on('error', reject); res.on('close', resolve); });
       // Bill even when the visitor navigated away mid-stream: the tokens were still spent.
       if (meter && db) { try { const tokens = meter.total(); const plan = Boolean(planWorkspace); await db.recordUsage(plan ? planWorkspace : workspace, { model: body.model, tier: plan ? 'pro' : 'free', mode: plan ? 'credits' : 'free', tokens, credits: plan ? planCredits(body.model, meter.usage()) : creditsForTokens(tokens) }); } catch { log('[proxy] Could not persist managed usage.'); } }
+      if (reservation && meter && streamFinished && !controller.signal.aborted) { try { await dailyBudget.settle(reservation, meter.finalUsage()); } catch { log('[proxy] Could not reconcile USD usage; reservation retained.'); } }
       if (!res.destroyed) res.end();
       return true;
     } catch (error) {
+      if (error instanceof BudgetError) error = new HttpError(error.code === 'free_tier_exhausted' ? 402 : 503, error.message, error.code);
       if (!(error instanceof HttpError)) console.error('[DEBUG-NONHTTP]', error && error.constructor.name, error && error.message);
       if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) } });
       else if (!res.destroyed) { res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'Provider stream interrupted. Please retry.' } })}\n\n`); res.end(); }

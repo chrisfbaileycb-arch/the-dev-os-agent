@@ -53,6 +53,8 @@ export function createMeter({ promptChars = 0 } = {}) {
   let splitReported = false;
   let inputReported = false;
   let outputFinal = false;
+  let completed = false;
+  let invalidUsage = false;
 
   const meter = new Transform({
     transform(chunk, _encoding, callback) {
@@ -64,14 +66,19 @@ export function createMeter({ promptChars = 0 } = {}) {
           buffer = buffer.slice(index + 1);
           if (!line.startsWith('data:')) continue;
           const payload = line.slice(5).trim();
-          if (!payload || payload === '[DONE]') continue;
+          if (!payload) continue;
+          if (payload === '[DONE]') { completed = true; continue; }
           let json;
           try { json = JSON.parse(payload); } catch { continue; }
+          completed ||= json.type === 'message_stop' || json.type === 'message-end' || Boolean(json.choices?.[0]?.finish_reason);
           reported = Math.max(reported, usageFrom(json));
           const usage = json?.message?.usage ?? json?.usage ?? json?.delta?.usage?.tokens;
           if (usage) {
             const input = usage.prompt_tokens ?? usage.input_tokens;
             const output = usage.completion_tokens ?? usage.output_tokens;
+            for (const value of [input, output, usage.cache_creation_input_tokens, usage.cache_read_input_tokens]) {
+              if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) invalidUsage = true;
+            }
             if (Number.isFinite(input)) { inputTokens = Math.max(inputTokens, input + (Number(usage.cache_creation_input_tokens) || 0) + (Number(usage.cache_read_input_tokens) || 0)); splitReported = true; inputReported = true; }
             if (Number.isFinite(output)) { outputTokens = Math.max(outputTokens, output); splitReported = true; outputFinal ||= json.type !== 'message_start'; }
           }
@@ -89,5 +96,6 @@ export function createMeter({ promptChars = 0 } = {}) {
     : { input: Math.ceil(promptChars / CHARS_PER_TOKEN), output: Math.max(Math.ceil(outputChars / CHARS_PER_TOKEN), reported - Math.ceil(promptChars / CHARS_PER_TOKEN)) };
   meter.total = () => splitReported ? meter.usage().input + meter.usage().output : reported || Math.ceil((promptChars + outputChars) / CHARS_PER_TOKEN);
   meter.reportedByProvider = () => reported > 0;
+  meter.finalUsage = () => completed && inputReported && outputFinal && !invalidUsage ? { input: inputTokens, output: outputTokens } : null;
   return meter;
 }

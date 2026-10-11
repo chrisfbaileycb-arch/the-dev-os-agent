@@ -9,7 +9,7 @@ export interface ToolCall { tool: string; args: Record<string, unknown>; }
 export interface PageReport { url: string; status: number; title: string; description: string; canonical: string; robots: string; lang: string; h1: string[]; headingCount: number; og: Record<string, string>; wordCount: number; text: string; links: { href: string; text: string }[]; elapsedMs: number; }
 
 export function toolProtocol(specs: ToolSpec[]): string {
-  return `TOOLS\nYou may call one tool per reply by answering with a single line and nothing else:\nTOOL {"tool": "<name>", "args": { ... }}\nAvailable:\n${specs.map(s => `- ${s.description}`).join('\n')}\nAfter a TOOL RESULT message, continue the task. Call at most three tools per user message, then answer in prose.`;
+  return `TOOLS\nYou may call one tool per reply by answering with a single line and nothing else:\nTOOL {"tool": "<name>", "args": { ... }}\nAvailable:\n${specs.map(s => `- ${s.description}`).join('\n')}\nAfter a TOOL RESULT message, continue the task. Call at most two tools per user message, then answer in prose.`;
 }
 
 export function parseToolCall(text: string, specs: ToolSpec[]): ToolCall | null {

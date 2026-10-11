@@ -45,10 +45,24 @@ upstream discovery or inference dispatch. The switch is controlled by Render, no
 prompt or a dashboard tunable. `FREE_TIER_DISABLED=true` and `FREE_CREDIT_MONTHLY_POOL=0`
 are also set. Personal provider keys still work and their providers bill their owners.
 
-Do not enable owner funding until an atomic dollar reservation ledger, reconciliation,
-per-user/global caps, concurrency limits, approved model/provider routes, and provider-side
-key limits have been implemented and tested. Token/credit counters do not guarantee a USD cap.
-No model-provider API keys or checkout links were supplied in this deployment work.
+`DAILY_SERVER_BUDGET_USD=0` and `MANAGED_MODEL_COST_BOUNDS_JSON=[]` also fail closed.
+The proxy now reserves a reviewed maximum cost in the shared database before every funded
+attempt, including each retry. Reservations survive restarts, concurrent requests and workspace
+clearing. Missing usage, failed calls and interrupted streams retain the reservation; complete
+valid usage settles it once. UTC midnight starts a new day. Unknown prices, nontext inputs and
+ephemeral storage cannot receive funding. See the root README for the cost-bound schema.
+
+Keep funding disabled until you choose a daily allowance and verify full context/output cost
+bounds, reasoning and cache treatment, fees, provider key limits, and supported adapters.
+The dollar reservation ledger does not replace per-user controls or provider-side limits.
+No positive spending allowance or checkout links were supplied in this deployment work.
+
+Experiment chat and model discovery require a personal provider key before upstream routing.
+The browser sends `X-Forge-Is-Experimental: true`; the proxy also checks provider classification
+and experimental metadata, so removing the header cannot enable operator funding.
+Five-stage workflows permit three calls per stage, fifteen client requests total. Tool chat
+permits three model requests and two tools. The server independently limits retries to three
+upstream attempts, reserving each funded attempt.
 
 ## Database and limitations
 
@@ -83,13 +97,13 @@ Imported resources remain text packages; external scripts/dependencies are not i
 
 ## Release verification
 
-Check `/api/health` for `ok`, deployed commit, storage kind, identity configuration, and
-funding-disabled status. Also check `/` and `/admin` return HTML successfully. Test anonymous
+Check `/api/health` for `ok`, deployed commit, storage kind, identity configuration,
+funding-disabled status and `dailyServerBudgetUsd: 0`. Also check `/` and `/admin` return HTML successfully. Test anonymous
 admin setup rejection, forged/mismatched workspace denial, and funding rejection before
 claiming the app is ready. Record the exact commit and tests with each release.
 
 The remaining execution milestone is a real repository repair in an isolated environment:
 pinned input commit -> scoped diff -> repository test logs/exit code -> review -> branch/PR.
-It requires the server-owned exact-action approval dispatcher, budgets before owner funding,
+It requires the server-owned exact-action approval dispatcher, per-user controls before owner funding,
 reviewed adapters, and durable resumable jobs/artifacts. This deployment completes the initial
 host/security foundation and skill preservation; it does not claim that whole loop is finished.
