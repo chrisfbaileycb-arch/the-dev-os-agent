@@ -77,7 +77,9 @@ export async function checkTarget(rawUrl, { env = process.env, resolve = lookup,
     throw new HttpError(403, 'That host is not on this deployment\'s fetch allowlist.');
   }
   if (allowPrivate) return { url, address: undefined };
-  const addresses = await resolve(url.hostname, { all: true }).catch(() => []);
+  // The validator and pinned transport are IPv4-only. Asking for AAAA records too
+  // makes a legitimate dual-stack host fail validation on its public IPv6 answer.
+  const addresses = await resolve(url.hostname, { all: true, family: 4 }).catch(() => []);
   if (!addresses.length || addresses.some(a => !publicAddress(a.address))) throw new HttpError(403, 'Private, reserved, or unresolvable destinations are blocked.');
   return { url, address: addresses[0].address };
 }
