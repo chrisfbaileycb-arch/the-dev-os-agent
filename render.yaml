@@ -45,8 +45,8 @@ services:
     autoDeploy: true
     buildCommand: npm ci && cd packages/web && npm run build
     startCommand: node packages/web/server/index.mjs
-    # Answers 200 with no database and no provider key present, which is why it is the probe.
-    healthCheckPath: /api/providers
+    # Probe the workspace page: a healthy API alone can hide a broken static-file server.
+    healthCheckPath: /
     envVars:
       - key: DATABASE_URL
         fromDatabase:

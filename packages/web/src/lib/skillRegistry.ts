@@ -187,7 +187,7 @@ export function exportSkillStack(state: SkillState[], yours: YourSkill[] = []) {
           enabled: Boolean(row?.enabled),
           markdown: skill.kind === 'instructions' ? skill.markdown ?? '' : '',
           url: skill.kind === 'live' ? skill.url : '',
-          config: skill.kind === 'live' ? (row?.config ?? {}) : {},
+          config: skill.kind === 'live' ? Object.fromEntries(Object.entries(row?.config ?? {}).filter(([key]) => skill.fields.some(field => field.key === key && !field.secret))) : {},
         };
       }),
       ...yours.map(skill => ({

@@ -1,9 +1,10 @@
-import { CreditCard, Database, LockKeyhole, LogIn, LogOut, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings2, ShieldCheck, Users } from 'lucide-react';
+import { CreditCard, Database, ListChecks, LockKeyhole, LogIn, LogOut, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings2, ShieldCheck, Users } from 'lucide-react';
 import type { AuthUser } from '../lib/store';
-export type Page = 'workspace' | 'roster' | 'knowledge' | 'pricing' | 'settings' | 'admin';
+export type Page = 'workspace' | 'roster' | 'skills' | 'knowledge' | 'pricing' | 'settings' | 'admin';
 const items: { id: Page; label: string; icon: typeof MessageSquare }[] = [
   { id: 'workspace', label: 'Workspace', icon: MessageSquare },
   { id: 'roster', label: 'Agent roster', icon: Users },
+  { id: 'skills', label: 'Agent Skills', icon: ListChecks },
   { id: 'knowledge', label: 'Knowledge hub', icon: Database },
   { id: 'pricing', label: 'Plans', icon: CreditCard },
   { id: 'settings', label: 'Settings and model hub', icon: Settings2 },

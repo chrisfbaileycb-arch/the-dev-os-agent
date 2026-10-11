@@ -19,6 +19,7 @@ import { openSettings } from './settings.mjs';
 import { catalogStatus, ensureCatalog } from './discovery.mjs';
 import { classifyStorage } from './durability.mjs';
 import { createEngine } from './antigravity.mjs';
+import { cspFor } from './csp.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 // Workspace data: Postgres when DATABASE_URL is set, SQLite otherwise.
 // Jobs are always SQLite — they are transient hand-offs and must never carry credentials.

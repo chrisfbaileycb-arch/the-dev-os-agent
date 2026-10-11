@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CircleAlert, CircleCheck, Download, GitBranch, KeyRound, MonitorDown, PanelRightClose, PanelRightOpen, Plus, Sparkles, Trash2, Wrench, X } from 'lucide-react';
 import Rail, { type Page } from './ui/Rail';
+import AgentSkills from './ui/AgentSkills';
 import Dock, { type Attached, type RunMode } from './ui/Dock';
 import RunCard from './ui/RunCard';
 import WritingStatus from './ui/WritingStatus';
@@ -763,6 +764,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   useEffect(() => {
     const view = new URLSearchParams(location.search).get('view');
     if (view === 'crew') setPage('roster');
+    else if (view === 'skills') setPage('skills');
     else if (view === 'knowledge') setPage('knowledge');
     else if (view === 'chat') setPage('workspace');
     const onShare = (event: MessageEvent) => {
@@ -912,6 +914,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
+        {page === 'skills' && <div className="page"><div className="page-head"><div><h1>Agent Skills</h1><p>Reusable instructions for your agents. Read, import, edit, and enable the skills you want them to follow.</p></div></div><AgentSkills mcp={mcp} setMcp={setMcp} notify={setNotice} /></div>}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
         {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} storage={deployment.storage} engineKey={engineKey} setEngineKey={value => { saveEngineKey(value); setEngineKey(value); }} />}
         {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
@@ -920,7 +923,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     </div>
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
     <GithubPullDialog open={githubPullOpen} close={() => setGithubPullOpen(false)} github={settings.github} addFiles={f => void addFiles(f)} openConnectors={() => openConnectors('github')} notify={setNotice} notifyToast={showToast} onImportProject={importProjectToWorkspace} />
-    <Connectors
+    <Connectors key={connectorsOpen ? 'open' : 'closed'}
       open={connectorsOpen} close={() => setConnectorsOpen(false)} tab={connectorTab} setTab={setConnectorTab}
       settings={settings} setSettings={setSettings} mcp={mcp} setMcp={setMcp}
       knowledge={knowledge} addDocuments={f => void addDocuments(f)}
