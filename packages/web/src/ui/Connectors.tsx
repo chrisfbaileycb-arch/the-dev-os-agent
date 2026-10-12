@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { Check, Database, FileText, Globe, ListChecks, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X, Zap } from 'lucide-react';
 import { GithubMark } from './GithubMark';
-import { guessTransport, refreshTools, type McpConnection, type McpTransport } from '../lib/mcp';
+import { guessTransport, refreshTools, type McpConnection, type McpTransport, type McpAuthHeader } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
-import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset, type McpPresetGroup } from '../lib/mcpPresets';
+import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset, type McpPresetGroup } from '../lib/mcpServers';
+import { IMAGE_MODELS, loadMediaConfigs, saveMediaConfigs, type MediaConfig } from '../lib/mediaTools';
 import { loadSkillState, loadYourSkills } from '../lib/skillRegistry';
 import AgentSkills from './AgentSkills';
 import { useDismiss } from './useDismiss';
+import type { Persona } from '../lib/roster';
 import type { Knowledge } from '../lib/types';
 
 // The Connectors hub. One menu, four kinds of reach, each switchable on its own.
@@ -19,6 +21,8 @@ import type { Knowledge } from '../lib/types';
 export type ConnectorTab = 'github' | 'web' | 'files' | 'mcp' | 'skills';
 
 export interface ConnectorsProps {
+  persona?: Persona; secrets?: string[];
+  media?: MediaConfig[]; setMedia?: (list: MediaConfig[]) => void;
   open: boolean; close: () => void;
   tab: ConnectorTab; setTab: (t: ConnectorTab) => void;
   settings: ConnectorSettings; setSettings: (s: ConnectorSettings) => void;
@@ -33,7 +37,7 @@ const TABS: { id: ConnectorTab; label: string; icon: typeof GithubMark; blurb: s
   { id: 'github', label: 'GitHub', icon: GithubMark, blurb: 'Repo reader and issue auditor' },
   { id: 'web', label: 'Web', icon: Globe, blurb: 'URL crawler, no CORS limits' },
   { id: 'files', label: 'Documents', icon: FileText, blurb: 'Drag-and-drop knowledge index' },
-  { id: 'mcp', label: 'Custom MCP', icon: Plug, blurb: 'External agent servers' },
+  { id: 'mcp', label: 'MCP & Tools', icon: Plug, blurb: 'External agent servers' },
   { id: 'skills', label: 'Skills', icon: ListChecks, blurb: 'Markdown pathways, plus a connector when one is named' },
 ];
 
@@ -42,8 +46,12 @@ const host = (url: string) => { try { return new URL(url).host; } catch { return
 export default function Connectors(p: ConnectorsProps) {
   const [url, setUrl] = useState(''); const [name, setName] = useState(''); const [token, setToken] = useState(''); const saveToken = false;
   const [transport, setTransport] = useState<McpTransport | 'auto'>('auto');
+  const [authHeader, setAuthHeader] = useState<McpAuthHeader>('Authorization');
   const [method, setMethod] = useState<'GET' | 'POST'>('GET');
-  const [addingConnector, setAddingConnector] = useState(false);
+  const [localMedia, setLocalMedia] = useState(loadMediaConfigs);
+  const media = p.media ?? localMedia;
+  const writeMedia = (next: MediaConfig[]) => { try { saveMediaConfigs(next); setLocalMedia(next); p.setMedia?.(next); } catch (error) { p.notify(error instanceof Error ? error.message : 'Could not save media configuration.'); } };
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [preset, setPreset] = useState<McpPreset | null>(null);
@@ -60,6 +68,7 @@ export default function Connectors(p: ConnectorsProps) {
     try {
       const parsed = new URL(v);
       if (parsed.protocol !== (transport === 'websocket' ? 'wss:' : 'https:')) return transport === 'websocket' ? 'WebSocket connectors require wss://.' : 'Remote connectors require https://. Local file servers connect through an HTTPS MCP bridge.';
+      if ([...parsed.searchParams.keys()].some(key => /token|api.?key|secret|password|authorization/i.test(key))) return 'Enter credentials in the token field, not URL query parameters.';
       if (parsed.username || parsed.password) return 'Enter credentials in the token field, not the URL.';
     } catch { return 'Enter a valid https:// URL, for example https://mcp.example.com/mcp.'; }
     return '';
@@ -77,57 +86,17 @@ export default function Connectors(p: ConnectorsProps) {
     let parsed: URL;
     try { parsed = new URL(url.trim()); if (urlError) throw new Error(); }
     catch { p.notify('Enter the server\'s https URL, for example https://mcp.example.com/mcp'); return; }
-    const conn: McpConnection = { id: crypto.randomUUID(), name: name.trim() || parsed.host, url: parsed.toString(), transport: transport === 'auto' ? guessTransport(parsed.toString()) : transport, method, token: token.trim(), saveToken, enabled: true, tools: [] };
+    const conn: McpConnection = { id: editingId ?? p.mcp.find(c => c.url === parsed.toString() && c.transport === (transport === 'auto' ? guessTransport(parsed.toString()) : transport))?.id ?? crypto.randomUUID(), name: name.trim() || parsed.host, url: parsed.toString(), transport: transport === 'auto' ? guessTransport(parsed.toString()) : transport, method, authHeader: transport === 'rest' || transport === 'websocket' ? 'Authorization' : authHeader, token: token.trim(), saveToken, enabled: true, tools: [] };
     setBusyId(conn.id); const checked = await check(conn); setBusyId(null);
-    p.setMcp([checked, ...p.mcp]); setName(''); setUrl(''); setToken(''); setTransport('auto');
+    p.setMcp([checked, ...p.mcp.filter(c => c.id !== checked.id)]); setEditingId(null); setName(''); setUrl(''); setToken(''); setTransport('auto');
     p.notify(checked.error ? `Added ${checked.name}, but it did not answer: ${checked.error}` : `Connected ${checked.name}: ${checked.tools.length} tool${checked.tools.length === 1 ? '' : 's'} available to your agents.`);
   }
   async function refresh(conn: McpConnection) { setBusyId(conn.id); const checked = await check(conn); setBusyId(null); p.setMcp(p.mcp.map(c => c.id === conn.id ? checked : c)); }
 
-  async function quickConnect(presetToConnect: McpPreset, customToken?: string) {
-    const f = presetForm(presetToConnect);
-    const connToken = (customToken !== undefined ? customToken : (presetToConnect.url === url ? token : '')).trim();
-    const conn: McpConnection = {
-      id: crypto.randomUUID(),
-      name: f.name,
-      url: f.url,
-      transport: f.transport,
-      token: connToken,
-      saveToken: Boolean(saveToken),
-      enabled: true,
-      tools: []
-    };
-    setBusyId(conn.id);
-    const checked = await check(conn);
-    setBusyId(null);
-    p.setMcp([checked, ...p.mcp.filter(c => !presetConnected(presetToConnect, [c]))]);
-    p.notify(checked.error ? `Added ${checked.name}, but it did not answer: ${checked.error}` : `Connected ${checked.name}: ${checked.tools.length} tool${checked.tools.length === 1 ? '' : 's'} available to your agents.`);
-  }
-
-  async function connectAllPresets() {
-    setBusyId('all');
-    let connectedCount = 0;
-    let nextList = [...p.mcp];
-    for (const pr of MCP_PRESETS) {
-      if (presetConnected(pr, nextList)) continue;
-      const f = presetForm(pr);
-      const conn: McpConnection = {
-        id: crypto.randomUUID(),
-        name: f.name,
-        url: f.url,
-        transport: f.transport,
-        token: '',
-        saveToken: false,
-        enabled: true,
-        tools: []
-      };
-      const checked = await check(conn);
-      nextList = [checked, ...nextList];
-      connectedCount++;
-    }
-    setBusyId(null);
-    p.setMcp(nextList);
-    p.notify(`Connected ${connectedCount} MCP connector${connectedCount === 1 ? '' : 's'}. All active tools are ready.`);
+  function configure(server: McpPreset) {
+    setPreset(server); setEditingId(null); setToken('');
+    const form = presetForm(server); setName(form.name); setUrl(form.url); setTransport(form.transport); setAuthHeader(form.authHeader);
+    document.getElementById('mcp-config-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   const mcpTools = p.mcp.filter(c => c.enabled).reduce((n, c) => n + c.tools.length, 0);
@@ -140,7 +109,7 @@ export default function Connectors(p: ConnectorsProps) {
         <h2 id="connectors-title"><Plug size={15} strokeWidth={1.75} /> Connectors</h2>
         <button className="icon-button" aria-label="Close" onClick={p.close} autoFocus><X size={16} /></button>
       </div>
-      <button className="button primary small" onClick={() => { setAddingConnector(v => !v); p.setTab('mcp'); }}><Plus size={13} />Add Connector</button>
+      <button className="button primary small" onClick={() => { p.setTab('mcp'); setTimeout(() => document.getElementById('mcp-config-form')?.scrollIntoView({ behavior: 'smooth' }), 0); }}><Plus size={13} />Add Connector</button>
       <p className="help">What your agents can reach beyond the model. Each connector adds named tools the agent may call, and every call shows up as a trace under the reply.</p>
 
       <div className="connector-tabs" role="tablist" aria-label="Connector">
@@ -185,126 +154,40 @@ export default function Connectors(p: ConnectorsProps) {
 
       {p.tab === 'mcp' && <>
         <section className="panel">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
-            <div>
-              <h3 style={{ fontSize: '13px', fontWeight: 650, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Zap size={14} style={{ color: 'var(--accent)' }} /> Remote MCP servers
-              </h3>
-              <p className="help">Bookmarks for real remote servers. Each one is contacted at its own URL with a token you supply. Nothing here runs inside this app.</p>
-            </div>
-            <button
-              className="button primary small"
-              disabled={busyId !== null || MCP_PRESETS.every(pr => presetConnected(pr, p.mcp))}
-              onClick={() => void connectAllPresets()}
-              title="Add every bookmark that is not already connected"
-            >
-              {busyId === 'all' ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}
-              Connect listed servers
-            </button>
-          </div>
-
-          <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <input
-              type="search"
-              placeholder="Search MCP servers"
-              value={presetQuery}
-              onChange={e => setPresetQuery(e.target.value)}
-              style={{ flex: 1, minWidth: '180px', padding: '5px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--line-strong)', background: 'var(--panel)', fontSize: '12px' }}
-            />
-            <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
-              {(['All', ...MCP_PRESET_GROUPS] as (McpPresetGroup | 'All')[]).map(g => (
-                <button
-                  key={g}
-                  className={activeGroup === g ? 'output-tab active' : 'output-tab'}
-                  style={{ fontSize: '11px', padding: '2px 8px' }}
-                  onClick={() => setActiveGroup(g)}
-                >
-                  {g}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="preset-grid">
-            {MCP_PRESETS.filter(pr => {
-              if (activeGroup !== 'All' && pr.group !== activeGroup) return false;
-              if (!presetQuery.trim()) return true;
-              const q = presetQuery.toLowerCase();
-              return pr.name.toLowerCase().includes(q) || pr.blurb.toLowerCase().includes(q) || pr.id.toLowerCase().includes(q);
-            }).map(presetItem => {
-              const connected = presetConnected(presetItem, p.mcp);
-              const isSelected = url === presetItem.url;
-              return <div
-                key={presetItem.id}
-                className={isSelected ? 'preset active' : 'preset'}
-                style={{ cursor: 'pointer', position: 'relative' }}
-                onClick={() => {
-                  const f = presetForm(presetItem);
-                  setName(f.name);
-                  setUrl(f.url);
-                  setTransport(f.transport);
-                  setToken('');
-                  setPreset(presetItem); setAddingConnector(true);
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '6px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
-                    <strong style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{presetItem.name}</strong>
-                  </div>
-                  {connected ? (
-                    <span style={{ fontSize: '11px', color: 'var(--ok)', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-                      <Check size={12} /> Connected
-                    </span>
-                  ) : (
-                    <button
-                      className="button small"
-                      style={{ padding: '2px 7px', fontSize: '11px', flexShrink: 0 }}
-                      disabled={busyId !== null}
-                      onClick={e => {
-                        e.stopPropagation();
-                        void quickConnect(presetItem);
-                      }}
-                      title={`Connect ${presetItem.name}`}
-                    >
-                      {busyId === presetItem.id ? <LoaderCircle size={11} className="spin" /> : <Plug size={11} />}
-                      Connect
-                    </button>
-                  )}
-                </div>
-                <small style={{ marginTop: '2px' }}>{presetItem.blurb}</small>
-              </div>;
-            })}
-          </div>
+          <h3><Zap size={14} /> Remote MCP servers & tool directory · {MCP_PRESETS.length} integrations</h3>
+          <p className="help">Configure only the tools you need. Remote servers require their own authorization; local tools require your authenticated HTTPS bridge. Model inference keys belong in Settings.</p>
+          <input aria-label="Search tool directory" type="search" placeholder="Search tools" value={presetQuery} onChange={e => setPresetQuery(e.target.value)} />
+          <div className="tool-category-tabs" role="group" aria-label="Tool categories">{(['All', ...MCP_PRESET_GROUPS] as (McpPresetGroup | 'All')[]).map(group => <button key={group} className={activeGroup === group ? 'output-tab active' : 'output-tab'} aria-pressed={activeGroup === group} onClick={() => setActiveGroup(group)}>{group}</button>)}</div>
+          <div className="preset-grid">{MCP_PRESETS.filter(server => (activeGroup === 'All' || server.group === activeGroup) && `${server.name} ${server.blurb}`.toLowerCase().includes(presetQuery.trim().toLowerCase())).map(server => {
+            const config = media.find(c => c.provider === server.id);
+            const configured = server.kind === 'media' ? !!config?.enabled && !!config.key : presetConnected(server, p.mcp);
+            return <article key={server.id} className={preset?.id === server.id ? 'preset active' : 'preset'}>
+              <div className="panel-head"><strong>{server.name}</strong>{configured && <span className="pill"><Check size={12} />Configured</span>}</div>
+              <p className="help">{server.blurb}</p><small className="pill">{server.kind === 'media' ? 'Optional media tool' : server.kind === 'bridge' ? 'Local / HTTPS bridge' : 'Remote MCP'}</small>
+              <div className="row gap"><button className="button small" onClick={() => server.kind === 'media' ? document.getElementById(`media-${server.id}`)?.scrollIntoView({ behavior: 'smooth' }) : configure(server)}>Configure</button><a className="text-button" href={server.docs} target="_blank" rel="noopener noreferrer">Setup guide</a></div>
+            </article>;
+          })}</div>
         </section>
-        {addingConnector && <section className="panel">
-          <h3>Add Connector</h3>
-          <p className="help">Connect an MCP server, a custom REST endpoint, or a WebSocket service. File System access is provided by your own explicitly connected MCP file server or by the local document hub.</p>
-          <div className="form-grid">
-            <label>Name<input value={name} maxLength={40} placeholder="Custom MCP Service" onChange={e => setName(e.target.value)} /></label>
-            <label className="grow">Server URL<input type="url" value={url} placeholder="https://mcp.example.com/mcp" onChange={e => setUrl(e.target.value)} className={urlError ? 'input-error' : ''} />{urlError && <span className="field-error">{urlError}</span>}</label>
-            <label className="grow">Bearer token (optional)<input type="password" autoComplete="off" spellCheck={false} value={token} placeholder={preset && url === preset.url ? (preset.token ? `${preset.token} (optional or sandbox)` : 'Not needed for this server') : 'Token the server expects'} onChange={e => setToken(e.target.value)} /></label>
-            <label>Transport<select value={transport} onChange={e => setTransport(e.target.value as McpTransport | 'auto')}>
-              <option value="auto">Automatic{url.trim() ? ` (${guessTransport(url) === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'})` : ''}</option>
-              <option value="http">Streamable HTTP</option>
-              <option value="sse">HTTP+SSE (legacy /sse)</option>
-              <option value="rest">Custom REST endpoint</option>
-              <option value="websocket">Custom WebSocket endpoint</option>
-            </select></label>
-            {transport === 'rest' && <label>HTTP method<select value={method} onChange={e => setMethod(e.target.value as 'GET' | 'POST')}><option value="GET">GET (read)</option><option value="POST">POST (ask before sending)</option></select></label>}
-          </div>
-          <div className="row gap"><button className="button primary small" disabled={!url.trim() || !!urlError || busyId !== null} onClick={() => void addMcp()}>{busyId && !p.mcp.some(c => c.id === busyId) ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}Connect and list tools</button></div>
-          <p className="help">The token is sent securely to that server through this app's proxy and stays in page memory until reload or tab close. Never paste it into chat or skills.</p>
-        </section>}
-        {p.mcp.map(c => <section key={c.id} className="panel mcp-row">
-          <div className="panel-head"><div><strong>{c.name}</strong><small className="mono"> {host(c.url)} · {c.transport === 'rest' ? `REST ${c.method ?? 'GET'}` : c.transport === 'websocket' ? 'WebSocket' : c.transport === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'}</small></div><label className="switch"><input type="checkbox" checked={c.enabled} onChange={e => p.setMcp(p.mcp.map(x => x.id === c.id ? { ...x, enabled: e.target.checked } : x))} />Enabled</label></div>
-          {c.error ? <p className="msg-error">{c.error}</p> : <p className="help">{c.tools.length} tool{c.tools.length === 1 ? '' : 's'}{c.checkedAt ? ` · checked ${new Date(c.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}</p>}
-          {c.tools.length > 0 && <div className="caps">{c.tools.map(t => <em key={t.name} title={t.description}>{t.name}</em>)}</div>}
-          <div className="row gap"><button className="button small" disabled={busyId === c.id} onClick={() => void refresh(c)}>{busyId === c.id ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}Refresh</button><button className="button small danger" onClick={() => p.setMcp(p.mcp.filter(x => x.id !== c.id))}><Trash2 size={13} />Remove</button></div>
+        <section className="panel"><h3>Optional creative / media tools</h3><p className="help">Enable with your own key. These tools are offered only when configured, require approval for generation, and are independent of coding models and preview compilation. Keys stay in page memory; reload requires re-entry.</p>
+          {media.map(config => <fieldset className="media-provider" id={`media-${config.provider}`} key={config.provider}><legend>{config.provider === 'heygen' ? 'HeyGen / Video Avatar Generator' : 'Nano Banana / Image Generation'}</legend><label className="check"><input type="checkbox" checked={config.enabled} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, enabled: e.target.checked } : c))} />Enable optional tool</label>
+            <label>Personal API key · {config.key ? 'Active for this tab' : 'Unset'}<input type="password" autoComplete="off" value={config.key} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, key: e.target.value } : c))} placeholder={config.provider === 'heygen' ? 'HeyGen API key' : 'Google Gemini image API key'} /></label>
+            {config.provider === 'heygen' ? <div className="form-grid"><label>Default Avatar ID<input value={config.avatarId} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, avatarId: e.target.value } : c))} /></label><label>Default Voice ID<input value={config.voiceId} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, voiceId: e.target.value } : c))} /></label></div> : <label>Image tool model<select value={config.model} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, model: e.target.value } : c))}>{IMAGE_MODELS.map(model => <option key={model} value={model}>{model}</option>)}</select></label>}
+          </fieldset>)}
+        </section>
+        {p.mcp.map(connection => <section key={connection.id} className="panel mcp-row"><div className="panel-head"><div><strong>{connection.name}</strong><small className="mono"> {host(connection.url)} · {connection.transport}</small></div><label className="switch"><input type="checkbox" checked={connection.enabled} onChange={e => p.setMcp(p.mcp.map(c => c.id === connection.id ? { ...c, enabled: e.target.checked } : c))} />Enabled</label></div>{connection.error ? <p className="msg-error">{connection.error}</p> : <p className="help">{connection.tools.length} available tools · {connection.token ? 'Session credential active' : 'No session credential'}</p>}
+          {connection.tools.length > 0 && <details><summary>Attached tool schemas</summary>{connection.tools.map(tool => <details key={tool.name}><summary>{tool.name}</summary><p>{tool.description}</p><pre className="skill-body">{JSON.stringify(tool.inputSchema ?? {}, null, 2)}</pre></details>)}</details>}
+          <div className="row gap"><button className="button small" disabled={busyId !== null} onClick={() => void refresh(connection)}><RefreshCw size={13} />Refresh</button><button className="button small" onClick={() => { setEditingId(connection.id); setName(connection.name); setUrl(connection.url); setToken(connection.token); setTransport(connection.transport); setAuthHeader(connection.authHeader ?? 'Authorization'); setMethod(connection.method ?? 'GET'); setPreset(null); document.getElementById('mcp-config-form')?.scrollIntoView({ behavior: 'smooth' }); }}>Configure / update key</button><button className="button small danger" disabled={busyId === connection.id} onClick={() => p.setMcp(p.mcp.filter(c => c.id !== connection.id))}><Trash2 size={13} />Remove</button></div>
         </section>)}
-        {!p.mcp.length && <p className="help"><Database size={12} /> No servers connected yet. Pick one above, or paste any https MCP URL.</p>}
+        <section className="panel" id="mcp-config-form"><h3><Plus size={13} /> Add or Configure a Model Context Protocol server</h3>
+          {preset?.setup && <p className="help">{preset.setup}</p>}
+          <p className="help">Connection configuration persists in this browser. OAuth servers need an authorized access token or an authenticated bridge; follow their setup guide. The hosted app cannot spawn a local stdio server.</p>
+          <div className="form-grid"><label>Name<input value={name} onChange={e => setName(e.target.value)} placeholder="Tool server name" /></label><label>Server endpoint<input value={url} onChange={e => setUrl(e.target.value)} placeholder={transport === 'websocket' ? 'wss://tools.example.com' : 'https://tools.example.com/mcp'} /></label><label>Transport<select value={transport} onChange={e => setTransport(e.target.value as McpTransport | 'auto')}><option value="auto">Auto-detect MCP</option><option value="http">MCP Streamable HTTP</option><option value="sse">MCP HTTP+SSE</option><option value="rest">Custom REST endpoint</option><option value="websocket">Custom WebSocket endpoint</option></select></label>{!['rest', 'websocket'].includes(transport) && <label>Credential header<select value={authHeader} onChange={e => setAuthHeader(e.target.value as McpAuthHeader)}><option value="Authorization">Authorization: Bearer</option><option value="x-api-key">x-api-key</option></select></label>}<label>{preset?.token ?? 'Credential (optional)'}<input type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)} /></label>{transport === 'rest' && <label>HTTP method<select value={method} onChange={e => setMethod(e.target.value as 'GET' | 'POST')}><option value="GET">GET</option><option value="POST">POST (review before sending)</option></select></label>}</div>
+          {urlError && <p className="msg-error" role="alert">{urlError}</p>}
+          <div className="row gap"><button className="button primary small" disabled={!url.trim() || !!urlError || busyId !== null} onClick={() => void addMcp()}>{busyId ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}{editingId ? 'Update and list tools' : 'Connect and list tools'}</button>{editingId && <button className="button small" onClick={() => { setEditingId(null); setName(''); setUrl(''); setToken(''); setPreset(null); }}>Cancel edit</button>}</div><p className="help">Credentials stay in page memory until reload. Tool calls run through isolated workers and appear in the Sandbox console.</p>
+        </section>
       </>}
 
-      {p.tab === 'skills' && <AgentSkills mcp={p.mcp} setMcp={p.setMcp} notify={p.notify} onChange={() => setSkillCount(loadSkillState().filter(s => s.enabled).length + loadYourSkills().filter(s => s.enabled).length)} />}
+      {p.tab === 'skills' && <AgentSkills persona={p.persona} secrets={p.secrets} media={media} mcp={p.mcp} setMcp={p.setMcp} notify={p.notify} onChange={() => setSkillCount(loadSkillState().filter(s => s.enabled).length + loadYourSkills().filter(s => s.enabled).length)} />}
     </section>
   </div>;
 }

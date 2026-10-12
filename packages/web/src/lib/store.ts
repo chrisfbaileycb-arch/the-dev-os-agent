@@ -1,3 +1,4 @@
+import type { ExecutionEvent, RuntimeArtifact } from './executionTypes';
 import type { Knowledge, MemoryEntry, Run, Workflow } from './types';
 import type { WorkMode } from './roster';
 import { creditsFor, creditsForUsage, DEFAULT_FREE_POOL, DEFAULT_MONTHLY_POOL, tierFor, type InferenceMode, type Tier, type Usage } from './catalog';
@@ -20,18 +21,22 @@ export interface Workspace { sessions: Session[]; runs: Run[]; ledger: LedgerEnt
 // Kept at the original name on purpose: renaming the database would orphan the sessions,
 // runs, and notes of anyone who already has data in this browser.
 const DB = 'freetoken-web-v1';
-type Store = 'runs' | 'knowledge' | 'sessions' | 'ledger' | 'memory';
-const STORES: Store[] = ['runs', 'knowledge', 'sessions', 'ledger', 'memory'];
+type Store = 'runs' | 'knowledge' | 'sessions' | 'ledger' | 'memory' | 'artifacts' | 'executionEvents';
+const STORES: Store[] = ['runs', 'knowledge', 'sessions', 'ledger', 'memory', 'artifacts', 'executionEvents'];
 /** Version 3 added the `memory` store; the upgrade only ever creates missing stores, so older data is untouched. */
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
+let runtimeWorkspaceId = '';
 export function workspaceId(): string {
+  if (runtimeWorkspaceId) return runtimeWorkspaceId;
   try { const existing = localStorage.getItem('hb-workspace-id'); if (existing && /^[0-9a-f-]{36}$/.test(existing)) return existing; const id = crypto.randomUUID(); localStorage.setItem('hb-workspace-id', id); return id; }
   catch { return '00000000-0000-4000-8000-000000000000'; }
 }
 /** Override the workspace to the server-assigned id after sign-in. All subsequent api() calls pick it up automatically. */
 export function setWorkspaceId(id: string): void {
-  try { if (/^[0-9a-f-]{36}$/.test(id)) localStorage.setItem('hb-workspace-id', id); } catch {}
+  if (!/^[0-9a-f-]{36}$/.test(id)) return;
+  runtimeWorkspaceId = id;
+  try { localStorage.setItem('hb-workspace-id', id); } catch { /* Workers receive the signed identity explicitly. */ }
 }
 
 async function open(): Promise<IDBDatabase> {
@@ -52,6 +57,14 @@ async function transaction<T>(store: Store, mode: IDBTransactionMode, action: (s
 }
 
 export const storage = {
+  artifacts: () => transaction<RuntimeArtifact[]>('artifacts', 'readonly', s => s.getAll()),
+  executionEvents: () => transaction<ExecutionEvent[]>('executionEvents', 'readonly', s => s.getAll()),
+  saveArtifact: (artifact: RuntimeArtifact) => transaction('artifacts', 'readwrite', s => s.put(artifact)),
+  saveExecutionEvent: (event: ExecutionEvent) => transaction('executionEvents', 'readwrite', s => s.put(event)),
+  removeArtifact: (id: string) => transaction('artifacts', 'readwrite', s => s.delete(id)),
+  removeExecutionEvent: (id: string) => transaction('executionEvents', 'readwrite', s => s.delete(id)),
+  clearArtifacts: () => transaction('artifacts', 'readwrite', s => s.clear()),
+  clearExecutionEvents: () => transaction('executionEvents', 'readwrite', s => s.clear()),
   runs: () => transaction<Run[]>('runs', 'readonly', s => s.getAll()),
   knowledge: () => transaction<Knowledge[]>('knowledge', 'readonly', s => s.getAll()),
   sessions: () => transaction<Session[]>('sessions', 'readonly', s => s.getAll()),
@@ -155,6 +168,8 @@ export async function flushDeletes(): Promise<void> {
 /** Delete a session from this browser and, once reachable, from the server. */
 export async function removeSessionEverywhere(id: string): Promise<void> {
   await storage.removeSession(id);
+  const [artifacts, events] = await Promise.all([storage.artifacts(), storage.executionEvents()]);
+  await Promise.all([...artifacts.filter(a => a.sessionId === id).map(a => storage.removeArtifact(a.id)), ...events.filter(e => e.sessionId === id).map(e => storage.removeExecutionEvent(e.id))]);
   writeTombstones([...readTombstones().filter(x => x !== id), id]);
   await flushDeletes();
 }
@@ -196,7 +211,7 @@ export async function recordUsage(input: { sessionId: string; model: string; mod
   const entry = makeEntry(input); await storage.saveLedger(entry); void sync.push({ ledger: [entry] }); return entry;
 }
 export async function clearWorkspaceData(): Promise<void> {
-  await Promise.all([storage.clearRuns(), storage.clearKnowledge(), storage.clearSessions(), storage.clearLedger(), storage.clearMemory()]);
+  await Promise.all([storage.clearRuns(), storage.clearKnowledge(), storage.clearSessions(), storage.clearLedger(), storage.clearMemory(), storage.clearArtifacts(), storage.clearExecutionEvents()]);
   await sync.clear();
 }
 

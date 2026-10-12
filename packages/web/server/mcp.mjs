@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { resolveWorkspace } from './workspace.mjs';
 import { lookup } from 'node:dns/promises';
 import { HttpError, publicAddress } from './proxy.mjs';
 import { checkOrigin } from './state.mjs';
@@ -27,13 +29,13 @@ const sseSessions = new Map();
  * endpoint is the same host it approved.
  */
 export class SseSession {
-  constructor(url, { authorization, fetchImpl = fetch } = {}) {
-    this.url = url; this.authorization = authorization; this.fetchImpl = fetchImpl;
+  constructor(url, { authorization, apiKey, fetchImpl = fetch } = {}) {
+    this.url = url; this.authorization = authorization; this.apiKey = apiKey; this.fetchImpl = fetchImpl;
     this.pending = new Map(); this.controller = new AbortController(); this.at = Date.now(); this.closed = false;
     this.endpoint = new Promise((resolve, reject) => { this.resolveEndpoint = resolve; this.rejectEndpoint = reject; });
     this.endpoint.catch(() => {});
   }
-  headers(extra = {}) { return { ...(this.authorization ? { Authorization: this.authorization } : {}), ...extra }; }
+  headers(extra = {}) { return { ...(this.authorization ? { Authorization: this.authorization } : {}), ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}), ...extra }; }
   async open(timeoutMs = TIMEOUT) {
     const timer = setTimeout(() => this.fail(new HttpError(502, 'The MCP server took too long to open its event stream.')), timeoutMs);
     let response;
@@ -110,14 +112,14 @@ export class SseSession {
 }
 
 /** An initialized SSE session for this workspace and URL, reusing a live one. */
-async function sseSession(key, url, authorization, fetchImpl, nextId) {
+async function sseSession(key, url, authorization, fetchImpl, nextId, apiKey) {
   const now = Date.now();
   for (const [k, s] of sseSessions) if (s.closed || now - s.at > SESSION_TTL) { s.close(); sseSessions.delete(k); }
   const live = sseSessions.get(key);
-  if (live && !live.closed && live.authorization === authorization) return live;
+  if (live && !live.closed && live.authorization === authorization && live.apiKey === apiKey) return live;
   if (live) { live.close(); sseSessions.delete(key); }
   if (sseSessions.size >= MAX_SSE_SESSIONS) { const [oldest] = [...sseSessions.entries()].sort((a, b) => a[1].at - b[1].at); oldest[1].close(); sseSessions.delete(oldest[0]); }
-  const session = new SseSession(url, { authorization, fetchImpl });
+  const session = new SseSession(url, { authorization, apiKey, fetchImpl });
   await session.open();
   const init = await session.request({ jsonrpc: '2.0', id: nextId(), method: 'initialize', params: { protocolVersion: SSE_PROTOCOL, capabilities: {}, clientInfo: { name: 'Signal Forge OS', version: '0.1' } } });
   if (init.error) { session.close(); throw new HttpError(502, `MCP error: ${String(init.error.message || 'unknown').slice(0, 300)}`); }
@@ -148,9 +150,10 @@ function parseSse(text, id) {
   return fallback;
 }
 
-export async function rpc(url, message, { authorization, sessionId, fetchImpl = fetch, signal } = {}) {
+export async function rpc(url, message, { authorization, apiKey, sessionId, fetchImpl = fetch, signal } = {}) {
   const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': PROTOCOL };
   if (authorization) headers.Authorization = authorization;
+  if (apiKey) headers['x-api-key'] = apiKey;
   if (sessionId) headers['Mcp-Session-Id'] = sessionId;
   let response;
   try { response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message), redirect: 'error', signal }); }
@@ -174,19 +177,21 @@ export async function rpc(url, message, { authorization, sessionId, fetchImpl = 
 export function createMcp({ env = process.env, resolve = lookup, allowPrivate = false, fetchImpl = fetch } = {}) {
   const budget = Math.max(1, Number(env.MCP_MAX_PER_HOUR) || 120);
   let counter = 1;
-  async function callSse(url, method, params, authorization, workspace) {
-    const key = `${workspace}|sse|${url}`;
-    const session = await sseSession(key, url, authorization, fetchImpl, () => counter++);
+  async function callSse(url, method, params, authorization, workspace, apiKey) {
+    const key = `${workspace}|sse|${url}|${createHash('sha256').update(JSON.stringify({ authorization, apiKey })).digest('hex')}`;
+    const session = await sseSession(key, url, authorization, fetchImpl, () => counter++, apiKey);
     try {
       const reply = await session.request({ jsonrpc: '2.0', id: counter++, method, params });
       if (reply.error) throw new HttpError(502, `MCP error: ${String(reply.error.message || 'unknown').slice(0, 300)}`);
       return reply.result ?? null;
     } catch (e) { if (session.closed) sseSessions.delete(key); throw e; }
   }
-  async function call(url, method, params, authorization, workspace, transport = 'http') {
-    if (transport === 'sse') return await callSse(url, method, params, authorization, workspace);
+  async function call(url, method, params, authorization, workspace, transport = 'http', apiKey) {
+    if (transport === 'sse') return await callSse(url, method, params, authorization, workspace, apiKey);
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), TIMEOUT);
-    const key = `${workspace}|${url}`; const opts = { authorization, fetchImpl, signal: controller.signal };
+    for (const [id, session] of sessions) if (Date.now() - session.at > SESSION_TTL) sessions.delete(id);
+    const key = `${workspace}|${url}|${createHash('sha256').update(JSON.stringify({ authorization, apiKey })).digest('hex')}`;
+    if (!sessions.has(key) && sessions.size >= 128) sessions.delete(sessions.keys().next().value); const opts = { authorization, apiKey, fetchImpl, signal: controller.signal };
     try {
       let session = sessions.get(key); if (session && Date.now() - session.at > SESSION_TTL) { sessions.delete(key); session = null; }
       if (!session) {
@@ -195,7 +200,7 @@ export function createMcp({ env = process.env, resolve = lookup, allowPrivate = 
         await rpc(url, { jsonrpc: '2.0', method: 'notifications/initialized' }, { ...opts, sessionId: session.id });
       }
       try { const out = await rpc(url, { jsonrpc: '2.0', id: counter++, method, params }, { ...opts, sessionId: session.id }); session.at = Date.now(); return out.result; }
-      catch (e) { if (e instanceof HttpError && e.status === 404) { sessions.delete(key); return call(url, method, params, authorization, workspace); } throw e; }
+      catch (e) { if (e instanceof HttpError && e.status === 404) { sessions.delete(key); return call(url, method, params, authorization, workspace, transport, apiKey); } throw e; }
     } finally { clearTimeout(timer); }
   }
   async function handler(req, res) {
@@ -203,13 +208,17 @@ export function createMcp({ env = process.env, resolve = lookup, allowPrivate = 
     const json = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(data)); };
     try {
       if (req.method !== 'POST') throw new HttpError(405, 'Use POST.');
-      checkOrigin(req, env);
+      checkOrigin(req, env); const owner = resolveWorkspace(req, env);
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
       let size = 0; const chunks = []; for await (const chunk of req) { size += chunk.length; if (size > 200_000) throw new HttpError(413, 'Request is too large.'); chunks.push(chunk); }
       let body; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'Invalid JSON body.'); }
       if (typeof body?.url !== 'string' || body.url.length > 2000) throw new HttpError(400, 'An MCP server url is required.');
       if (!METHODS.has(body.method)) throw new HttpError(400, 'Unsupported MCP method.');
+      if (body.authorization !== undefined && (typeof body.authorization !== 'string' || body.authorization.length > 4096 || /[\r\n]/.test(body.authorization))) throw new HttpError(400, 'Invalid authorization header.');
+      if (body.apiKey !== undefined && (typeof body.apiKey !== 'string' || body.apiKey.length > 4096 || /[\r\n]/.test(body.apiKey))) throw new HttpError(400, 'Invalid API key header.');
       const authorization = typeof body.authorization === 'string' && body.authorization.length <= 4096 && !/[\r\n]/.test(body.authorization) ? body.authorization : undefined;
+      const apiKey = typeof body.apiKey === 'string' && body.apiKey.length <= 4096 && !/[\r\n]/.test(body.apiKey) ? body.apiKey : undefined;
+      if (authorization && apiKey) throw new HttpError(400, 'Choose one credential header.');
       // Rate limits are keyed on the network address: a browser-supplied workspace header can be
       // changed on every request, which made each request its own fresh budget.
       const workspace = req.socket.remoteAddress || 'unknown';
@@ -219,7 +228,7 @@ export function createMcp({ env = process.env, resolve = lookup, allowPrivate = 
       const url = await checkServer(body.url, { resolve, allowPrivate });
       const params = body.params && typeof body.params === 'object' ? body.params : {};
       const transport = body.transport === 'sse' ? 'sse' : 'http';
-      json(200, { result: await call(url.toString(), body.method, params, authorization, workspace, transport) }); return true;
+      json(200, { result: await call(url.toString(), body.method, params, authorization, owner, transport, apiKey) }); return true;
     } catch (error) { json(error instanceof HttpError ? error.status : 500, { error: { message: error instanceof HttpError ? error.message : 'MCP request failed.' } }); return true; }
   }
   handler.call = call;

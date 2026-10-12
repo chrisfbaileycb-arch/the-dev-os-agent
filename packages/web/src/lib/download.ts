@@ -13,7 +13,7 @@
 // says where the directory starts. Every offset is measured from the front of the stream, so a
 // running length is the only bookkeeping needed.
 
-import type { ProjectFile } from './project';
+export interface ZipFile { path: string; content: string | Uint8Array; }
 
 const encoder = new TextEncoder();
 
@@ -70,17 +70,23 @@ class ByteWriter {
  * expects and what the project's own paths already are. The version-needed field is 20 (2.0), the
  * minimum for a plain stored file with a DOS timestamp.
  */
-export function zipFiles(files: ProjectFile[], when = new Date()): Uint8Array {
+export function zipFiles(files: ZipFile[], when = new Date()): Uint8Array {
+  if (files.length > 65535) throw new Error('ZIP has too many entries. Nothing was truncated.');
+  const names = new Set<string>();
   const { time, date } = dosDateTime(when);
   const body = new ByteWriter();
   const entries: ZipEntry[] = [];
 
   for (const file of files) {
-    const name = file.path.replace(/^\.?\//, '').replace(/\\/g, '/');
+    const name = file.path.replace(/^\.\//, '').replace(/\\/g, '/');
+    if (!name || name.startsWith('/') || /^[a-z]:/i.test(name) || name.split('/').some(p => p === '..' || p === '.' || !p) || /[\x00-\x1f]/.test(name)) throw new Error(`Unsafe archive path: ${file.path}`);
+    if (names.has(name)) throw new Error(`Duplicate archive path: ${name}`);
+    names.add(name);
     // The header length fields count UTF-8 bytes, not UTF-16 code units: encode the name once and
     // use that byte array for both the length and the name itself, in both headers.
     const nameBytes = encoder.encode(name);
-    const bytes = encoder.encode(file.content);
+    const bytes = typeof file.content === 'string' ? encoder.encode(file.content) : file.content;
+    if (nameBytes.length > 65535 || bytes.length > 0xffffffff || body.length + bytes.length > 0xffffffff) throw new Error('Archive exceeds ZIP32 limits. Nothing was truncated.');
     const crc = crc32(bytes);
     const local = new ByteWriter();
     local.u32(0x04034b50);          // local file header signature
@@ -143,7 +149,7 @@ export function zipFiles(files: ProjectFile[], when = new Date()): Uint8Array {
 }
 
 /** A Blob for the archive, typed so browsers name the download `.zip` rather than `.octet-stream`. */
-export function zipBlob(files: ProjectFile[]): Blob {
+export function zipBlob(files: ZipFile[]): Blob {
   return new Blob([zipFiles(files) as unknown as ArrayBuffer], { type: 'application/zip' });
 }
 

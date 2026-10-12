@@ -14,6 +14,12 @@ import GithubPullDialog from './ui/GithubPullDialog';
 import type { SyncToast } from './ui/GithubSyncDrawer';
 import { usePaneResize } from './ui/SplitPane';
 import OutputPanel from './ui/OutputPanel';
+import Workspace from './ui/Workspace';
+import { loadMediaConfigs, saveMediaConfigs, clearMediaConfigs, mediaToolSpecs, type MediaConfig } from './lib/mediaTools';
+import { sandboxedTools, type ToolObservation } from './lib/toolSandbox';
+import { redactExportValue } from './lib/exportAgentBundle';
+import { generatedFiles } from './lib/project';
+import type { ExecutionEvent, RuntimeArtifact } from './lib/executionTypes';
 import Pricing from './ui/Pricing';
 import Admin from './ui/Admin';
 import StatusBar, { type Stats } from './ui/StatusBar';
@@ -117,6 +123,12 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const [planError, setPlanError] = useState('');
   const [planPrompt, setPlanPrompt] = useState<ModelChoice | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]); const sessionsRef = useRef<Session[]>([]);
+  const [executionEvents, setExecutionEvents] = useState<ExecutionEvent[]>([]);
+  const [artifacts, setArtifacts] = useState<RuntimeArtifact[]>([]);
+  const eventStarts = useRef(new Map<string, number>());
+  const eventSaveTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const [media, setMediaState] = useState<MediaConfig[]>(loadMediaConfigs);
+  const setMedia = (next: MediaConfig[]) => { saveMediaConfigs(next); setMediaState(next); };
   const [runs, setRuns] = useState<Run[]>([]); const runsRef = useRef<Run[]>([]);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]); const ledgerRef = useRef<LedgerEntry[]>([]);
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
@@ -143,7 +155,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [githubPullOpen, setGithubPullOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
-  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(true);
   /**
    * Share of the workspace the conversation takes; the preview gets the rest. Half each by
    * default, restored on every visit to the preview, and persisted only within the drag bounds —
@@ -224,7 +236,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
    * Every credential this visitor holds, matched exactly by the secret scanner: nothing on this
    * list is ever written to memory, and it is redacted from any ZIP or commit.
    */
-  const knownSecrets = useMemo(() => [...Object.values(keys), connection.token, connection.serverAccessToken ?? '', settings.github.token, engineKey, loadSyncSettings().token, ...mcp.map(c => c.token)].filter(k => k && k.trim().length >= 8), [keys, connection.token, connection.serverAccessToken, settings.github.token, engineKey, mcp]);
+  const knownSecrets = useMemo(() => [...Object.values(keys), connection.token, connection.serverAccessToken ?? '', settings.github.token, engineKey, loadSyncSettings().token, ...mcp.map(c => c.token), ...media.map(c => c.key)].filter(k => k && k.trim().length >= 8), [keys, connection.token, connection.serverAccessToken, settings.github.token, engineKey, mcp, media]);
   const keyed = useMemo(() => keyedProviders(reach), [reach]);
   const connectorCount = activeCount(settings, mcp);
   // The credit meter tracks whichever budget the current run actually draws from.
@@ -287,6 +299,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     // in the browser either way; this only reports that the heavier path exists.
     void loadWorkerStatus(controller.signal).then(w => { if (!controller.signal.aborted) setBackgroundWorker(w.worker); });
     void loadMemories().then(list => { if (!controller.signal.aborted) commitMemories(list); });
+    void Promise.all([storage.executionEvents(), storage.artifacts()]).then(([events, files]) => { if (!controller.signal.aborted) { const recovered = events.map(event => event.status === 'Running' ? { ...event, status: 'Error Trapped' as const, stdout: `${event.stdout ?? ''}\nExecution was interrupted by a reload. Submitted remote jobs may continue.` } : event); setExecutionEvents(recovered); setArtifacts(files); for (const event of recovered.filter(e => events.find(old => old.id === e.id)?.status === 'Running')) void storage.saveExecutionEvent(event); } }).catch(e => setNotice(errorText(e)));
     loadWorkspace(controller.signal).then(ws => {
       if (controller.signal.aborted) return;
       commitSessions(ws.sessions); runsRef.current = ws.runs; setRuns(ws.runs); ledgerRef.current = ws.ledger; setLedger(ws.ledger);
@@ -295,7 +308,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     })
       .catch(e => { if (!controller.signal.aborted) setNotice(errorText(e)); })
       .finally(() => { if (!controller.signal.aborted) setReady(true); });
-    return () => { controller.abort(); worker.current?.terminate(); };
+    return () => { controller.abort(); worker.current?.terminate(); toolAbort.current?.abort(); for (const timer of eventSaveTimers.current.values()) clearTimeout(timer); };
   }, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -388,7 +401,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     }
   }
   function ensureSession(): Session { return active ?? newSession(); }
-  async function deleteSession(id: string) { try { await removeSessionEverywhere(id); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
+  async function deleteSession(id: string) { try { await removeSessionEverywhere(id); setExecutionEvents(events => events.filter(e => e.sessionId !== id)); setArtifacts(files => files.filter(a => a.sessionId !== id)); commitSessions(sessionsRef.current.filter(s => s.id !== id)); if (activeId === id) setActiveId(sessionsRef.current[0]?.id ?? null); } catch (e) { setNotice(errorText(e)); } }
   /** Picking any agent other than the builder while in Build returns to Chat, since Build binds its own agent. */
   function choosePersona(id: string) {
     setPersonaId(id);
@@ -405,7 +418,44 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     if (personaId === id) choosePersona(defaultPersonaId);
     setNotice(`${gone} deleted. Sessions that used it stay readable and fall back to the default agent.`);
   }
-  function updateRun(run: Run) { const next = runsRef.current.some(r => r.id === run.id) ? runsRef.current.map(r => r.id === run.id ? run : r) : [run, ...runsRef.current]; runsRef.current = next; setRuns(next); }
+  function saveEvent(event: ExecutionEvent) {
+    setExecutionEvents(current => current.some(e => e.id === event.id) ? current.map(e => e.id === event.id ? event : e) : [...current, event]);
+    const previous = eventSaveTimers.current.get(event.id); if (previous) clearTimeout(previous);
+    const persist = () => { eventSaveTimers.current.delete(event.id); void storage.saveExecutionEvent(event).catch(e => setNotice(errorText(e))); };
+    if (event.status === 'Running') eventSaveTimers.current.set(event.id, setTimeout(persist, 200)); else persist();
+  }
+  function saveArtifact(artifact: RuntimeArtifact) {
+    setArtifacts(current => current.some(a => a.id === artifact.id) ? current.map(a => a.id === artifact.id ? artifact : a) : [...current, artifact]);
+    void storage.saveArtifact(artifact).catch(e => setNotice(errorText(e)));
+  }
+  function toolObserver(sessionId: string, runId?: string) {
+    return (observation: ToolObservation) => {
+      const id = `tool:${observation.callId}`; const at = now();
+      const generated = observation.type === 'result' ? [ ...(observation.result?.artifacts ?? []), ...generatedFiles(observation.result?.output ?? '').map(file => ({ ...file, mimeType: 'text/plain', encoding: 'utf8' as const, source: observation.connector })) ] : [];
+      const saved = generated.map((artifact, index) => ({ ...artifact, id: `${observation.callId}:${index}`, sessionId, runId, callId: observation.callId, createdAt: at, ...(artifact.encoding === 'utf8' ? { content: redactSecrets(artifact.content, knownSecrets).text } : {}) }));
+      for (const artifact of saved) saveArtifact(artifact);
+      saveEvent({ id, sessionId, runId, callId: observation.callId, at, kind: 'tool', title: `Tool: ${observation.tool}`, connector: observation.connector, status: observation.type === 'start' ? 'Running' : observation.type === 'result' ? 'Success' : 'Error Trapped', args: redactExportValue(observation.args, knownSecrets) as Record<string, unknown>, stdout: observation.result ? redactSecrets(observation.result.output, knownSecrets).text : observation.error ? redactSecrets(observation.error, knownSecrets).text : undefined, durationMs: observation.durationMs, artifactIds: saved.map(a => a.id) });
+    };
+  }
+  function turnTools(sessionId: string, runId?: string, preapproved = false) {
+    const context = { settings, mcp, knowledge, search: retrieve, personaTools: persona.tools };
+    return sandboxedTools([...activeTools(context), ...mediaToolSpecs(media)], context, media, toolObserver(sessionId, runId), preapproved);
+  }
+  function updateRun(run: Run) {
+    const prior = runsRef.current.find(r => r.id === run.id);
+    const next = prior ? runsRef.current.map(r => r.id === run.id ? run : r) : [run, ...runsRef.current]; runsRef.current = next; setRuns(next);
+    if (!run.sessionId) return;
+    for (const step of run.steps) {
+      const old = prior?.steps.find(s => s.id === step.id);
+      if (old?.status === step.status && old.output === step.output && old.error === step.error) continue;
+      const id = `step:${run.id}:${step.id}`;
+      if (step.status === 'running' && !eventStarts.current.has(id)) eventStarts.current.set(id, performance.now());
+      const started = eventStarts.current.get(id); const terminal = ['completed', 'done', 'failed', 'cancelled'].includes(step.status);
+      const status = step.status === 'failed' ? 'Error Trapped' as const : step.status === 'running' ? 'Running' as const : ['completed', 'done'].includes(step.status) ? 'Success' as const : 'Idle' as const;
+      saveEvent({ id, sessionId: run.sessionId, runId: run.id, stepId: step.id, at: now(), kind: 'skill', title: `Skill invoked: ${step.agent} → ${step.title}`, status, stdout: redactSecrets(step.error ?? step.output ?? '', knownSecrets).text, durationMs: terminal && started !== undefined ? performance.now() - started : undefined });
+    }
+    if (prior?.status !== run.status && ['completed', 'failed', 'cancelled'].includes(run.status)) saveEvent({ id: `run:${run.id}`, sessionId: run.sessionId, runId: run.id, at: now(), kind: 'runtime', title: `Workflow ${run.status}`, status: run.status === 'completed' ? 'Success' : run.status === 'failed' ? 'Error Trapped' : 'Idle', durationMs: Math.max(0, Date.now() - new Date(run.startedAt).getTime()) });
+  }
 
   /**
    * Pick a model from the dock. A funded id switches the run onto the free tier by itself.
@@ -605,7 +655,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         connection: turnConnection, personaId: persona.id, history: session.messages, input: text,
         buildPreview: previewExpected,
         attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })),
-        tools: activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools }),
+        tools: turnTools(session.id),
         knowledge, memories: memoriesRef.current, instructions: taskInstructions(), signal: controller.signal,
         onDelta: t => patchMessage(session.id, reply.id, { content: t }),
         onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); },
@@ -690,7 +740,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       if (current) { const failed: Run = { ...current, status: 'failed', completedAt: now(), steps: current.steps.map(s => ['running', 'assigned', 'queued', 'pending'].includes(s.status) ? { ...s, status: 'cancelled' } : s) }; updateRun(failed); void persistRun(failed).catch(e => setNotice(errorText(e))); }
     };
     try {
-      const tools = activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools });
+      const tools = turnTools(session.id, runId, true);
       setToolRequests([]);
       toolRunner.current = async (request, allowed) => {
         if (!worker.current || !runsRef.current.some(r => r.id === request.runId && r.status === 'running')) return;
@@ -837,7 +887,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   async function clearAll() {
     setConfirm(null);
     try {
-      await clearWorkspaceData(); forgetKeys(); clearSessionSecrets(); setEngineKey(''); clearPipes(); setPipesState(loadPipes()); commitMemories([]); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents(); clearWorkingMemory();
+      for (const timer of eventSaveTimers.current.values()) clearTimeout(timer); eventSaveTimers.current.clear(); eventStarts.current.clear();
+      await clearWorkspaceData(); forgetKeys(); clearSessionSecrets(); setEngineKey(''); clearPipes(); setPipesState(loadPipes()); commitMemories([]); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearMediaConfigs(); setMediaState(loadMediaConfigs()); setExecutionEvents([]); setArtifacts([]); clearCustomAgents(); clearWorkingMemory();
       setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]); setCustom([]); setPersonaId(defaultPersonaId);
       runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null);
       setBalance(b => computeBalance([], b.pool, b.source)); setFreeBalance(b => computeBalance([], b.pool, 'local', undefined, 'free'));
@@ -881,7 +932,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         {notice && !modelFallback && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={13} /></button></div>}
       </div>}
       <div className="content">
-        {page === 'workspace' && <div className={`${previewOpen ? 'workspace with-preview' : 'workspace'}${resizing ? ' resizing' : ''}`} style={previewOpen ? { gridTemplateColumns: `224px minmax(0, ${chatPercent}fr) 8px minmax(0, ${100 - chatPercent}fr)` } : undefined}>
+        {page === 'workspace' && <Workspace previewOpen={previewOpen} resizing={resizing} chatPercent={chatPercent}>
           <aside className="sessions">
             <div className="sessions-head"><strong>Sessions</strong><button className="icon-button" aria-label="New session" title="New session" disabled={busy} onClick={newSession}><Plus size={14} /></button></div>
             {sessions.map(s => { const Icon = iconFor(personaById(s.persona).icon); return <button key={s.id} className={s.id === activeId ? 'session active' : 'session'} disabled={busy} onClick={() => openSession(s)}><Icon size={13} strokeWidth={1.75} /><span><strong>{s.title}</strong><small>{personaById(s.persona).name} · {new Date(s.updatedAt).toLocaleDateString()}</small></span></button>; })}
@@ -942,7 +993,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
             <OutputPanel
               key={activeId ?? 'new'}
               initialView={workMode === 'plan' ? 'execution' : 'preview'}
-              execution={{ runs: runs.filter(r => r.sessionId === activeId), messages: active?.messages ?? [], persona, connectors: mcp, secrets: knownSecrets, busy, onApprove: approveRun, onStop: stop }}
+              execution={{ runs: runs.filter(r => r.sessionId === activeId), messages: active?.messages ?? [], persona, connectors: mcp, secrets: knownSecrets, events: executionEvents.filter(e => e.sessionId === activeId), artifacts: artifacts.filter(a => a.sessionId === activeId), media, busy, onApprove: approveRun, onStop: stop }}
+              onRuntime={runtime => { if (activeId && runtime.state === 'error') saveEvent({ id: crypto.randomUUID(), sessionId: activeId, at: now(), kind: 'runtime', status: 'Error Trapped', title: 'Preview runtime error trapped', stdout: redactSecrets(runtime.message, knownSecrets).text }); }}
+              onArtifact={artifact => { if (activeId) saveArtifact({ ...artifact, sessionId: activeId }); }}
               content={previewContent}
               issue={previewIssue}
               onFinish={previewNeedsFinish ? () => void finishExistingPreview() : undefined}
@@ -956,10 +1009,10 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
               streaming={busy}
             />
           </>}
-        </div>}
+        </Workspace>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
-        {page === 'skills' && <div className="page"><div className="page-head"><div><h1>Agent Skills</h1><p>Reusable instructions for your agents. Read and enable complete skill packages. Administrators manage repository imports.</p></div></div><AgentSkills mcp={mcp} setMcp={setMcp} notify={setNotice} /></div>}
+        {page === 'skills' && <div className="page"><div className="page-head"><div><h1>Agent Skills</h1><p>Reusable instructions for your agents. Read and enable complete skill packages. Administrators manage repository imports.</p></div></div><AgentSkills persona={persona} secrets={knownSecrets} media={media} mcp={mcp} setMcp={setMcp} notify={setNotice} /></div>}
         {page === 'apis' && <Suspense fallback={<div className="page" role="status">Loading API directory…</div>}><ApiDirectory webEnabled={settings.web.enabled} openConnectors={() => openConnectors('web')} onUse={text => { setDraft(text); setPage('workspace'); setNotice('API example added to the message box. Review it, then send when ready.'); }} /></Suspense>}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
         {page === 'settings' && <Settings backends={deployment.backends} connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} storage={deployment.storage} engineKey={engineKey} setEngineKey={value => { saveEngineKey(value); setEngineKey(value); }} />}
@@ -970,6 +1023,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     <RosterDrawer open={rosterOpen} close={() => setRosterOpen(false)} activeId={persona.id} onPick={choosePersona} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} />
     <GithubPullDialog open={githubPullOpen} close={() => setGithubPullOpen(false)} github={settings.github} addFiles={f => void addFiles(f)} openConnectors={() => openConnectors('github')} notify={setNotice} notifyToast={showToast} onImportProject={importProjectToWorkspace} />
     <Connectors key={connectorsOpen ? 'open' : 'closed'}
+      persona={persona} secrets={knownSecrets} media={media} setMedia={setMedia}
       open={connectorsOpen} close={() => setConnectorsOpen(false)} tab={connectorTab} setTab={setConnectorTab}
       settings={settings} setSettings={setSettings} mcp={mcp} setMcp={setMcp}
       knowledge={knowledge} addDocuments={f => void addDocuments(f)}

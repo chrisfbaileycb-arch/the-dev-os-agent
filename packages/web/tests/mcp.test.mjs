@@ -45,12 +45,12 @@ for (const sse of [false, true]) test(`initializes once, lists and calls tools (
 
 test('the HTTP route validates input, enforces the budget, and blocks private hosts by default', async () => {
   const fake = fakeMcp(); const url = await fake.start();
-  const mcp = createMcp({ env: { MCP_MAX_PER_HOUR: '2' }, allowPrivate: false });
+  const mcp = createMcp({ env: { MCP_MAX_PER_HOUR: '2', WORKSPACE_AUTH_REQUIRED: 'false' }, allowPrivate: false });
   const server = createServer((req, res) => { mcp(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   try {
     const route = `http://127.0.0.1:${server.address().port}/api/mcp`;
-    const post = body => fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': 'ws-a' }, body: JSON.stringify(body) });
+    const post = body => fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': '11111111-1111-4111-8111-111111111111' }, body: JSON.stringify(body) });
     assert.equal((await fetch(route)).status, 405);
     assert.equal((await post({ url, method: 'drop/tables' })).status, 400);
     assert.equal((await post({ url, method: 'tools/list' })).status, 400);
@@ -60,3 +60,21 @@ test('the HTTP route validates input, enforces the budget, and blocks private ho
   } finally { await new Promise(r => server.close(r)); await fake.stop(); }
 });
 
+
+test('MCP sessions are isolated by workspace ownership and credential; API keys use their own header', async () => {
+  const initializations = [];
+  const fetchImpl = async (_url, init) => {
+    const message = JSON.parse(init.body);
+    if (message.method === 'initialize') { initializations.push(init.headers); return new Response(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { capabilities: { tools: {} } } }), { headers: { 'Mcp-Session-Id': 'test-session' } }); }
+    if (message.method === 'notifications/initialized') return new Response(null, { status: 202 });
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { tools: [] } }));
+  };
+  const mcp = createMcp({ env: {}, fetchImpl }); const url = 'https://tools.example/isolation';
+  await mcp.call(url, 'tools/list', {}, 'Bearer first', 'owner-a');
+  await mcp.call(url, 'tools/list', {}, 'Bearer first', 'owner-a');
+  await mcp.call(url, 'tools/list', {}, 'Bearer second', 'owner-a');
+  await mcp.call(url, 'tools/list', {}, 'Bearer first', 'owner-b');
+  await mcp.call(url, 'tools/list', {}, undefined, 'owner-a', 'http', 'exa-session-key');
+  assert.equal(initializations.length, 4);
+  assert.equal(initializations[3]['x-api-key'], 'exa-session-key'); assert.equal(initializations[3].Authorization, undefined);
+});

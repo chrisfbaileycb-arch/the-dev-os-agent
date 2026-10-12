@@ -53,6 +53,13 @@ function fences(text: string): { path: string | null; lang: string; body: string
   return out;
 }
 
+/** Every named generated file, including non-runnable artifacts such as SQL and JSON. */
+export function generatedFiles(text: string): ProjectFile[] {
+  const named = fences(text).filter(f => f.path && isSafeProjectPath(f.path)).map(f => ({ path: f.path!, content: f.body.replace(/\n$/, '') }));
+  if (named.length) return named;
+  return parseProject(text)?.files ?? [];
+}
+
 /**
  * The code-ish fence bodies a reply carries, excluding any already serving as project content.
  *

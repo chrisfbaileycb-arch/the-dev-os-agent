@@ -66,7 +66,7 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
    drag writes a new ratio on every pointermove, and animating toward each one makes the divider
    lag the cursor. So the transition is switched off for exactly as long as a drag lasts:
    .resizing is set by the divider hook and removed when the pointer is released. */
-.workspace.with-preview { grid-template-columns: 224px minmax(0, var(--chat-percent, 50%)) 8px minmax(0, var(--preview-percent, 50%)); transition: grid-template-columns 150ms ease-out; }
+.workspace.with-preview { grid-template-columns: 224px minmax(0, var(--chat-column, 1fr)) 8px minmax(0, var(--preview-column, 1fr)); transition: grid-template-columns 150ms ease-out; }
 .workspace.resizing { transition: none; }
 .sessions { border-right: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .sessions-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
@@ -411,7 +411,7 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 
 @media (max-width: 1000px) { .two-col, .two-col.wide { grid-template-columns: minmax(0, 1fr); } }
 .preview-head { flex-wrap: wrap; row-gap: 4px; }
-@media (max-width: 1100px) { .workspace.with-preview { grid-template-columns: 224px minmax(0, 1fr) 8px minmax(0, var(--preview-percent, 50%)); } }
+@media (max-width: 1100px) { .workspace.with-preview { grid-template-columns: 184px minmax(0, var(--chat-column, 1fr)) 8px minmax(0, var(--preview-column, 1fr)); } }
 @media (max-width: 900px) { .workspace, .workspace.with-preview { grid-template-columns: minmax(0, 1fr); } .workspace.with-preview .pane-divider { display: none; } .sessions { display: none; } .session-select { display: block; } .canvas { min-width: 0; } .canvas-title { display: none; } .status-metrics { gap: 8px; } .mode-picker.three { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 650px) {
   .app, .app.rail-collapsed { grid-template-columns: 46px minmax(0, 1fr); }
@@ -598,4 +598,33 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
   .unified-model-picker .model-trigger { width: 100%; }
   .unified-model-picker .model-trigger > span:first-of-type { flex-shrink: 0; }
   .execution-panel { padding: 12px; }
+}
+
+/* Developer conversation and the two execution aspects share the existing responsive split. */
+.execution-aspect-tabs { display: flex; align-items: stretch; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.execution-aspect-tabs .output-tab { flex: 1; padding: 9px 8px; white-space: normal; text-align: center; line-height: 1.35; }
+.execution-aspect-tabs [aria-selected="true"] { box-shadow: inset 0 -2px var(--accent); }
+.sandbox-status { display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 10px; font-size: 11px; white-space: nowrap; }
+.sandbox-status.running { color: var(--accent); background: var(--accent-soft); }
+.sandbox-status.success { color: var(--ok); }
+.sandbox-status.error { color: var(--danger, #c74444); }
+.sandbox-export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.sandbox-export-actions select { max-width: 100px; }
+.sandbox-log { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; max-height: 55vh; overflow: auto; background: var(--panel); }
+.sandbox-event { padding: 8px 4px; border-bottom: 1px solid var(--line); }
+.sandbox-event:last-of-type { border-bottom: 0; }
+.sandbox-event summary { cursor: pointer; overflow-wrap: anywhere; font-size: 12px; }
+.sandbox-event time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.sandbox-event.failed { color: var(--danger, #c74444); }
+.sandbox-event .skill-body { color: var(--ink); }
+.sandbox-artifact-image { display: block; width: 100%; max-height: 360px; object-fit: contain; margin-top: 12px; }
+.tool-category-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0; }
+.media-provider { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin: 14px 0; min-width: 0; }
+.media-provider legend { padding: 0 6px; font-weight: 600; }
+.preset-grid .preset { display: flex; align-items: stretch; flex-direction: column; gap: 8px; }
+.preset-grid .preset .row { margin-top: auto; }
+@media (max-width: 900px) {
+  .workspace.with-preview { grid-template-rows: minmax(280px, 1fr) minmax(300px, 1fr); }
+  .execution-aspect-tabs { padding: 6px; }
+  .sandbox-log { max-height: 40vh; }
 }

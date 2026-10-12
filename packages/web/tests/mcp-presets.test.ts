@@ -1,17 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm } from '../src/lib/mcpPresets';
 
-const REMOVED = ['thinking', 'database', 'playwright', 'fs', 'docker', 'jira'];
+const REMOVED = ['thinking', 'database', 'fs', 'jira', 'huggingface', 'context7', 'deepwiki', 'cloudflare-docs'];
 
 describe('MCP presets', () => {
   it('lists unique ids and https URLs the server guard will accept', () => {
     expect(new Set(MCP_PRESETS.map(p => p.id)).size).toBe(MCP_PRESETS.length);
-    for (const p of MCP_PRESETS) {
+    expect(MCP_PRESETS).toHaveLength(25);
+    for (const p of MCP_PRESETS.filter(p => p.kind === 'remote')) {
       const url = new URL(p.url);
       expect(url.protocol).toBe('https:');
       expect(url.username).toBe('');
       expect(url.hostname.endsWith('.internal')).toBe(false);
     }
+  });
+  it('never invents remote URLs for local bridges or media APIs', () => {
+    for (const preset of MCP_PRESETS.filter(p => p.kind !== 'remote')) { expect(preset.url).toBe(''); expect(preset.docs.startsWith('https://')).toBe(true); }
+    for (const id of ['filesystem', 'sqlite', 'docker', 'brave', 'puppeteer']) expect(MCP_PRESETS.find(p => p.id === id)?.kind).toBe('bridge');
+    for (const id of ['heygen', 'nano-banana']) expect(MCP_PRESETS.find(p => p.id === id)?.kind).toBe('media');
   });
   it('puts every preset in a known group', () => {
     for (const p of MCP_PRESETS) expect(MCP_PRESET_GROUPS).toContain(p.group);

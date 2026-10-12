@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Check, Download, FileText, Pencil, Plug, Plus, Trash2 } from 'lucide-react';
 import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, parseSkillStack, saveSkillState, saveYourSkills, instructionText, SKILL_CAP, SKILL_FILE_CAP, refreshSystemSkills, type SkillState, type YourSkill } from '../lib/skillRegistry';
+import { exportAgentBundle, type AgentExportFormat } from '../lib/exportAgentBundle';
+import { defaultPersona, type Persona } from '../lib/roster';
+import type { MediaConfig } from '../lib/mediaTools';
 import type { McpConnection } from '../lib/mcp';
 
 export interface AgentSkillsProps {
+  persona?: Persona; secrets?: string[]; media?: MediaConfig[];
   mcp: McpConnection[];
   setMcp: (list: McpConnection[]) => void;
   notify: (message: string) => void;
@@ -13,6 +17,10 @@ export interface AgentSkillsProps {
 
 /** The same skill library is available from navigation and the connectors drawer. */
 export default function AgentSkills(p: AgentSkillsProps) {
+  const [exportFormat, setExportFormat] = useState<AgentExportFormat>('json');
+  const [includeMemory, setIncludeMemory] = useState(true);
+  const [exportingAgent, setExportingAgent] = useState(false);
+  async function exportAgent() { setExportingAgent(true); try { await exportAgentBundle({ persona: p.persona ?? defaultPersona(), connectors: p.mcp, secrets: p.secrets, media: p.media }, exportFormat, includeMemory); } catch (error) { p.notify(error instanceof Error ? error.message : 'Could not export agent.'); } finally { setExportingAgent(false); } }
   const [skills, setSkills] = useState<SkillState[]>(() => loadSkillState());
   const [yours, setYours] = useState<YourSkill[]>(() => loadYourSkills());
   const [openSkill, setOpenSkill] = useState<string | null>(null);
@@ -94,9 +102,10 @@ export default function AgentSkills(p: AgentSkillsProps) {
   }
 
   return <section className="panel">
-        <div className="panel-head"><h2>Skill library · {CREW_SKILLS.filter(s => s.kind === 'instructions').length} complete packages</h2><span className="row gap">{p.adminMode && <><button type="button" className="button small" onClick={() => { setEditing(null); setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(v => !v); }}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,.json,text/markdown,text/plain,application/json" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label></>}<button type="button" className="button small" onClick={exportStack}><Download size={13} />Export</button></span></div>
+        <div className="panel-head"><h2>Skill library · {CREW_SKILLS.filter(s => s.kind === 'instructions').length} complete packages</h2><span className="row gap">{p.adminMode && <><button type="button" className="button small" onClick={() => { setEditing(null); setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(v => !v); }}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,.json,text/markdown,text/plain,application/json" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label></>}<button type="button" className="button small" onClick={exportStack}><Download size={13} />Export Skills</button><select aria-label="Agent export format" value={exportFormat} onChange={e => setExportFormat(e.target.value as AgentExportFormat)}><option value="json">JSON</option><option value="yaml">YAML</option></select><button type="button" className="button primary small" disabled={exportingAgent} onClick={() => void exportAgent()}><Download size={13} />Export Agent</button></span></div>
         <p className="help">Select the complete skills your agent should follow. Repository imports and system-wide catalog management belong in the protected Admin dashboard. Enabled choices stay in this browser. Supporting scripts are reference files and run only through an explicitly connected tool.</p>
         <p className={activationError ? 'msg-error' : 'help'}>{activationError || `Selected instructions: ${activation.length.toLocaleString()} / ${SKILL_CAP.toLocaleString()} characters. Each selected skill is loaded completely. Turn on only the skills needed for this task.`}</p>
+        <label className="check"><input type="checkbox" checked={includeMemory} onChange={e => setIncludeMemory(e.target.checked)} />Include browser-injected memory in agent exports</label>
         <label>Search skills<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Name or purpose" /></label>
         {p.adminMode && adding && <div className="stack">
           <label>Name<input value={draftName} maxLength={80} onChange={e => setDraftName(e.target.value)} placeholder="Review a pull request" /></label>

@@ -23,6 +23,7 @@ import { cspFor } from './csp.mjs';
 import { createWorkspaceSession } from './workspace.mjs';
 import { dailyBudgetNanos, NANOS_PER_USD } from './budget.mjs';
 import { createCustomConnectors } from './customConnectors.mjs';
+import { createMedia } from './media.mjs';
 import { createSkills } from './skills.mjs';
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 // Workspace data: Postgres when DATABASE_URL is set, SQLite otherwise.
@@ -47,7 +48,7 @@ const jobs = openJobs(jobsSqlite);
 const settings = await openSettings({ db, env: process.env });
 if (!process.env.ADMIN_TOKEN) console.log('Admin dashboard: off (set ADMIN_TOKEN to open /admin).');
 const auth = createAuth({ db, env: process.env });
-const handlers = [auth, createWorkspaceSession(), createAdmin({ db, settings, storage }), createSkills({ settings }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, settings, storage }), createBrowse(), createMcp(), createCustomConnectors(), createFetcher(), createGithub(), createJobs({ jobs })];
+const handlers = [auth, createWorkspaceSession(), createAdmin({ db, settings, storage }), createSkills({ settings }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, settings, storage }), createBrowse(), createMcp(), createCustomConnectors(), createMedia(), createFetcher(), createGithub(), createJobs({ jobs })];
 // Finished jobs are a transient hand-off, not a record; the run itself lands in the workspace store.
 setInterval(() => jobs.prune(new Date(Date.now() - 24 * 3_600_000).toISOString()), 3_600_000).unref();
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png' };

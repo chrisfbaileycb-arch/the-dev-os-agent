@@ -3,7 +3,8 @@
 // replies with TOOL RESULT. Tools come from the persona (inspect_page) and from connected MCP
 // servers. Small, explicit, and easy to audit in the transcript.
 
-export interface ToolOutput { output: string; summary: string; }
+import type { ArtifactOutput } from './executionTypes';
+export interface ToolOutput { output: string; summary: string; artifacts?: ArtifactOutput[]; }
 export interface ToolSpec { name: string; description: string; run: (args: Record<string, unknown>, signal: AbortSignal) => Promise<string | ToolOutput>; }
 export interface ToolCall { tool: string; args: Record<string, unknown>; }
 export interface PageReport { url: string; status: number; title: string; description: string; canonical: string; robots: string; lang: string; h1: string[]; headingCount: number; og: Record<string, string>; wordCount: number; text: string; links: { href: string; text: string }[]; elapsedMs: number; }

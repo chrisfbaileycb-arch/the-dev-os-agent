@@ -12,10 +12,14 @@ import PushToGithub from './PushToGithub';
 import GithubSyncDrawer, { type SyncToast } from './GithubSyncDrawer';
 import { emptySyncState, loadSyncSettings, type GithubSyncState } from '../lib/githubSync';
 import { HourglassIcon } from './WritingStatus';
-import ExecutionPanel, { type ExecutionProps } from './ExecutionPanel';
+import AgentSandboxConsole, { type ExecutionProps } from './AgentSandboxConsole';
+import ErrorBoundary from './ErrorBoundary';
+import type { RuntimeArtifact } from '../lib/executionTypes';
 
 export interface OutputPanelProps {
   execution?: ExecutionProps;
+  onRuntime?: (runtime: Runtime) => void;
+  onArtifact?: (artifact: Omit<RuntimeArtifact, 'sessionId'>) => void;
   initialView?: 'preview' | 'execution';
   content: string;
   issue?: string;
@@ -157,6 +161,11 @@ export default function OutputPanel(p: OutputPanelProps) {
     const run = () => void buildProject(preparePreviewProject(next), controller.signal).then(result => {
       if (controller.signal.aborted) return;
       setBuild(buildState(result, ++seqRef.current));
+      if (p.onArtifact) {
+        const createdAt = new Date().toISOString(); const version = crypto.randomUUID();
+        for (const [index, file] of next.files.entries()) p.onArtifact({ id: `${version}:file:${index}`, path: file.path, content: file.content, encoding: 'utf8', mimeType: 'text/plain', source: 'Preview project', createdAt });
+        if (result.ok) p.onArtifact({ id: `${version}:preview`, path: 'preview/index.html', content: result.html, encoding: 'utf8', mimeType: 'text/html', source: 'Compiled preview', createdAt });
+      }
     }).catch(error => {
       if (!controller.signal.aborted) setBuild({ kind: 'error', errors: [error instanceof Error ? error.message : 'The build failed.'] });
     });
@@ -326,14 +335,22 @@ export default function OutputPanel(p: OutputPanelProps) {
       {p.streaming && <span className="streaming-note"><HourglassIcon size={11} /> Live code stream · preview refreshes when complete</span>}
       {build.kind === 'error' && <div className="build-errors"><p className="msg-error"><CircleAlert size={12} />Build failed</p><pre>{build.errors.join('\n')}</pre></div>}
       {build.kind === 'idle' && <div className="preview-empty"><Code2 size={20} strokeWidth={1.25} /><span>{selectedFile} is not a page on its own. Open it in the code view, or pull an HTML or React entry file.</span></div>}
-      {build.kind === 'ready' && <><SandboxFrame html={build.html} refresh={refresh + build.seq} onRuntime={setRuntime} />{runtime.state === 'error' && <p className="preview-runtime-error" role="alert">The app crashed: {runtime.message}</p>}{runtime.state === 'blank' && <p className="preview-runtime-error" role="status">The app built but put nothing on screen. Check the code view, or ask the agent to fix the blank page.</p>}<button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Rerun</button></>}
+      {build.kind === 'ready' && <><ErrorBoundary key={refresh + build.seq}><SandboxFrame html={build.html} refresh={refresh + build.seq} onRuntime={value => { setRuntime(value); p.onRuntime?.(value); }} /></ErrorBoundary>{runtime.state === 'error' && <p className="preview-runtime-error" role="alert">The app crashed: {runtime.message}</p>}{runtime.state === 'blank' && <p className="preview-runtime-error" role="status">The app built but put nothing on screen. Check the code view, or ask the agent to fix the blank page.</p>}<button className="rerun-button" onClick={() => setRefresh(n => n + 1)}><RotateCw size={13} />Rerun</button></>}
     </div>
   </div>;
 
   return <aside className={fullscreen ? 'preview-panel fullscreen' : 'preview-panel'}>
-    <header className="preview-head developer-toolbar">
+    <div className="execution-aspect-tabs" role="tablist" aria-label="Execution and DevOps views" onKeyDown={event => {
+      if (p.execution && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault(); const execution = event.key === 'End' || (event.key !== 'Home' && view !== 'execution');
+        setView(execution ? 'execution' : 'preview'); document.getElementById(execution ? 'agent-sandbox-tab' : 'app-preview-tab')?.focus();
+      }
+    }}>
+      <button id="app-preview-tab" role="tab" tabIndex={view === 'execution' ? -1 : 0} aria-selected={view !== 'execution'} aria-controls="app-preview-panel" className={view !== 'execution' ? 'output-tab active' : 'output-tab'} onClick={() => setView('preview')}>App Live Preview</button>
+      {p.execution && <button id="agent-sandbox-tab" role="tab" tabIndex={view === 'execution' ? 0 : -1} aria-selected={view === 'execution'} aria-controls="agent-sandbox-panel" className={view === 'execution' ? 'output-tab active' : 'output-tab'} onClick={() => setView('execution')}>Agent Sandbox / DevOps Console</button>}
+    </div>
+    {view !== 'execution' && <header className="preview-head developer-toolbar">
       <div className="toolbar-group">
-        {p.execution && <button className={view === 'execution' ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={view === 'execution'} onClick={() => setView(view === 'execution' ? 'preview' : 'execution')}>DevOps / Execution</button>}
         <button className={codeShown ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={codeShown} disabled={!project || split} onClick={() => { if (view === 'code') showPreview(); else setView('code'); }} title="View or edit the generated source"><Code2 size={12} />View / Edit Code</button>
         <button className="toolbar-button" onClick={() => { if ((!project || sourceOnly) && p.onFinish) p.onFinish(); else showPreview(); }} disabled={p.streaming || ((!project || sourceOnly) && !p.onFinish)} title={sourceOnly ? 'Complete the generated source into a runnable page' : 'Show the live app'}><MonitorPlay size={12} />{!project || sourceOnly ? 'Generate Preview' : 'Preview'}</button>
         <div className="menu-anchor" ref={exportRef}>
@@ -357,10 +374,10 @@ export default function OutputPanel(p: OutputPanelProps) {
         <button className="icon-button" onClick={rebuild} disabled={!project || sourceOnly || isBuilding} title="Rebuild the generated app" aria-label="Rebuild the generated app"><RotateCw size={13} /></button>
         <button className="icon-button" aria-label="Close output panel" onClick={() => { setFullscreen(false); p.close(); }}><PanelRightClose size={14} /></button>
       </div>
-    </header>
+    </header>}
     {p.issue && <div className="preview-issue" role="alert"><CircleAlert size={13} /><span>{p.issue}</span>{p.onFinish && <button className="button small" onClick={p.onFinish}>Finish &amp; Preview</button>}</div>}
-    <div className="preview-content">
-      {view === 'execution' && p.execution && <ExecutionPanel {...p.execution} />}
+    <div className="preview-content" role="tabpanel" id={view === 'execution' ? 'agent-sandbox-panel' : 'app-preview-panel'} aria-labelledby={view === 'execution' ? 'agent-sandbox-tab' : 'app-preview-tab'}>
+      {view === 'execution' && p.execution && <ErrorBoundary><AgentSandboxConsole {...p.execution} projectFiles={project?.files ?? []} previewHtml={build.kind === 'ready' ? build.html : undefined} /></ErrorBoundary>}
       {!project && view !== 'execution' && <div className="preview-empty canvas-idle">
         <MonitorPlay size={26} strokeWidth={1.1} />
         <strong>Canvas Idle · Ready to preview</strong>
