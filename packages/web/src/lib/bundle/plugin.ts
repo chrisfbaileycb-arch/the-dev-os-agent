@@ -67,12 +67,26 @@ export function resolveRelative(path: string, importer: string, files: Record<st
   return null;
 }
 
-export function projectPlugin(files: Record<string, string>, dependencies: Record<string, string>, fetchImpl: typeof fetch = fetch): Plugin {
+/** Resolve every CDN, versioned, and bare React import to one preview-only module identity. */
+export function runtimeSpecifier(path: string): string | null {
+  const match = path.match(/(?:^|\/)(react-dom|react|scheduler)(?:@[^/]+)?(?:\/(.*))?$/);
+  if (!match) return null;
+  const tail = (match[2] ?? '').split('?')[0].replace(/^(?:es\d+|stable)\//, '').replace(/(?:\.production|\.development)?\.(?:m?js)$/, '');
+  if (!tail || tail === match[1]) return match[1];
+  if (match[1] === 'react-dom' && /^(?:client|react-dom-client)$/.test(tail)) return 'react-dom/client';
+  if (match[1] === 'react' && /^(?:jsx-runtime|jsx-dev-runtime|compiler-runtime)$/.test(tail)) return `react/${tail}`;
+  return null;
+}
+
+export function projectPlugin(files: Record<string, string>, dependencies: Record<string, string>, fetchImpl: typeof fetch = fetch, runtime: Record<string, string> = {}): Plugin {
   const httpCache = new Map<string, string>();
   return {
     name: 'hey-buddy-project',
     setup(build: PluginBuild) {
       build.onResolve({ filter: /.*/ }, (args: OnResolveArgs) => {
+        const spec = runtimeSpecifier(args.path);
+        if (spec && Object.hasOwn(runtime, spec)) return { path: spec, namespace: 'preview-runtime' };
+        if (/^https:\/\//.test(args.path)) return { path: args.path, namespace: 'http' };
         if (args.namespace === 'http') {
           if (args.path.startsWith('.') || args.path.startsWith('/')) return { path: new URL(args.path, args.importer).toString(), namespace: 'http' };
           return { path: esmUrl(args.path, dependencies), namespace: 'http' };
@@ -85,6 +99,7 @@ export function projectPlugin(files: Record<string, string>, dependencies: Recor
         }
         return { path: esmUrl(args.path, dependencies), namespace: 'http' };
       });
+      build.onLoad({ filter: /.*/, namespace: 'preview-runtime' }, args => ({ contents: runtime[args.path], loader: 'js' }));
       build.onLoad({ filter: /.*/, namespace: 'vfs' }, args => {
         if (!Object.hasOwn(files, args.path)) return { errors: [{ text: `"${args.path}" is not one of the project's files.` }] };
         return { contents: files[args.path], loader: loaderFor(args.path) };

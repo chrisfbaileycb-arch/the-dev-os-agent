@@ -42,6 +42,8 @@ const host = (url: string) => { try { return new URL(url).host; } catch { return
 export default function Connectors(p: ConnectorsProps) {
   const [url, setUrl] = useState(''); const [name, setName] = useState(''); const [token, setToken] = useState(''); const saveToken = false;
   const [transport, setTransport] = useState<McpTransport | 'auto'>('auto');
+  const [method, setMethod] = useState<'GET' | 'POST'>('GET');
+  const [addingConnector, setAddingConnector] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [preset, setPreset] = useState<McpPreset | null>(null);
@@ -57,7 +59,8 @@ export default function Connectors(p: ConnectorsProps) {
       return 'That looks like a model name, not a server URL. Enter an https:// address, for example https://mcp.example.com/mcp.';
     try {
       const parsed = new URL(v);
-      if (parsed.protocol !== 'https:') return 'MCP servers must use https://. Local servers need a public tunnel (e.g. ngrok).';
+      if (parsed.protocol !== (transport === 'websocket' ? 'wss:' : 'https:')) return transport === 'websocket' ? 'WebSocket connectors require wss://.' : 'Remote connectors require https://. Local file servers connect through an HTTPS MCP bridge.';
+      if (parsed.username || parsed.password) return 'Enter credentials in the token field, not the URL.';
     } catch { return 'Enter a valid https:// URL, for example https://mcp.example.com/mcp.'; }
     return '';
   })();
@@ -72,9 +75,9 @@ export default function Connectors(p: ConnectorsProps) {
   }
   async function addMcp() {
     let parsed: URL;
-    try { parsed = new URL(url.trim()); if (parsed.protocol !== 'https:') throw new Error(); }
+    try { parsed = new URL(url.trim()); if (urlError) throw new Error(); }
     catch { p.notify('Enter the server\'s https URL, for example https://mcp.example.com/mcp'); return; }
-    const conn: McpConnection = { id: crypto.randomUUID(), name: name.trim() || parsed.host, url: parsed.toString(), transport: transport === 'auto' ? guessTransport(parsed.toString()) : transport, token: token.trim(), saveToken, enabled: true, tools: [] };
+    const conn: McpConnection = { id: crypto.randomUUID(), name: name.trim() || parsed.host, url: parsed.toString(), transport: transport === 'auto' ? guessTransport(parsed.toString()) : transport, method, token: token.trim(), saveToken, enabled: true, tools: [] };
     setBusyId(conn.id); const checked = await check(conn); setBusyId(null);
     p.setMcp([checked, ...p.mcp]); setName(''); setUrl(''); setToken(''); setTransport('auto');
     p.notify(checked.error ? `Added ${checked.name}, but it did not answer: ${checked.error}` : `Connected ${checked.name}: ${checked.tools.length} tool${checked.tools.length === 1 ? '' : 's'} available to your agents.`);
@@ -137,6 +140,7 @@ export default function Connectors(p: ConnectorsProps) {
         <h2 id="connectors-title"><Plug size={15} strokeWidth={1.75} /> Connectors</h2>
         <button className="icon-button" aria-label="Close" onClick={p.close} autoFocus><X size={16} /></button>
       </div>
+      <button className="button primary small" onClick={() => { setAddingConnector(v => !v); p.setTab('mcp'); }}><Plus size={13} />Add Connector</button>
       <p className="help">What your agents can reach beyond the model. Each connector adds named tools the agent may call, and every call shows up as a trace under the reply.</p>
 
       <div className="connector-tabs" role="tablist" aria-label="Connector">
@@ -240,7 +244,7 @@ export default function Connectors(p: ConnectorsProps) {
                   setUrl(f.url);
                   setTransport(f.transport);
                   setToken('');
-                  setPreset(presetItem);
+                  setPreset(presetItem); setAddingConnector(true);
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '6px' }}>
@@ -272,9 +276,9 @@ export default function Connectors(p: ConnectorsProps) {
             })}
           </div>
         </section>
-        <section className="panel">
-          <h3>Add or Configure a Model Context Protocol server</h3>
-          <p className="help">Connect any remote or internal MCP server over Streamable HTTP (MCP 2025-06-18) or HTTP+SSE (2024-11-05). All active tools become available to the agent you are chatting with.</p>
+        {addingConnector && <section className="panel">
+          <h3>Add Connector</h3>
+          <p className="help">Connect an MCP server, a custom REST endpoint, or a WebSocket service. File System access is provided by your own explicitly connected MCP file server or by the local document hub.</p>
           <div className="form-grid">
             <label>Name<input value={name} maxLength={40} placeholder="Custom MCP Service" onChange={e => setName(e.target.value)} /></label>
             <label className="grow">Server URL<input type="url" value={url} placeholder="https://mcp.example.com/mcp" onChange={e => setUrl(e.target.value)} className={urlError ? 'input-error' : ''} />{urlError && <span className="field-error">{urlError}</span>}</label>
@@ -283,13 +287,16 @@ export default function Connectors(p: ConnectorsProps) {
               <option value="auto">Automatic{url.trim() ? ` (${guessTransport(url) === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'})` : ''}</option>
               <option value="http">Streamable HTTP</option>
               <option value="sse">HTTP+SSE (legacy /sse)</option>
+              <option value="rest">Custom REST endpoint</option>
+              <option value="websocket">Custom WebSocket endpoint</option>
             </select></label>
+            {transport === 'rest' && <label>HTTP method<select value={method} onChange={e => setMethod(e.target.value as 'GET' | 'POST')}><option value="GET">GET (read)</option><option value="POST">POST (ask before sending)</option></select></label>}
           </div>
           <div className="row gap"><button className="button primary small" disabled={!url.trim() || !!urlError || busyId !== null} onClick={() => void addMcp()}>{busyId && !p.mcp.some(c => c.id === busyId) ? <LoaderCircle size={13} className="spin" /> : <Plug size={13} />}Connect and list tools</button></div>
           <p className="help">The token is sent securely to that server through this app's proxy and stays in page memory until reload or tab close. Never paste it into chat or skills.</p>
-        </section>
+        </section>}
         {p.mcp.map(c => <section key={c.id} className="panel mcp-row">
-          <div className="panel-head"><div><strong>{c.name}</strong><small className="mono"> {host(c.url)} · {c.transport === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'}</small></div><label className="switch"><input type="checkbox" checked={c.enabled} onChange={e => p.setMcp(p.mcp.map(x => x.id === c.id ? { ...x, enabled: e.target.checked } : x))} />Enabled</label></div>
+          <div className="panel-head"><div><strong>{c.name}</strong><small className="mono"> {host(c.url)} · {c.transport === 'rest' ? `REST ${c.method ?? 'GET'}` : c.transport === 'websocket' ? 'WebSocket' : c.transport === 'sse' ? 'HTTP+SSE' : 'Streamable HTTP'}</small></div><label className="switch"><input type="checkbox" checked={c.enabled} onChange={e => p.setMcp(p.mcp.map(x => x.id === c.id ? { ...x, enabled: e.target.checked } : x))} />Enabled</label></div>
           {c.error ? <p className="msg-error">{c.error}</p> : <p className="help">{c.tools.length} tool{c.tools.length === 1 ? '' : 's'}{c.checkedAt ? ` · checked ${new Date(c.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}</p>}
           {c.tools.length > 0 && <div className="caps">{c.tools.map(t => <em key={t.name} title={t.description}>{t.name}</em>)}</div>}
           <div className="row gap"><button className="button small" disabled={busyId === c.id} onClick={() => void refresh(c)}>{busyId === c.id ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}Refresh</button><button className="button small danger" onClick={() => p.setMcp(p.mcp.filter(x => x.id !== c.id))}><Trash2 size={13} />Remove</button></div>

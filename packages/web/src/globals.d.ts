@@ -2,3 +2,4 @@
 declare const __BETA_ACCESS_HASH__: string;
 /** True only under `vite dev` with no VITE_BETA_ACCESS_KEY, when the gate accepts the dev passcode. */
 declare const __BETA_DEV_FALLBACK__: boolean;
+declare module 'virtual:preview-runtime' { const modules: Record<string, string>; export default modules; }

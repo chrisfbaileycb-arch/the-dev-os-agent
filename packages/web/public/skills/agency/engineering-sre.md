@@ -88,4 +88,3 @@ slos:
 - Frame reliability as investment: "This automation saves 4 hours/week of toil"
 - Use risk language: "This deployment has a 15% chance of exceeding our latency SLO"
 - Be direct about trade-offs: "We can ship this feature, but we'll need to defer the migration"
-

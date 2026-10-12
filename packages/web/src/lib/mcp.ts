@@ -10,8 +10,8 @@ import type { ToolSpec } from './tools';
 // plus a POST endpoint it names), which many existing servers still expose at a `/sse` path.
 
 export interface McpTool { name: string; description: string; inputSchema?: { properties?: Record<string, { type?: string; description?: string }>; required?: string[] }; }
-export type McpTransport = 'http' | 'sse';
-export interface McpConnection { id: string; name: string; url: string; transport: McpTransport; token: string; saveToken: boolean; enabled: boolean; tools: McpTool[]; checkedAt?: string; error?: string; }
+export type McpTransport = 'http' | 'sse' | 'rest' | 'websocket';
+export interface McpConnection { id: string; name: string; url: string; transport: McpTransport; method?: 'GET' | 'POST'; token: string; saveToken: boolean; enabled: boolean; tools: McpTool[]; checkedAt?: string; error?: string; }
 /** A URL ending in /sse is almost always the older transport; everything else defaults to Streamable HTTP. */
 export const guessTransport = (url: string): McpTransport => /\/sse\/?$/i.test(url.trim()) ? 'sse' : 'http';
 
@@ -21,7 +21,7 @@ const tokens = new Map<string, string>();
 export function loadConnections(): McpConnection[] {
   try {
     const list = JSON.parse(localStorage.getItem(KEY) || '[]') as Partial<McpConnection>[];
-    return list.filter(c => typeof c.id === 'string' && typeof c.url === 'string').map(c => ({ id: c.id!, name: typeof c.name === 'string' ? c.name : 'MCP server', url: c.url!, transport: c.transport === 'sse' ? 'sse' : 'http', token: tokens.get(c.id!) ?? '', saveToken: false, enabled: c.enabled !== false, tools: Array.isArray(c.tools) ? c.tools as McpTool[] : [], checkedAt: c.checkedAt, error: c.error }));
+    return list.filter(c => typeof c.id === 'string' && typeof c.url === 'string').map(c => ({ id: c.id!, name: typeof c.name === 'string' ? c.name : 'Tool connector', url: c.url!, transport: c.transport && ['sse', 'rest', 'websocket'].includes(c.transport) ? c.transport : 'http', method: c.method === 'POST' ? 'POST' : 'GET', token: tokens.get(c.id!) ?? '', saveToken: false, enabled: c.enabled !== false, tools: Array.isArray(c.tools) ? c.tools as McpTool[] : [], checkedAt: c.checkedAt, error: c.error }));
   } catch { return []; }
 }
 export function saveConnections(list: McpConnection[]): void {
@@ -40,12 +40,21 @@ async function rpc<T>(conn: McpConnection, method: 'tools/list' | 'tools/call', 
 }
 
 export async function refreshTools(conn: McpConnection, signal: AbortSignal): Promise<McpTool[]> {
+  if (conn.transport === 'rest' || conn.transport === 'websocket') return [{ name: 'request', description: `${conn.transport === 'rest' ? conn.method ?? 'GET' : 'Send JSON over WebSocket'} to the configured ${conn.name} endpoint.`, inputSchema: { properties: { input: { type: 'object', description: 'JSON payload for the configured endpoint' } } } }];
   const result = await rpc<{ tools?: unknown }>(conn, 'tools/list', {}, signal);
   const tools = Array.isArray(result?.tools) ? result.tools : [];
   return tools.filter((t): t is McpTool => Boolean(t) && typeof (t as McpTool).name === 'string').map(t => ({ name: t.name.slice(0, 80), description: typeof t.description === 'string' ? t.description.slice(0, 400) : '', inputSchema: t.inputSchema })).slice(0, 60);
 }
 
 export async function callMcpTool(conn: McpConnection, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+  if (conn.transport === 'rest' || conn.transport === 'websocket') {
+    if (name !== 'request') throw new Error('Unknown custom connector tool.');
+    if ((conn.transport === 'websocket' || conn.method === 'POST') && !window.confirm(`Allow ${conn.name} to send this request to ${new URL(conn.url).host}?\n\n${JSON.stringify(args.input ?? {}, null, 2)}`)) throw new Error('Connector request declined by the user.');
+    const response = await fetch('/api/connectors/call', { method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId() }, body: JSON.stringify({ url: conn.url, transport: conn.transport, method: conn.method ?? 'GET', input: args.input ?? {}, ...(conn.token ? { authorization: `Bearer ${conn.token}` } : {}) }) });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error?.message ?? 'Connector request failed.');
+    return payload.result;
+  }
   const result = await rpc<{ content?: { type?: string; text?: string; mimeType?: string }[]; isError?: boolean }>(conn, 'tools/call', { name, arguments: args }, signal);
   const text = (result?.content ?? []).map(c => c.type === 'text' && typeof c.text === 'string' ? c.text : `[${c.type ?? 'content'}${c.mimeType ? ` ${c.mimeType}` : ''} omitted]`).join('\n').slice(0, 12_000);
   if (result?.isError) throw new Error(text || 'The tool reported an error.');

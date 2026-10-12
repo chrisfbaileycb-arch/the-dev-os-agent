@@ -31,6 +31,11 @@ export function isChatModel(id: string): boolean {
   return id.trim().length > 0 && id.length <= 300 && !NON_CHAT.test(id);
 }
 
+/** Known legacy or conversation-only families have no place in the coding workspace. */
+export function isDeveloperModel(id: string): boolean {
+  return isChatModel(id) && !/(?:gpt-3\.5|text-davinci|babbage|davinci-002|claude-(?:2|instant)|llama[-_]?2|dialo?gpt|blenderbot|chatbot|roleplay|replika|janitor|character-ai)(?:\b|[-_/])/i.test(id);
+}
+
 /**
  * Differentiates verified operational models (direct Gemini/Claude BYOK providers,
  * OpenAI flagships, or loaded local endpoints like Ollama) from raw unverified catalog listings.

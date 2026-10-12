@@ -121,3 +121,38 @@ pinned input commit -> scoped diff -> repository test logs/exit code -> review -
 It requires the server-owned exact-action approval dispatcher, per-user controls before owner funding,
 reviewed adapters, and durable resumable jobs/artifacts. This deployment completes the initial
 host/security foundation and skill preservation; it does not claim that whole loop is finished.
+
+## Workspace consolidation and agent resource hub
+
+The prompt toolbar has one Interaction Mode selector and one Model & Source selector. Model
+catalogs are bound to the current provider key or local endpoint, and display BYOK, Local, or
+Managed/Membership. Build and Plan hide known legacy conversation-only model families.
+
+Settings has a unified provider-key registry. Personal keys remain session-only. Task instructions
+and knowledge-core prompts persist in browser storage under `sf-local-working-memory`; they are
+excluded from workspace synchronization and sent to the chosen inference provider only when a
+task runs. Existing factual memory and documents remain in the browser's IndexedDB.
+
+Admin owns protected deployment prompts, provider environment/storage status, and the GitHub
+Repository Skill Importer. Public catalog reads require a workspace session; catalog mutations
+require the admin cookie and same-origin requests. Imports resolve a commit before indexing,
+retain full Markdown/tool JSON and supporting text resources, and fail atomically if a tree or
+package cannot fit the documented limits. Specify a directory for very large repositories.
+Imported scripts are reference material; ingestion never executes them. Built-in packages include
+all 65 upstream engineering definitions with their license, hashes, and pinned source.
+
+DevOps / Execution shows live workflow stages and chat/workflow tool traces. Plan tool calls
+pause for review before the configured connector runs. Phase approvals remain in place. Export
+Agent downloads a JSON package containing the persona, system instructions, linked complete
+skills and connector tool schemas. Credentials are omitted; local working memory is opt-in.
+
+Custom connectors support MCP Streamable HTTP/SSE, HTTPS REST endpoints, and WSS WebSocket
+endpoints. REST POST and WebSocket sends request user approval. Public DNS is pinned for custom
+transports, redirects and private addresses are refused, and input/output/time limits apply.
+The File System connector is the local document hub or a user-supplied HTTPS MCP file server;
+this web deployment does not expose Render's filesystem to visitors.
+
+React previews use a single matching renderer/runtime compiled into the sandbox bundle, including
+third-party versioned React imports. The generated iframe retains an opaque origin and cannot
+read the parent app's browser storage. Build workers and the existing Node service need no new
+Render resource or environment variable for this update.

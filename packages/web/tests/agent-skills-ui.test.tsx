@@ -27,6 +27,7 @@ function input(label: string, value: string) {
     field.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ skills: [], systemPrompts: {general: '', build: ''} })));
 afterEach(() => { act(() => root?.unmount()); host?.remove(); localStorage.clear(); });
 
 describe('Agent Skills', () => {
@@ -38,7 +39,7 @@ describe('Agent Skills', () => {
     expect(host.querySelector('[aria-current=page]')?.textContent).toBe('Agent Skills');
   });
   it('saves, edits, disables, and searches the same instructions used by chat and plans', () => {
-    mount(<AgentSkills mcp={[]} setMcp={vi.fn()} notify={vi.fn()} />);
+    mount(<AgentSkills mcp={[]} setMcp={vi.fn()} notify={vi.fn()} adminMode />);
     click('Add'); input('Name', 'Release review'); input('When to use it', 'Before deployment'); input('Steps', 'Read the diff and report failed checks.'); click('Save skill');
     const id = loadYourSkills()[0]?.id;
     expect(instructionText()).toContain('Read the diff and report failed checks.');

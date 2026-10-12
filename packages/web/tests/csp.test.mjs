@@ -21,8 +21,9 @@ test('a file that merely contains "sandbox.html" in its path does not match', ()
   assert.equal(cspFor(root + 'nested/sandbox.html', root), CSP);
 });
 
-test('the strict policy has no unsafe-inline and no unsafe-eval anywhere', () => {
-  assert.doesNotMatch(CSP, /unsafe-inline/);
+test('the app denies inline scripts and eval while allowing React style attributes', () => {
+  assert.doesNotMatch(CSP, /script-src[^;]*unsafe-inline/);
+  assert.match(CSP, /style-src-attr.*unsafe-inline/);
   assert.doesNotMatch(CSP, /'unsafe-eval'/);
 });
 

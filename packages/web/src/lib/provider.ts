@@ -80,7 +80,7 @@ export async function complete(c: Connection, system: string, prompt: string, si
     // returns is the same OpenAI-compatible SSE the proxy passes through, so one parser reads both.
     const response = isDirect(c)
       ? await fetch(`${directBase(c)}/chat/completions`, { method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]), headers: { 'Content-Type': 'application/json', ...(c.token?.trim() ? { Authorization: `Bearer ${c.token.trim()}` } : {}) }, body: JSON.stringify({ model: c.model, messages, stream: true, max_tokens: c.maxTokens }) }).catch(e => { if (signal.aborted || timeout.signal.aborted) throw e; throw directUnreachable(c); })
-      : await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]), headers: apiHeaders(c), body: JSON.stringify({ ...requestBody(c), model: c.model, messages, max_tokens: c.maxTokens }) });
+      : await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]), headers: apiHeaders(c), body: JSON.stringify({ ...requestBody(c), interactionMode: c.interactionMode ?? 'chat', model: c.model, messages, max_tokens: c.maxTokens }) });
     await checkResponse(response);
     refreshTimeout();
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new ProviderError('Expected a streaming SSE response from /api/chat.');

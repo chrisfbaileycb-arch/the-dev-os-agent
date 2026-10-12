@@ -42,9 +42,9 @@ describe('skills registry', () => {
     expect(() => instructionText([], [{ ...skill, body: 'x'.repeat(SKILL_CAP + 1) }])).toThrow(/No instructions were truncated/);
     vi.unstubAllGlobals();
   });
-  it('ships three attributed roles from one pinned source, initially disabled', () => {
+  it('ships the complete engineering catalog from one pinned source, initially disabled', () => {
     const roles = CREW_SKILLS.filter(skill => skill.provenance);
-    expect(roles).toHaveLength(3);
+    expect(roles).toHaveLength(65);
     for (const role of roles) {
       expect(role.provenance?.commit).toBe('f99f6aa910a442b0197b768ce0ea7751e35e2060');
       expect(role.provenance?.sha256).toMatch(/^[a-f0-9]{64}$/);
@@ -67,10 +67,10 @@ describe('skills registry', () => {
   });
   it('hands the engine only live https skills and keeps the token off the chat connection id', () => {
     const engine = liveSkillsForEngine(on);
-    expect(engine.map(skill => skill.name).sort()).toEqual(['context7', 'github']);
+    expect(engine.map(skill => skill.name).sort()).toEqual(['github']);
     expect(engine.every(skill => skill.transport === 'http' && skill.demo === false)).toBe(true);
     const connections = liveMcpConnections(on);
-    expect(connections.map(c => c.id).sort()).toEqual(['skill:context7', 'skill:github']);
+    expect(connections.map(c => c.id).sort()).toEqual(['skill:github']);
     expect(connections.find(c => c.id === 'skill:github')?.token).toBe('ghp-secret');
     expect(liveSkillsForEngine([{ id: 'drill', enabled: true, config: {} }])).toEqual([]);
   });

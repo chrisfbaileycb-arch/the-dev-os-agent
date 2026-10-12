@@ -12,8 +12,11 @@ import PushToGithub from './PushToGithub';
 import GithubSyncDrawer, { type SyncToast } from './GithubSyncDrawer';
 import { emptySyncState, loadSyncSettings, type GithubSyncState } from '../lib/githubSync';
 import { HourglassIcon } from './WritingStatus';
+import ExecutionPanel, { type ExecutionProps } from './ExecutionPanel';
 
 export interface OutputPanelProps {
+  execution?: ExecutionProps;
+  initialView?: 'preview' | 'execution';
   content: string;
   issue?: string;
   onFinish?: () => void;
@@ -36,7 +39,7 @@ export interface OutputPanelProps {
 }
 
 type BuildState = { kind: 'idle' } | { kind: 'building' } | { kind: 'ready'; html: string; seq: number } | { kind: 'error'; errors: string[] };
-type View = 'preview' | 'code';
+type View = 'preview' | 'code' | 'execution';
 /** How wide the frame renders: the panel's full width, or a phone-sized column inside it. */
 type Device = 'desktop' | 'mobile';
 
@@ -118,7 +121,7 @@ function projectFromFile(path: string, content: string): { project: Project; run
 }
 
 export default function OutputPanel(p: OutputPanelProps) {
-  const [view, setView] = useState<View>('preview');
+  const [view, setView] = useState<View>(p.initialView ?? 'preview');
   const [editing, setEditing] = useState(false);
   const [device, setDevice] = useState<Device>('desktop');
   const [split, setSplit] = useState(false);
@@ -187,7 +190,7 @@ export default function OutputPanel(p: OutputPanelProps) {
     setProject(next);
     setSelectedFile(next.entry);
     setActiveCode(next.files.find(file => file.path === next.entry)?.content ?? '');
-    setView('preview'); setEditing(false);
+    setView(v => v === 'execution' ? v : 'preview'); setEditing(false);
     setEditDirty(false);
     compile(next, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -294,7 +297,7 @@ export default function OutputPanel(p: OutputPanelProps) {
   /** Every route back to the running app: re-mount the frame and restore the canonical split. */
   const showPreview = () => { setView('preview'); setEditing(false); p.onPreviewFocus(); setRefresh(n => n + 1); };
   const sourceOnly = project?.entry === 'styles.css';
-  const codeShown = view === 'code' || split;
+  const codeShown = view !== 'execution' && (view === 'code' || split);
 
   const fileTabs = project && project.files.length > 1 && <div className="file-tabs">{project.files.map(file => <button key={file.path} className={file.path === selectedFile ? 'file-tab active' : 'file-tab'} onClick={() => chooseFile(file.path)}>{file.path}</button>)}</div>;
 
@@ -330,6 +333,7 @@ export default function OutputPanel(p: OutputPanelProps) {
   return <aside className={fullscreen ? 'preview-panel fullscreen' : 'preview-panel'}>
     <header className="preview-head developer-toolbar">
       <div className="toolbar-group">
+        {p.execution && <button className={view === 'execution' ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={view === 'execution'} onClick={() => setView(view === 'execution' ? 'preview' : 'execution')}>DevOps / Execution</button>}
         <button className={codeShown ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={codeShown} disabled={!project || split} onClick={() => { if (view === 'code') showPreview(); else setView('code'); }} title="View or edit the generated source"><Code2 size={12} />View / Edit Code</button>
         <button className="toolbar-button" onClick={() => { if ((!project || sourceOnly) && p.onFinish) p.onFinish(); else showPreview(); }} disabled={p.streaming || ((!project || sourceOnly) && !p.onFinish)} title={sourceOnly ? 'Complete the generated source into a runnable page' : 'Show the live app'}><MonitorPlay size={12} />{!project || sourceOnly ? 'Generate Preview' : 'Preview'}</button>
         <div className="menu-anchor" ref={exportRef}>
@@ -356,13 +360,14 @@ export default function OutputPanel(p: OutputPanelProps) {
     </header>
     {p.issue && <div className="preview-issue" role="alert"><CircleAlert size={13} /><span>{p.issue}</span>{p.onFinish && <button className="button small" onClick={p.onFinish}>Finish &amp; Preview</button>}</div>}
     <div className="preview-content">
-      {!project && <div className="preview-empty canvas-idle">
+      {view === 'execution' && p.execution && <ExecutionPanel {...p.execution} />}
+      {!project && view !== 'execution' && <div className="preview-empty canvas-idle">
         <MonitorPlay size={26} strokeWidth={1.1} />
         <strong>Canvas Idle · Ready to preview</strong>
         <span>Prompt the agent on the left or load a file to see live rendering.</span>
       </div>}
-      {project && split && <div className="output-split">{codePane}{previewPane}</div>}
-      {project && !split && (view === 'code' ? codePane : previewPane)}
+      {project && view !== 'execution' && split && <div className="output-split">{codePane}{previewPane}</div>}
+      {project && view !== 'execution' && !split && (view === 'code' ? codePane : previewPane)}
     </div>
     {toast && <div className={`toast ${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
       {toast.tone === 'error' ? <CircleAlert size={14} /> : <CircleCheck size={14} />}

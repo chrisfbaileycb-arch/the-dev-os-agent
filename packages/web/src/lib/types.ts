@@ -3,7 +3,7 @@ import type { InferenceMode } from './catalog';
 import type { Persona } from './roster';
 export type Mode = 'remote';
 export type Workflow = 'build' | 'research' | 'review';
-export interface Connection { provider?: Provider; saveKey?: boolean; serverAccessToken?: string; mode: Mode; inference?: InferenceMode; endpoint: string; model: string; token: string; maxTokens: number; customOutputLimit?: boolean; }
+export interface Connection { interactionMode?: 'chat' | 'build' | 'plan'; provider?: Provider; saveKey?: boolean; serverAccessToken?: string; mode: Mode; inference?: InferenceMode; endpoint: string; model: string; token: string; maxTokens: number; customOutputLimit?: boolean; }
 export interface Knowledge { id: string; title: string; content: string; createdAt: string; }
 /**
  * One persistent memory, held in this browser's IndexedDB and never synced to the server.
@@ -23,7 +23,7 @@ export interface Run { id: string; goal: string; workflow: Workflow; mode: Mode;
  * localStorage, which a Web Worker cannot read, so an id alone would resolve to the default agent
  * inside the worker and quietly drop the lead context of the very agent the user wrote.
  */
-export interface StartMessage { type: 'start'; runId: string; goal: string; workflow: Workflow; connection: Connection; knowledge: Knowledge[]; sessionId?: string; persona?: string; leadPersona?: Persona; attachments?: { name: string; content: string }[]; /** Discovered, funded ids the run may spread across stages; every stage model comes from here. */ stageCandidates?: string[]; /** Persistent memories; the run carries only those matching its goal. */ memories?: MemoryEntry[]; /** Enabled markdown pathways. Instructions, not a tool call. */ instructions?: string; /** Pause for the person's approval after every phase but the last. */ approvalGates?: boolean; }
+export interface StartMessage { type: 'start'; runId: string; goal: string; workflow: Workflow; connection: Connection; knowledge: Knowledge[]; sessionId?: string; persona?: string; leadPersona?: Persona; attachments?: { name: string; content: string }[]; tools?: { name: string; description: string }[]; /** Discovered, funded ids the run may spread across stages; every stage model comes from here. */ stageCandidates?: string[]; /** Persistent memories; the run carries only those matching its goal. */ memories?: MemoryEntry[]; /** Enabled markdown pathways. Instructions, not a tool call. */ instructions?: string; /** Pause for the person's approval after every phase but the last. */ approvalGates?: boolean; }
 /**
  * One model per workflow family, chosen for the whole run before it starts.
  *
@@ -33,7 +33,8 @@ export interface StartMessage { type: 'start'; runId: string; goal: string; work
  * produces three identical values here and the run behaves exactly as before.
  */
 export interface StageModels { plan: string; build: string; verify: string; }
-export type WorkerMessage = StartMessage | { type: 'cancel' } | { type: 'approve' };
-export type WorkerEvent = { type: 'update'; run: Run } | { type: 'done'; run: Run } | { type: 'error'; message: string };
+export interface WorkflowToolRequest { type: 'tool_request'; id: string; runId: string; tool: string; args: Record<string, unknown>; }
+export type WorkerMessage = StartMessage | { type: 'cancel' } | { type: 'approve' } | { type: 'tool_result'; id: string; output: string; error?: string };
+export type WorkerEvent = { type: 'update'; run: Run } | { type: 'done'; run: Run } | { type: 'error'; message: string } | WorkflowToolRequest;
 /** `inputTokens` and `outputTokens` are present only when the provider reported them separately. */
 export interface Completion { text: string; tokens: number; inputTokens?: number; outputTokens?: number; truncated?: boolean; }

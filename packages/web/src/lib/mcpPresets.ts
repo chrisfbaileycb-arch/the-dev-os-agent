@@ -35,7 +35,6 @@ export const MCP_PRESETS: McpPreset[] = [
   { id: 'notion', name: 'Notion', url: 'https://mcp.notion.com/mcp', group: 'Docs and search', blurb: 'The visitor\'s own Notion workspace', token: 'Notion integration token' },
   { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', group: 'Developer', blurb: 'Search models, datasets, and Spaces', token: 'Hugging Face access token' },
   { id: 'neon', name: 'Neon', url: 'https://mcp.neon.tech/mcp', group: 'Data and infrastructure', blurb: 'The visitor\'s own Neon project', token: 'Neon API key' },
-  { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', group: 'Docs and search', blurb: 'Current library documentation by version', token: null },
   { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', group: 'Docs and search', blurb: 'Ask questions about any public GitHub repo', token: null },
   { id: 'cloudflare-docs', name: 'Cloudflare Docs', url: 'https://docs.mcp.cloudflare.com/mcp', group: 'Docs and search', blurb: 'Search the Cloudflare developer docs', token: null },
 ];

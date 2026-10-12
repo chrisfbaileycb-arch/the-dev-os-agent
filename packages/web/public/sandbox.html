@@ -31,7 +31,7 @@ var SHIM = '<script>(function(){' +
   'function mem(){var m=new Map();return{get length(){return m.size},key:function(i){return Array.from(m.keys())[i]||null},getItem:function(k){return m.has(String(k))?m.get(String(k)):null},setItem:function(k,v){m.set(String(k),String(v))},removeItem:function(k){m.delete(String(k))},clear:function(){m.clear()}}}' +
   'function blocked(n){try{var s=window[n];s.getItem;return false}catch(e){return true}}' +
   '["localStorage","sessionStorage"].forEach(function(n){if(blocked(n)){try{Object.defineProperty(window,n,{value:mem(),configurable:true})}catch(e){}}});' +
-  'function tell(state,msg){try{(window.top||window.parent).postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){try{parent.postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){}}}' +
+  'function tell(state,msg){try{window.parent.postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){try{parent.postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){}}}' +
   'var origAEL=window.addEventListener;' +
   'window.addEventListener=function(t,l,o){if(t==="DOMContentLoaded"&&document.readyState!=="loading"){try{setTimeout(function(){typeof l==="function"?l.call(window,new Event("DOMContentLoaded")):l&&l.handleEvent&&l.handleEvent(new Event("DOMContentLoaded"))},0)}catch(e){}return}return origAEL.apply(this,arguments)};' +
   'var origDocAEL=document.addEventListener;' +
@@ -85,7 +85,8 @@ function withShim(html) {
 var OPAQUE = String(self.origin) === 'null';
 var prevBlobUrl = null;
 window.addEventListener('message', function (event) {
-  if (event.data && typeof event.data === 'object' && event.data.type === 'sf-preview') {
+  var child = document.getElementById('preview-frame');
+  if (child && event.source === child.contentWindow && event.data && typeof event.data === 'object' && event.data.type === 'sf-preview') {
     if (window.parent && window.parent !== window) {
       try { window.parent.postMessage(event.data, '*'); } catch (e) {}
     }

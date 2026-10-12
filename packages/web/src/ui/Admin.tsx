@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, CircleAlert, ExternalLink, KeyRound, LoaderCircle, LogOut, RefreshCw, Search, ShieldCheck, Sparkles, CreditCard, Trash2, TriangleAlert } from 'lucide-react';
+import AgentHub from './AgentHub';
+import type { SystemPrompts } from '../lib/skillRegistry';
 import { filterChoices, isChatModel, type ModelChoice } from '../lib/modelChoices';
 
 // The operator's dashboard, at /admin.
@@ -19,7 +21,7 @@ interface TierEntry { id: string; provider: string; label?: string; }
 interface Tiers { mode: 'auto' | 'manual'; free: TierEntry[]; paid: TierEntry[]; warnings: string[]; }
 interface Published { free: { enabled: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; monthlyCredits: number; perHour: number }; paid: { enabled: boolean; configured: boolean; models: string[] }; }
 interface ExperimentSlot { provider: string; name: string; env: string; source: Source; hint: string; unreadable: boolean; }
-interface Config { fundingDisabled?: boolean; persistent: boolean; durable?: boolean; ledger?: 'browser' | 'server'; experiment?: ExperimentSlot[]; providers: ProviderRow[]; retired: ProviderRow[]; planned: PlannedProvider[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
+interface Config { systemPrompts?: SystemPrompts; fundingDisabled?: boolean; persistent: boolean; durable?: boolean; ledger?: 'browser' | 'server'; experiment?: ExperimentSlot[]; providers: ProviderRow[]; retired: ProviderRow[]; planned: PlannedProvider[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
 interface Status { configured: boolean; authenticated: boolean; persistent: boolean; setup: boolean; source: Source; storage: boolean; setupEnvironmentUrl?: string | null; }
 
 export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; onConfigChanged?: () => void; }
@@ -33,7 +35,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) throw new Error(typeof body?.error?.message === 'string' ? body.error.message : `Request failed (HTTP ${response.status}).`);
   return body as T;
 }
-const sourceLabel: Record<Source, string> = { dashboard: 'Set here', environment: 'From environment', none: 'Not set' };
+const sourceLabel: Record<Source, string> = { dashboard: 'Stored Securely', environment: 'Configured from ENV', none: 'Unset' };
 
 export default function Admin(p: AdminProps) {
   const [status, setStatus] = useState<Status | null>(null);
@@ -175,19 +177,9 @@ export default function Admin(p: AdminProps) {
         Keys stored here before the split, for providers outside the US backend. Nothing is funded from them any more; remove them.
         {config.retired.map(r => <span key={r.provider} className="row gap"><strong>{r.name}</strong><small className="mono">{r.env}</small><button className="button small" disabled={busy} aria-label={`Remove ${r.name} key`} onClick={() => removeKey(r.provider)}><Trash2 size={12} />Remove</button></span>)}
       </span></div>}
-      {config.experiment && config.experiment.length > 0 && <>
-        <h3>Experiment and the execution engine</h3>
-        <p className="help">Not the free tier and not Shield. {config.durable ? 'This host can keep these secrets.' : 'Saving is off because this database does not survive a restart. Use Settings on this browser.'}</p>
-        <div className="ledger-wrap"><table className="ledger admin-keys"><thead><tr><th>Slot</th><th>Status</th><th>Key</th><th></th></tr></thead><tbody>
-          {config.experiment.map(r => <tr key={r.provider}>
-            <td><strong>{r.name}</strong><br /><small className="mono">{r.env}</small></td>
-            <td><span className={r.source === 'none' ? 'pill' : 'pill ok'}>{sourceLabel[r.source]}{r.hint ? ` ${r.hint}` : ''}</span></td>
-            <td><input type="password" autoComplete="off" spellCheck={false} placeholder={config.durable ? 'Paste a key' : 'Use Settings on this browser'} value={drafts[r.provider] ?? ''} disabled={busy || config.durable === false} onChange={e => setDrafts(d => ({ ...d, [r.provider]: e.target.value }))} /></td>
-            <td><button className="button primary small" disabled={busy || config.durable === false || !(drafts[r.provider] ?? '').trim()} onClick={() => saveKey(r.provider)}><Check size={12} />Save</button></td>
-          </tr>)}
-        </tbody></table></div>
-      </>}
     </section>
+
+    <AgentHub notify={p.notify} prompts={config.systemPrompts ?? { general: '', build: '' }} changed={() => { void refresh().catch(e => p.notify(errorText(e))); p.onConfigChanged?.(); }} />
 
     <section className="panel">
       <div className="panel-head"><h2><Sparkles size={15} strokeWidth={1.75} /> Model tiers</h2><span className="row gap">{dirty && <span className="pill warn">Unsaved changes</span>}<button className="button primary small" disabled={busy || !dirty} onClick={saveTiers}><Check size={12} />Save tiers</button></span></div>

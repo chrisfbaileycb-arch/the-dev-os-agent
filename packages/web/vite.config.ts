@@ -1,6 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { loadEnv } from 'vite';
+// @ts-expect-error Build-only Node module; these sources execute only in the generated iframe.
+import { previewRuntimePlugin } from './server/previewRuntime.mjs';
+// @ts-expect-error Server module is JavaScript.
+import { createCustomConnectors } from './server/customConnectors.mjs';
+// @ts-expect-error Server module is JavaScript.
+import { createSkills } from './server/skills.mjs';
 // Shared JavaScript helper, also used by the client gate and the tests (typed by betaHash.d.mts).
 import { BETA_DEV_PASSCODE, deriveBetaHash } from './src/lib/betaHash.mjs';
 // @ts-expect-error Server module is JavaScript and intentionally excluded from client bundles.
@@ -43,7 +49,7 @@ const api: Plugin = { name: 'signal-forge-api', async configureServer(server) {
   // ledger is durable. A DATABASE_URL, when the operator set one, still wins.
   const databaseUrl = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.DATABASE_URL;
   const storage = classifyStorage({ databaseUrl, dataFile });
-  const handlers = [auth, createWorkspaceSession({ env }), createAdmin({ db, settings, storage }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, env, settings, storage }), createBrowse(), createMcp(), createFetcher(), createGithub(), createJobs({ env, jobs: openJobs(db.raw()) })];
+  const handlers = [auth, createWorkspaceSession({ env }), createAdmin({ db, settings, storage }), createSkills({ settings, env }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, env, settings, storage }), createBrowse(), createMcp(), createCustomConnectors(), createFetcher(), createGithub(), createJobs({ env, jobs: openJobs(db.raw()) })];
   server.middlewares.use((req: { url?: string }, res, next) => { if (new URL(req.url ?? '/', 'http://dev').pathname === '/admin') req.url = '/'; void (async () => { for (const handle of handlers) if (await handle(req, res)) return; next(); })().catch(next); });
 } };
 // Emits dist/sw.js with the precache list taken from the real bundle, so the offline shell always matches the build.
@@ -105,11 +111,11 @@ export default defineConfig(async ({ mode, command }) => {
   return {
   define: { __BETA_ACCESS_HASH__: JSON.stringify(hash), __BETA_DEV_FALLBACK__: JSON.stringify(!(nodeProcess?.env?.VITE_BETA_ACCESS_KEY ?? env.VITE_BETA_ACCESS_KEY ?? '').trim()) },
   base: './',
-  plugins: [api, shellWorker],
+  plugins: [api, shellWorker, previewRuntimePlugin()],
   server: { ...devHosts, ...devPort },
   preview: { ...devHosts, ...devPort },
   test: { include: ['tests/**/*.test.{ts,tsx}'] },
   build: { target: 'es2022' },
-  worker: { format: 'es' as const },
+  worker: { format: 'es' as const, plugins: () => [previewRuntimePlugin()] },
   };
 });

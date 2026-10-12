@@ -391,7 +391,7 @@ export function preparePreviewProject(project: Project): Project {
   const files = hooked.files.map(file => file.path === component.path && !hasDefault && !hasNamedApp
     ? { ...file, content: `${file.content}\nexport default App;` } : file);
   const importStatement = hasNamedApp ? `import { App } from '${importPath}';` : `import App from '${importPath}';`;
-  return { ...hooked, entry, files: [...files, { path: entry, content: `import { createRoot } from 'react-dom/client';\n${importStatement}\ncreateRoot(document.getElementById('root')!).render(<App />);` }] };
+  return { ...hooked, entry, files: [...files, { path: entry, content: `import * as React from 'react';\nimport { createRoot } from 'react-dom/client';\n${importStatement}\nclass PreviewBoundary extends React.Component<{children: React.ReactNode}, {error: string}> {\n state = {error: ''};\n static getDerivedStateFromError(error: Error) { return {error: error.message}; }\n componentDidCatch(error: Error) { window.dispatchEvent(new ErrorEvent('error', {message: error.message})); }\n render() { return this.state.error ? <pre role="alert">Preview error: {this.state.error}</pre> : this.props.children; }\n}\ncreateRoot(document.getElementById('root')!).render(<PreviewBoundary><App /></PreviewBoundary>);` }] };
 }
 
 const attr = (tag: string, name: string): string | null => {

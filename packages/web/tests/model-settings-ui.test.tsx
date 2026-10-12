@@ -25,21 +25,25 @@ function picker(patch: Partial<ModelPickerProps> = {}): ModelPickerProps {
 }
 function open() { act(() => (host.querySelector('.model-trigger') as HTMLButtonElement).click()); }
 
-it('Hugging Face managed models stay in their own backend menu', () => {
+it('unifies managed HF and US models under one source selector while retaining their provider', () => {
   const hfFree = { ...free, models: ['us-model', 'hf-model'], providers: { 'us-model': 'openai', 'hf-model': 'huggingface-backend' }, labels: { 'us-model': 'US fixture', 'hf-model': 'HF fixture' } };
-  const props = picker({ lane: 'hf', provider: 'huggingface-backend', free: hfFree });
+  const props = picker({ backends: { us: true, huggingface: true }, free: hfFree });
   mount(<ModelPicker {...props} />); open();
-  expect(host.textContent).toContain('HF fixture'); expect(host.textContent).not.toContain('US fixture');
-  act(() => (host.querySelector('[role=option]') as HTMLButtonElement).click());
+  expect(host.querySelectorAll('.model-trigger')).toHaveLength(1);
+  expect(host.textContent).toContain('HF fixture'); expect(host.textContent).toContain('US fixture');
+  const option = [...host.querySelectorAll('[role=option]')].find(b => b.textContent?.includes('HF fixture')) as HTMLButtonElement;
+  act(() => option.click());
   expect(props.onPick).toHaveBeenCalledWith('hf-model', 'free', 'huggingface-backend');
 });
 
-it('Settings offers HF without US providers when the owner switches US off', () => {
+it('Settings offers a unified provider list and honors the US backend switch', () => {
   const props: SettingsProps = { backends: { us: false, huggingface: true, hfMode: 'endpoint' }, connection: defaultConnection('huggingface-backend'), setConnection: vi.fn(), keys: emptyKeyring(), setKeys: vi.fn(), keyed: new Set(), discovered: {}, discovering: new Set(), discover: vi.fn(), save: vi.fn(), forget: vi.fn(), balance: serverBalance(0, 0), freeBalance: serverBalance(0, 0), free: offlineDeployment.free, paid: offlineDeployment.paid, adminConfigured: true, openAdmin: vi.fn(), ledger: [], busy: false, canInstall: false, serverReachable: true, requestClear: vi.fn(), theme: 'light', setTheme: vi.fn(), pipes: defaultPipes(), setPipes: vi.fn() };
   mount(<Settings {...props} />);
-  const select = [...host.querySelectorAll('select')].find(s => s.querySelector('option[value="huggingface-backend"]'))!;
-  expect([...select.options].map(o => o.value)).toEqual(['huggingface-backend']);
-  expect(host.textContent).toContain('listing it does not validate your token');
+  expect(host.textContent).toContain('Active Provider Keys');
+  expect(host.textContent).toContain('Hugging Face backend API key');
+  expect(host.textContent).not.toContain('OpenAI API key');
+  expect(host.textContent).toContain('OpenRouter API key');
+  expect([...host.querySelectorAll('button')].some(b => b.textContent?.includes('Free Tier'))).toBe(false);
 });
 
 it('admin setup names the bootstrap variable and links to this service Environment', async () => {
@@ -52,16 +56,15 @@ it('admin setup names the bootstrap variable and links to this service Environme
 });
 
 describe('chat is selection-only and respects the connected funding lane', () => {
-  it('both menus have no API-key fields and locked plan models are not selectable', () => {
-    const us = picker(); const own = picker({ lane: 'own' });
-    mount(<><ModelPicker {...us} /><ModelPicker {...own} /></>);
+  it('the unified selector has no API-key fields and locked plan models are not selectable', () => {
+    const us = picker();
+    mount(<ModelPicker {...us} />);
     open();
     expect(host.querySelectorAll('[role=option]')).toHaveLength(1);
     expect(host.textContent).toContain('Free model'); expect(host.textContent).not.toContain('Plan model');
     expect(host.querySelectorAll('input[type=password]')).toHaveLength(0);
-    act(() => (host.querySelectorAll('.model-trigger')[1] as HTMLButtonElement).click());
     expect(host.querySelectorAll('input[type=password]')).toHaveLength(0);
-    expect(host.textContent).toContain('Open Settings');
+    expect(host.textContent).toContain('Manage provider keys');
   });
   it('a plan token unlocks only published managed models, not arbitrary vendor seeds', () => {
     const props = picker({ free: offlineDeployment.free, reach: { free: offlineDeployment.free, keys: emptyKeyring(), credits: true } });
@@ -86,7 +89,8 @@ describe('chat is selection-only and respects the connected funding lane', () =>
     const pipes = { ...defaultPipes(), ollamaEnabled: true };
     const props = picker({ lane: 'own', pipes, keyed: new Set(['ollama']), discovered: { ollama: { at: Date.now(), key: keyFingerprint(pipes.ollamaUrl), models: [{ id: 'my-local-model', label: 'Local model' }] } } });
     mount(<ModelPicker {...props} />); open();
-    act(() => (host.querySelector('[role=option]') as HTMLButtonElement).click());
+    const local = [...host.querySelectorAll('[role=option]')].find(b => b.textContent?.includes('Local model')) as HTMLButtonElement;
+    act(() => local.click());
     expect(props.onPick).toHaveBeenCalledWith('my-local-model', 'byok', 'ollama');
   });
 });

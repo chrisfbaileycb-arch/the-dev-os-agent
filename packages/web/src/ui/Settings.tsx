@@ -4,7 +4,7 @@ import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
 import { flagshipFor, providers, switchProvider, modelOutputCeiling, effectiveOutputLimit, type Keyring, type Provider, DEFAULT_OUTPUT_TOKENS, OUTPUT_LIMITS } from '../lib/providers';
-import { isChatModel, rankChoices } from '../lib/modelChoices';
+import { isChatModel, rankChoices, preferredModel } from '../lib/modelChoices';
 import { localEndpointError, normalizeLocalEndpoint, type PipeSettings } from '../lib/pipes';
 import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
 import type { Balance, FreeTier, LedgerEntry, PlanReading } from '../lib/store';
@@ -14,6 +14,7 @@ import { defaultBackends, EXPERIMENT_SUBTITLE, type BackendAvailability } from '
 import { testLocalEndpoint } from '../lib/localNetwork';
 import type { HostStorage } from '../lib/deployment';
 import ThemePicker from './ThemePicker';
+import { loadWorkingMemory, saveWorkingMemory } from '../lib/workingMemory';
 import type { ThemeChoice } from '../lib/theme';
 
 export interface SettingsProps {
@@ -50,7 +51,9 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
 
 export default function Settings(p: SettingsProps) {
   const backends = p.backends ?? defaultBackends;
-  const BYOK_PROVIDERS: Provider[] = [...(backends.us ? US_BYOK_PROVIDERS : []), ...(backends.huggingface ? ['huggingface-backend' as const] : [])];
+  const BYOK_PROVIDERS: Provider[] = [...(backends.us ? US_BYOK_PROVIDERS : []), ...(backends.huggingface ? ['huggingface-backend' as const] : []), 'huggingface', 'openrouter', 'cerebras', 'github', 'nvidia', 'cohere', 'venice', 'vercel'];
+  const [workingMemory, setWorkingMemory] = useState(loadWorkingMemory);
+  const [memoryNote, setMemoryNote] = useState('');
   const c = p.connection;
   const provider: Provider = BYOK_PROVIDERS.includes(c.provider as Provider) ? c.provider as Provider : BYOK_PROVIDERS[0] ?? 'openai';
   const inference = c.inference === 'free' ? 'free' : c.inference === 'credits' ? 'credits' : 'byok';
@@ -59,12 +62,12 @@ export default function Settings(p: SettingsProps) {
 
   function setKey(id: Provider, value: string) {
     p.setKeys({ ...p.keys, [id]: value });
-    if (id === provider) set({ provider: id, endpoint: providers[id].endpoint, token: value, inference: 'byok', ...(c.provider !== id ? { model: flagshipFor(id) } : {}) });
+    if (id === c.provider || !c.model) p.setConnection({ ...c, provider: id, endpoint: providers[id].endpoint, token: value, inference: 'byok', ...(c.provider !== id ? { model: flagshipFor(id) } : {}) });
   }
   // A provider switch keeps only non-secret preferences across page sessions.
   function pickProvider(id: Provider) {
     const next = switchProvider(c, id);
-    p.setConnection({ ...next, serverAccessToken: c.serverAccessToken, mode: 'remote', inference: 'byok', saveKey: false, model: next.model || flagshipFor(id) });
+    p.setConnection({ ...next, token: p.keys[id] ?? '', serverAccessToken: c.serverAccessToken, mode: 'remote', inference: 'byok', saveKey: false, model: preferredModel(p.discovered[id]?.models ?? [], providers[id].flagship) ?? next.model ?? flagshipFor(id) });
   }
   function pickModel(id: string) {
     if (id) set({ model: id, inference: 'byok' });
@@ -108,11 +111,7 @@ export default function Settings(p: SettingsProps) {
       <div className="stack">
         <section className="panel">
           <h2>How inference is paid for</h2>
-          <div className={planOffered ? 'mode-picker three' : 'mode-picker two'}>
-            <button className={managed ? 'mode selected' : 'mode'} disabled={p.busy || !p.free.enabled} aria-pressed={managed} onClick={() => pickInference('free')}>
-              <Sparkles size={16} strokeWidth={1.75} /><strong>Free Tier</strong>
-              <small>{p.free.enabled ? 'Built-in managed access is available.' : 'This deployment is not currently offering managed access.'}</small>
-            </button>
+          <div className="mode-picker two">
             {planOffered && <button className={plan ? 'mode selected' : 'mode'} disabled={p.busy} aria-pressed={plan} onClick={() => pickInference('credits')}>
               <CreditCard size={16} strokeWidth={1.75} /><strong>Paid plan</strong>
               <small>{p.subscription ? `${p.subscription.plan.name} · ${p.subscription.plan.price}/month` : 'Connect your subscription token to use the managed US models.'}</small>
@@ -154,22 +153,20 @@ export default function Settings(p: SettingsProps) {
                 </li>)}
               </ul>
             </details>
-            <div className="form-grid">
-              <label>Provider<select value={provider} disabled={p.busy || !BYOK_PROVIDERS.length} onChange={e => pickProvider(e.target.value as Provider)}>{!BYOK_PROVIDERS.length && <option value="openai">Backends switched off by the owner</option>}{BYOK_PROVIDERS.map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
-              <label>API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.provider === provider ? c.token || p.keys[provider] || '' : p.keys[provider] || ''} placeholder={KEY_HINTS[provider]} onChange={e => setKey(provider, e.target.value)} /></label>
-              <label className="grow">Model <small className="muted">(optional — starts on {providers[provider].flagship ?? 'the strongest model found'})</small><span className="row">
-                <select aria-label="Preferred model" value={selectedInChoices ? c.model : ''} disabled={p.busy || choices.length === 0} onChange={e => pickModel(e.target.value)}>
-                  {choices.length === 0 && <option value="">{checking ? 'Loading available models…' : c.token || p.keys[provider] ? 'Discover models from this provider' : 'Enter a key to list its models'}</option>}
-                  {choices.length > 0 && !selectedInChoices && <option value="">{c.model ? `${c.model} (typed)` : `Choose one of ${choices.length.toLocaleString()} models`}</option>}
-                  {choices.map(choice => <option key={choice.id} value={choice.id}>{choice.label}{choice.free ? ' · free' : ''}</option>)}
-                </select>
-                <button className="button primary small" disabled={p.busy || checking || !(c.token || p.keys[provider])} onClick={() => p.discover(provider)}>{checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}{live ? 'Refresh' : 'Discover'}</button>
-              </span></label>
+            <h3>Active Provider Keys</h3>
+            <p className="help">Each connected provider automatically discovers its models and updates Model &amp; Source. Keys stay in this page session.</p>
+            <div className="provider-registry">
+              {BYOK_PROVIDERS.map(id => {
+                const token = c.provider === id ? c.token || p.keys[id] || '' : p.keys[id] || '';
+                const live = p.discovered[id];
+                return <div className="provider-key-row" key={id}>
+                  <div className="panel-head"><strong>{providers[id].name}</strong><span className={token.trim() ? 'pill ok' : 'pill'}>{token.trim() ? live?.error ? 'Key entered · discovery failed' : p.discovering.has(id) ? 'Discovering…' : `${live?.models.length ?? 0} models · Active` : 'Unset'}</span></div>
+                  <label>{providers[id].name} API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={token} placeholder={KEY_HINTS[id] ?? 'Paste your provider key'} onChange={e => setKey(id, e.target.value)} /></label>
+                  <div className="row gap"><button className="button small" disabled={p.busy || !token.trim() || p.discovering.has(id)} onClick={() => p.discover(id)}>{p.discovering.has(id) ? <LoaderCircle size={12} className="spin" /> : <Search size={12} />}Refresh models</button><button className="button small" disabled={p.busy || !token.trim()} onClick={() => { pickProvider(id); }}>Use provider</button>{token && <button className="button small" disabled={p.busy} aria-label={`Clear ${providers[id].name} key`} onClick={() => setKey(id, '')}><Trash2 size={12} />Clear</button>}</div>
+                  {live?.error && <p className="msg-error" role="alert">{live.error}</p>}
+                </div>;
+              })}
             </div>
-            {provider === 'huggingface-backend' && <p className="help">{backends.hfMode === 'endpoint' ? 'This connection uses the owner-configured dedicated Hugging Face endpoint. Its model list is configured by the owner; listing it does not validate your token.' : 'This connection uses Hugging Face Inference Providers. Uploading a model repository alone does not make it available through the router.'} Use a token scoped for inference on your chosen models. Your personal key stays in page memory.</p>}
-            {live && !live.error && <p className="help">{choices.length.toLocaleString()} {provider === 'huggingface-backend' && backends.hfMode === 'endpoint' ? 'configured endpoint models' : `models this ${providers[provider].name} key can call`}, read {new Date(live.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. The same list is in the chat window.</p>}
-            {!live?.error && !choices.length && <p className="help">{checking ? 'Reading the models this key can call…' : 'Enter a key. The list is only the models that key can call.'}</p>}
-            {live?.error && <p className="help" role="alert">Could not read the live list: {live.error}.</p>}
           </>}
             <p className="help">Security notice: personal keys and plan tokens stay in page memory and clear on reload or tab close. Hosted requests pass through this server to the selected provider. Never paste keys into chat or skills. Clearing a key here does not revoke it or stop a request already running; set spending limits at the provider.</p>
           <label>Longest reply<select aria-describedby="reply-length-help" value={effectiveOutputLimit(c, outputCap)} disabled={p.busy} onChange={e => set({ maxTokens: Number(e.target.value), customOutputLimit: true })}>
@@ -181,7 +178,7 @@ export default function Settings(p: SettingsProps) {
         </section>
 
         <section className="panel">
-          <h2><HardDrive size={15} strokeWidth={1.75} /> Local model</h2>
+          <div className="panel-head"><h2><HardDrive size={15} strokeWidth={1.75} /> Local model</h2><span className={p.pipes.ollamaEnabled ? 'pill ok' : 'pill'}>{p.pipes.ollamaEnabled ? `Active · ${p.discovered.ollama?.models.length ?? 0} models` : 'Unset'}</span></div>
           <p className="help">Run a model on this computer with LM Studio or Ollama and use it here, on every tier, with no plan-credit charge. Your browser sends inference requests directly to your local server. Sessions may still sync to this app’s server. Start the local server first, then switch this on.</p>
           <label className="check"><input type="checkbox" checked={p.pipes.ollamaEnabled} onChange={e => { p.setPipes({ ...p.pipes, ollamaEnabled: e.target.checked }); if (e.target.checked) p.discover('ollama'); }} />Connect a model running on this computer</label>
           {p.pipes.ollamaEnabled && <>
@@ -194,22 +191,23 @@ export default function Settings(p: SettingsProps) {
               <button className="button small" disabled={probing || Boolean(localEndpointError(p.pipes.ollamaUrl))} onClick={() => { setProbing(true); void testLocalEndpoint(p.pipes.ollamaUrl, location.origin).then(result => setLocalNote(result.message)).finally(() => setProbing(false)); }}>Test</button>
             </div>
             {localNote && <p className="help" role="status">{localNote}</p>}
-            {p.discovered.ollama?.models.length ? <p className="help">{p.discovered.ollama.models.length.toLocaleString()} local model{p.discovered.ollama.models.length === 1 ? '' : 's'} found. Pick one from the On this machine menu in the chat window.</p> : p.discovered.ollama?.error ? <p className="help" role="alert">Could not reach it: {p.discovered.ollama.error}. Is the local server running?</p> : <p className="help">Nothing found yet. Load a model in LM Studio (with its server running) or run <code>ollama pull</code>, then check again. A native app is not required.</p>}
+            {p.discovered.ollama?.models.length ? <p className="help">{p.discovered.ollama.models.length.toLocaleString()} local model{p.discovered.ollama.models.length === 1 ? '' : 's'} found. Pick one from the Model &amp; Source selector in the chat window.</p> : p.discovered.ollama?.error ? <p className="help" role="alert">Could not reach it: {p.discovered.ollama.error}. Is the local server running?</p> : <p className="help">Nothing found yet. Load a model in LM Studio (with its server running) or run <code>ollama pull</code>, then check again. A native app is not required.</p>}
           </>}
-        </section>
-
-        <section className="panel">
-          <h2><KeyRound size={15} strokeWidth={1.75} /> Experiment</h2>
-          <p className="help">{EXPERIMENT_SUBTITLE} These keys stay in page memory and clear on reload or tab close. They are not the free tier and they are not Shield.</p>
-          <label>OpenRouter<input type="password" autoComplete="off" spellCheck={false} value={p.keys.openrouter || ''} placeholder="sk-or-…" onChange={e => p.setKeys({ ...p.keys, openrouter: e.target.value })} /></label>
-          <label>Hugging Face<input type="password" autoComplete="off" spellCheck={false} value={p.keys.huggingface || ''} placeholder="hf_… Inference Providers router" onChange={e => p.setKeys({ ...p.keys, huggingface: e.target.value })} /></label>
-          <p className="help">Hugging Face uses router.huggingface.co. Pin a model from its catalog inside the Experiment menu.</p>
         </section>
 
         <section className="panel">
           <h2><KeyRound size={15} strokeWidth={1.75} /> Execution engine</h2>
           <p className="help">Google's hosted execution sandbox uses its own session key. Sandbox network access and live connectors are disabled until per-action approvals are available. Runs can still incur provider charges; a token cap is not a dollar spending limit.</p>
           <label>Engine key<input type="password" autoComplete="off" spellCheck={false} value={p.engineKey ?? ''} placeholder="A Gemini API key, used only for this slot" onChange={e => p.setEngineKey?.(e.target.value)} /></label>
+        </section>
+
+        <section className="panel">
+          <h2>Local working memory &amp; knowledge core</h2>
+          <p className="help">These prompts persist only in this browser. They are sent to the selected model when you run a task, and are never included in workspace cloud synchronization. Protected system defaults are edited in Admin.</p>
+          <label>Task-specific instructions<textarea rows={5} value={workingMemory.task} onChange={e => setWorkingMemory(v => ({ ...v, task: e.target.value }))} placeholder="Project conventions and instructions for this task" /></label>
+          <label>Knowledge core<textarea rows={5} value={workingMemory.knowledge} onChange={e => setWorkingMemory(v => ({ ...v, knowledge: e.target.value }))} placeholder="Project facts to carry into each task" /></label>
+          <div className="row gap"><button className="button primary small" onClick={() => { try { saveWorkingMemory(workingMemory, [...Object.values(p.keys), c.token, c.serverAccessToken ?? '', p.engineKey ?? '']); setMemoryNote('Saved in this browser. Applies to your next task.'); } catch (e) { setMemoryNote(e instanceof Error ? e.message : 'Could not save memory.'); } }}>Save local memory</button><button className="button small" onClick={() => { const empty = { task: '', knowledge: '' }; saveWorkingMemory(empty); setWorkingMemory(empty); setMemoryNote('Local working memory cleared.'); }}>Clear local memory</button></div>
+          {memoryNote && <p className="help" role="status">{memoryNote}</p>}
         </section>
 
         <section className="panel">
@@ -247,7 +245,7 @@ export default function Settings(p: SettingsProps) {
 
         <section className="panel">
           <h2><Wrench size={15} strokeWidth={1.75} /> Running this deployment?</h2>
-          <p className="help">The admin dashboard is where the operator enters provider keys on the server, decides which models are free and which are on the paid plan, and sets the free-tier limits — no redeploy needed. {p.adminConfigured ? 'You are signed in to it on this browser.' : 'It is open: the first visit asks you to choose a password, so no hosting environment edit is needed.'}</p>
+          <p className="help">The admin dashboard is where the operator enters provider keys on the server, decides which models are free and which are on the paid plan, and sets the free-tier limits — no redeploy needed. {p.adminConfigured ? 'You are signed in to it on this browser.' : 'Owner setup requires the setup code from Render Environment.'}</p>
           <button className="button small" onClick={p.openAdmin}><ShieldCheck size={13} />Open the admin dashboard</button>
         </section>
 

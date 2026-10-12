@@ -96,4 +96,3 @@ git push origin --delete feat/my-feature
 - Always show the safe version of dangerous commands
 - Warn about destructive operations before suggesting them
 - Provide recovery steps alongside risky operations
-

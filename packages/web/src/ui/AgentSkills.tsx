@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Download, FileText, Pencil, Plug, Plus, Trash2 } from 'lucide-react';
-import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, parseSkillStack, saveSkillState, saveYourSkills, instructionText, SKILL_CAP, SKILL_FILE_CAP, type SkillState, type YourSkill } from '../lib/skillRegistry';
+import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, parseSkillStack, saveSkillState, saveYourSkills, instructionText, SKILL_CAP, SKILL_FILE_CAP, refreshSystemSkills, type SkillState, type YourSkill } from '../lib/skillRegistry';
 import type { McpConnection } from '../lib/mcp';
 
 export interface AgentSkillsProps {
@@ -8,6 +8,7 @@ export interface AgentSkillsProps {
   setMcp: (list: McpConnection[]) => void;
   notify: (message: string) => void;
   onChange?: () => void;
+  adminMode?: boolean;
 }
 
 /** The same skill library is available from navigation and the connectors drawer. */
@@ -21,6 +22,7 @@ export default function AgentSkills(p: AgentSkillsProps) {
   const [draftBody, setDraftBody] = useState('');
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
+  useEffect(() => { const controller = new AbortController(); void refreshSystemSkills(controller.signal).then(() => setSkills(loadSkillState())).catch(e => { if (!controller.signal.aborted) p.notify(e instanceof Error ? e.message : 'Could not read catalog.'); }); return () => controller.abort(); }, []);
   let activation = '';
   let activationError = '';
   try { activation = instructionText(skills, yours); } catch (e) { activationError = e instanceof Error ? e.message : 'Could not activate skills.'; }
@@ -92,11 +94,11 @@ export default function AgentSkills(p: AgentSkillsProps) {
   }
 
   return <section className="panel">
-        <div className="panel-head"><h2>Skill library</h2><span className="row gap"><button type="button" className="button small" onClick={() => { setEditing(null); setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(v => !v); }}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,.json,text/markdown,text/plain,application/json" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label><button type="button" className="button small" onClick={exportStack}><Download size={13} />Export</button></span></div>
-        <p className="help">Import a SKILL.md or write your own steps. Enabled skills provide instructions for your next chat, build, or plan. Skills are saved in this browser; scripts and templates need separate tools to run. Connector tokens stay in page memory and clear on reload or tab close. Export shares instructions and connector addresses without connector credentials. Never paste keys into a skill.</p>
+        <div className="panel-head"><h2>Skill library · {CREW_SKILLS.filter(s => s.kind === 'instructions').length} complete packages</h2><span className="row gap">{p.adminMode && <><button type="button" className="button small" onClick={() => { setEditing(null); setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(v => !v); }}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,.json,text/markdown,text/plain,application/json" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label></>}<button type="button" className="button small" onClick={exportStack}><Download size={13} />Export</button></span></div>
+        <p className="help">Select the complete skills your agent should follow. Repository imports and system-wide catalog management belong in the protected Admin dashboard. Enabled choices stay in this browser. Supporting scripts are reference files and run only through an explicitly connected tool.</p>
         <p className={activationError ? 'msg-error' : 'help'}>{activationError || `Selected instructions: ${activation.length.toLocaleString()} / ${SKILL_CAP.toLocaleString()} characters. Each selected skill is loaded completely. Turn on only the skills needed for this task.`}</p>
         <label>Search skills<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Name or purpose" /></label>
-        {adding && <div className="stack">
+        {p.adminMode && adding && <div className="stack">
           <label>Name<input value={draftName} maxLength={80} onChange={e => setDraftName(e.target.value)} placeholder="Review a pull request" /></label>
           <label>When to use it<input value={draftUse} maxLength={240} onChange={e => setDraftUse(e.target.value)} placeholder="Use when someone asks for a review before a merge." /></label>
           <label>Steps<textarea value={draftBody} maxLength={SKILL_FILE_CAP} rows={8} onChange={e => setDraftBody(e.target.value)} placeholder={'1. Read the diff.\n2. Name the risk.\n3. Stop.'} /></label>
@@ -110,14 +112,14 @@ export default function AgentSkills(p: AgentSkillsProps) {
             <strong>{skill.name}</strong>
             <small>Yours · {skill.description} · {skill.body.length.toLocaleString()} characters</small>{skill.provenance && <small>Imported from {skill.provenance.file} · SHA-256 {skill.provenance.sha256.slice(0, 12)} · content stored in full</small>}
           </span>
-          <button type="button" className="icon-button" aria-label={`Edit ${skill.name}`} onClick={() => { setEditing(skill.id); setDraftName(skill.name); setDraftUse(skill.description); setDraftBody(skill.body); setAdding(true); }}><Pencil size={13} /></button>
-          <button type="button" className="icon-button" aria-label={`Delete ${skill.name}`} onClick={() => writeYours(yours.filter(row => row.id !== skill.id))}><Trash2 size={13} /></button>
+          {p.adminMode && <><button type="button" className="icon-button" aria-label={`Edit ${skill.name}`} onClick={() => { setEditing(skill.id); setDraftName(skill.name); setDraftUse(skill.description); setDraftBody(skill.body); setAdding(true); }}><Pencil size={13} /></button>
+          <button type="button" className="icon-button" aria-label={`Delete ${skill.name}`} onClick={() => writeYours(yours.filter(row => row.id !== skill.id))}><Trash2 size={13} /></button></>}
           <label className="switch"><input type="checkbox" aria-label={`Enable ${skill.name}`} checked={skill.enabled} onChange={e => writeYours(yours.map(row => row.id === skill.id ? { ...row, enabled: e.target.checked } : row))} />{skill.enabled ? 'On' : 'Off'}</label>
           {openSkill === skill.id && <pre className="skill-body">{skill.body}</pre>}
         </div>)}
         {!yours.length && <p className="help">None yet. Add one, or import a SKILL.md.</p>}
         {query.trim() && !yours.some(skill => matches(skill.name, skill.description)) && !CREW_SKILLS.some(skill => matches(skill.name, skill.blurb)) && <p className="help">No skills match this search.</p>}
-        <h3 className="group-label">Built-in instructions</h3>
+        <h3 className="group-label">Engineering &amp; published instructions</h3>
         {CREW_SKILLS.filter(skill => skill.kind === 'instructions' && matches(skill.name, skill.blurb)).map(skill => {
           const row = skills.find(item => item.id === skill.id) ?? { id: skill.id, enabled: false, config: {} };
           return <div key={skill.id} className="doc-row">

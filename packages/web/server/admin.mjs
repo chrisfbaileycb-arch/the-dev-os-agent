@@ -10,6 +10,7 @@ import { loadVault, saveVault, getClientConfig } from './vault.mjs';
 import { REGISTRY, isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 import { HF_BACKEND_ID, HF_ROUTER_BASE, hfEndpointModels } from './backends.mjs';
 import { accountProbe, keyShapeError } from './keyProbe.mjs';
+import { BUILTIN_SKILLS, importRepositorySkills } from './skills.mjs';
 
 // The operator's dashboard: /api/admin/*.
 //
@@ -101,6 +102,7 @@ export async function discoverForProvider(provider, env, fetchImpl = fetch) {
 
 export function createAdmin({ db = null, env: baseEnv = process.env, settings, storage = null, log = console.error, fetchImpl = fetch, now = () => Date.now() } = {}) {
   const attempts = new Map();
+  const imports = new Map();
   const currentEnv = () => settings ? settings.env(baseEnv) : baseEnv;
   /**
    * Two ways in, in this order: an ADMIN_TOKEN in the environment, or a password set from the
@@ -146,7 +148,7 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
       // The dashboard only manages the US backend lane. A key stored under a provider outside it
       // (from before the lane split) is listed apart, removable and otherwise inert: nothing funds
       // from it any more. An environment-sourced one has no row, since the dashboard cannot remove it.
-      providers: rows.filter(p => p.backend),
+      providers: rows.filter(p => p.backend || isExperimentProvider(p.provider)),
       retired: rows.filter(p => !p.backend && !isExperimentProvider(p.provider) && p.source === 'dashboard'),
       // Backend providers the registry has decided on but the proxy cannot route to yet, so the
       // dashboard says so instead of offering a key field that would do nothing.
@@ -161,6 +163,8 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
       durable: Boolean(storage?.durable),
       ledger: storage?.ledger === 'server' ? 'server' : 'browser',
       experiment: settings.experimentStatus?.(baseEnv) ?? [],
+      systemPrompts: settings.systemPrompts?.(),
+      skills: { builtIn: BUILTIN_SKILLS.length, imported: settings.skillCatalog?.().length ?? 0 },
     };
   }
 
@@ -213,6 +217,32 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
       if (!authenticated(req)) throw new HttpError(401, 'Sign in with the admin token.');
 
       if (path === '/api/admin/config' && req.method === 'GET') { json(res, 200, config()); return true; }
+      if (path === '/api/admin/system-prompts' && req.method === 'PUT') {
+        const body = await readBody(req, 300_000);
+        await settings.setSystemPrompts(body);
+        json(res, 200, config()); return true;
+      }
+      if (path === '/api/admin/skills' && req.method === 'GET') {
+        json(res, 200, { builtIn: BUILTIN_SKILLS, imported: settings.skillCatalog() }); return true;
+      }
+      if (path === '/api/admin/skills/import' && req.method === 'POST') {
+        const ip = req.socket.remoteAddress || 'unknown';
+        const prior = imports.get(ip);
+        if (prior && now() - prior < 30_000) throw new HttpError(429, 'Wait thirty seconds before importing another repository.');
+        imports.set(ip, now());
+        const body = await readBody(req, 16_384);
+        const result = await importRepositorySkills({ url: body.url, ref: body.ref, directory: body.directory, token: body.token || currentEnv().GITHUB_TOKEN || '' }, fetchImpl);
+        const previous = settings.skillCatalog();
+        const ids = new Set(result.skills.map(s => s.id));
+        await settings.setSkillCatalog([...previous.filter(s => !ids.has(s.id)), ...result.skills]);
+        json(res, 200, { ...result, count: result.skills.length }); return true;
+      }
+      if (path === '/api/admin/skills' && req.method === 'DELETE') {
+        const body = await readBody(req, 8_192);
+        if (typeof body.id !== 'string') throw new HttpError(400, 'Select an imported skill.');
+        await settings.setSkillCatalog(settings.skillCatalog().filter(s => s.id !== body.id));
+        json(res, 200, { imported: settings.skillCatalog() }); return true;
+      }
       /**
        * Change the dashboard password. Only for a password that lives here: when ADMIN_TOKEN is
        * set in the environment the credential belongs to the operator's hosting dashboard, and

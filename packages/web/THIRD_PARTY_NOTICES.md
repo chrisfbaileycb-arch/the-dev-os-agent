@@ -23,3 +23,19 @@ Vendored modules:
 Agent/Task changes replace Node `crypto.randomUUID` imports with browser Web Crypto. The capability-match selection in `src/lib/orchestrator.ts` is adapted from Ruflo's CoordinationService. Scheduling, provider transport, browser persistence, UI, and SSE proxy are newly implemented. This is a portable subset, not a claim of full Ruflo feature parity.
 
 React, Vite, Vitest, TypeScript and Lucide retain their respective package licenses; exact dependency versions are recorded in package-lock.json.
+
+## Agency Agents engineering catalog
+
+Source: https://github.com/msitarzewski/agency-agents
+Pinned commit: `f99f6aa910a442b0197b768ce0ea7751e35e2060`.
+All 65 Markdown definitions from the engineering directory are retained byte-for-byte in
+`public/skills/agency` and in the indexed catalog. Each entry retains its SHA-256 and source
+URL. The upstream MIT license is included in `public/skills/agency/LICENSE` and each package's
+`resources/LICENSE.txt`. The instruction packages do not install or execute upstream scripts.
+
+## Isolated React preview runtime
+
+The preview worker bundles the matching React, ReactDOM and Scheduler production modules from
+the installed package versions. They execute inside the generated iframe, with no references to
+the parent app's React instance. Their upstream package licenses remain in node_modules and the
+versions are locked in package-lock.json. WebSocket transport uses the MIT-licensed `ws` package.

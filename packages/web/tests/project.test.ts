@@ -39,7 +39,7 @@ describe('parseProject', () => {
     const reply = [
       'Here is a counter app.',
       fence('package.json', '{"dependencies": {"react": "18.3.1", "react-dom": "18.3.1"}}'),
-      fence('src/main.tsx', "import { createRoot } from 'react-dom/client';\nimport App from './App';\ncreateRoot(document.getElementById('root')!).render(<App />);"),
+      fence('src/main.tsx', "import { createRoot } from 'react-dom/client';\nimport App from './App';\ncreateRoot(document.getElementById('root')!).render(<PreviewBoundary><App /></PreviewBoundary>);"),
       fence('src/App.tsx', 'export default function App() { return <div>Count</div>; }'),
       fence('src/App.css', '.count { color: red; }'),
     ].join('\n\n');
@@ -233,7 +233,7 @@ describe('live preview selection and mounting', () => {
     expect(original.files[0].content).toBe(source);
     expect(prepared.files[0].content).toContain("import { useState } from 'react';");
     expect(prepared.entry).toBe('__preview_main.tsx');
-    expect(prepared.files[1].content).toContain("createRoot(document.getElementById('root')!).render(<App />)");
+    expect(prepared.files[1].content).toContain("createRoot(document.getElementById('root')!).render(<PreviewBoundary><App /></PreviewBoundary>)");
   });
 });
 
@@ -322,7 +322,7 @@ describe('withReactHookImports', () => {
 });
 
 describe('truncated multi-file replies', () => {
-  const truncated = "```src/main.tsx\nimport App from './App';\nimport './index.css';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')!).render(<App />);\n```\n```src/App.tsx\nexport default function App() { return <div>hi";
+  const truncated = "```src/main.tsx\nimport App from './App';\nimport './index.css';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')!).render(<PreviewBoundary><App /></PreviewBoundary>);\n```\n```src/App.tsx\nexport default function App() { return <div>hi";
 
   it('is not a project when its own imports never arrived', () => {
     expect(parseProject(truncated)).toBeNull();
@@ -333,7 +333,7 @@ describe('truncated multi-file replies', () => {
   });
 
   it('stays a project once every import resolves', () => {
-    const full = "```src/main.tsx\nimport App from './App';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')!).render(<App />);\n```\n```src/App.tsx\nexport default function App() { return <div>hi</div>; }\n```";
+    const full = "```src/main.tsx\nimport App from './App';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')!).render(<PreviewBoundary><App /></PreviewBoundary>);\n```\n```src/App.tsx\nexport default function App() { return <div>hi</div>; }\n```";
     expect(parseProject(full)?.kind).toBe('react');
   });
 

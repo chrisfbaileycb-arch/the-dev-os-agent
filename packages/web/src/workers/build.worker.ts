@@ -1,5 +1,6 @@
 import * as esbuild from 'esbuild-wasm';
 import wasmURL from 'esbuild-wasm/esbuild.wasm?url';
+import previewRuntime from 'virtual:preview-runtime';
 import { projectPlugin } from '../lib/bundle/plugin';
 import { inlineLocalAssets, type ProjectFile } from '../lib/project';
 
@@ -39,7 +40,7 @@ function formatMessage(m: { text: string; location: { file: string; line: number
  * this bundle needs actually live. See server/index.mjs's SANDBOX_CSP for the rest of that story.
  */
 function htmlShell(js: string, css: string): string {
-  return `<!doctype html>\n<html><head><meta charset="utf-8" />\n<style>html,body{margin:0;padding:0;min-height:100%;} ${css}</style>\n</head><body><div id="root"></div>\n<script>\ntry {\n${js}\n} catch (err) {\n  document.body.innerHTML = '<pre style="color:#c0392b;white-space:pre-wrap;padding:12px;font:12px/1.5 monospace;">Runtime error: ' + (err && err.stack || err) + '</pre>';\n}\n</script>\n</body></html>`;
+  return `<!doctype html>\n<html><head><meta charset="utf-8" />\n<style>html,body{margin:0;padding:0;min-height:100%;} ${css}</style>\n</head><body><div id="root"></div>\n<script>\ntry {\n${js.replace(/<\/script/gi, '<\\/script')}\n} catch (err) {\n  window.dispatchEvent(new ErrorEvent('error', {message: String(err && err.message || err)}));\n  document.body.innerHTML = '<pre style="color:#c0392b;white-space:pre-wrap;padding:12px;font:12px/1.5 monospace;">Runtime error: ' + (err && err.stack || err) + '</pre>';\n}\n</script>\n</body></html>`;
 }
 
 async function build(req: BuildRequest): Promise<BuildResponse> {
@@ -58,7 +59,7 @@ async function build(req: BuildRequest): Promise<BuildResponse> {
       entryPoints: [req.entry], bundle: true, write: false, format: 'iife', target: 'es2020',
       jsx: 'automatic', jsxImportSource: 'react', platform: 'browser', logLevel: 'silent',
       define: { 'process.env.NODE_ENV': '"production"' },
-      plugins: [projectPlugin(files, req.dependencies)],
+      plugins: [projectPlugin(files, req.dependencies, fetch, previewRuntime)],
       outdir: '/out',
     });
     if (result.errors.length) return { id: req.id, ok: false, errors: result.errors.map(formatMessage) };

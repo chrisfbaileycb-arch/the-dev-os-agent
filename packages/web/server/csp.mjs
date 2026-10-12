@@ -24,7 +24,7 @@
 // calls it directly. Only the loopback names on those two ports are allowed — nothing else on the
 // local network — and the server itself must also allow this app's origin before it answers:
 // OLLAMA_ORIGINS for Ollama, the CORS option in LM Studio's server settings.
-export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://esm.sh https://api.github.com http://localhost:11434 http://127.0.0.1:11434 http://localhost:1234 http://127.0.0.1:1234; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self' https://esm.sh https://api.github.com http://localhost:11434 http://127.0.0.1:11434 http://localhost:1234 http://127.0.0.1:1234; worker-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 /**
  * The policy for the generated-app sandbox, and the reasoning behind how open it is.

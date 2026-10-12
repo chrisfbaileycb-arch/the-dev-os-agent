@@ -5,6 +5,7 @@ import { isBackendProvider, isExperimentProvider } from './providerRegistry.mjs'
 import { keyShapeError } from './keyProbe.mjs';
 import { freeOutputTokens, planLimits } from './plans.mjs';
 import { backendEnabled, hfBackendBase, hfEndpointModels } from './backends.mjs';
+import { DEFAULT_SYSTEM_PROMPTS } from './skills.mjs';
 
 // Dashboard-managed deployment settings: provider keys, free-tier knobs, and the model tiers.
 //
@@ -284,6 +285,16 @@ export async function openSettings({ db, env = process.env, log = console.error 
 
   return {
     persistent,
+    skillCatalog: () => safeJson(rows.get('agent-skills-catalog')) ?? [],
+    async setSkillCatalog(skills) {
+      if (!Array.isArray(skills) || skills.length > 1000 || JSON.stringify(skills).length > 20_000_000) throw new Error('Skills catalog exceeds its capacity. Remove packages before importing more; none were truncated.');
+      await write('agent-skills-catalog', JSON.stringify(skills), false);
+    },
+    systemPrompts: () => ({ ...DEFAULT_SYSTEM_PROMPTS, ...(safeJson(rows.get('system-prompts')) ?? {}) }),
+    async setSystemPrompts(value) {
+      if (!value || ['general', 'build'].some(k => typeof value[k] !== 'string' || !value[k].trim() || value[k].length > 32_000)) throw new Error('Provide complete general and build prompts, each from 1 to 32,000 characters.');
+      await write('system-prompts', JSON.stringify({ general: value.general, build: value.build }), false);
+    },
     /** Dashboard values by environment-variable name. Never logged, never sent to a browser. */
     overlay: () => ({ ...overlayCache }),
     /** The environment as the rest of the server should read it: dashboard first, process second. */

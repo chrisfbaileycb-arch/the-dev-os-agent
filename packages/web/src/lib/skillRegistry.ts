@@ -1,5 +1,6 @@
 import { sessionSecret, setSessionSecret } from './sessionSecrets';
 import curatedSkills from './curatedSkills.json';
+import { workspaceId } from './store';
 // Skills are markdown pathways. A file says what the skill does, when to use it, and the steps.
 // Turning one on hands those words to chat and to a workflow. It does not run a server.
 //
@@ -75,8 +76,24 @@ export const CREW_SKILLS: SkillDef[] = [
   { id: 'scribe', name: 'Scribe', kind: 'instructions', url: '', blurb: 'Turns a thread into a clean note.', markdown: SCRIBE, fields: [] },
   { id: 'researcher', name: 'Researcher', kind: 'instructions', url: '', blurb: 'Reads the notes you supply and does not invent a source.', markdown: RESEARCHER, fields: [] },
   { id: 'github', name: 'GitHub', kind: 'live', url: 'https://api.githubcopilot.com/mcp/', blurb: 'Repos, pull requests, and issues on your own token. A connector, not a pathway.', fields: [{ key: 'token', label: 'Personal access token', secret: true }] },
-  { id: 'context7', name: 'Context7', kind: 'live', url: 'https://mcp.context7.com/mcp', blurb: 'Current library docs. A connector, not a pathway.', fields: [] },
 ];
+
+export interface SystemPrompts { general: string; build: string; }
+let systemPrompts: SystemPrompts = { general: '', build: '' };
+export const protectedSystemPrompts = (): SystemPrompts => ({ ...systemPrompts });
+export async function refreshSystemSkills(signal?: AbortSignal): Promise<void> {
+  const response = await fetch('/api/skills', { credentials: 'same-origin', signal, headers: { 'X-Workspace-Id': workspaceId() } });
+  if (!response.ok) throw new Error('Could not load the published skill catalog.');
+  const body = await response.json() as { skills: SkillDef[]; systemPrompts: SystemPrompts };
+  if (!Array.isArray(body.skills)) throw new Error('Invalid skills catalog.');
+  const retained = CREW_SKILLS.filter(s => !s.id.startsWith('repo-'));
+  for (const skill of body.skills) {
+    if (typeof skill.id !== 'string' || !skill.id.startsWith('repo-') || typeof skill.markdown !== 'string') throw new Error('Invalid imported skill.');
+    retained.push({ ...skill, kind: 'instructions', fields: [], url: '' });
+  }
+  CREW_SKILLS.splice(0, CREW_SKILLS.length, ...retained);
+  if (body.systemPrompts) systemPrompts = body.systemPrompts;
+}
 
 const KEY = 'sf-skills';
 const YOURS = 'sf-your-skills';
@@ -182,7 +199,7 @@ export function parseSkillStack(text: string): YourSkill[] {
   const stack = JSON.parse(text);
   if (!stack || !Array.isArray(stack.skills)) throw new Error('Choose a Signal Forge skill stack.');
   const rows = stack.skills.filter((row: { kind?: string }) => row && row.kind === 'instructions');
-  if (rows.length > 24) throw new Error('This stack exceeds the 24-skill limit. Nothing was imported.');
+  if (rows.length > 1000 || text.length > 20_000_000) throw new Error('This stack exceeds the catalog capacity. Nothing was imported.');
   return rows.map((row: Record<string, unknown>) => {
     if (typeof row.markdown !== 'string' || !row.markdown.trim()) throw new Error('A skill in this stack has no instructions.');
     const parsed = parseSkillFile(row.markdown);

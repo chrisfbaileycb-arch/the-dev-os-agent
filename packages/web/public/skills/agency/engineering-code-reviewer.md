@@ -74,4 +74,3 @@ Line 42: User input is interpolated directly into the query.
 - Use the priority markers consistently
 - Ask questions when intent is unclear rather than assuming it's wrong
 - End with encouragement and next steps
-

@@ -622,7 +622,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
         catch (error) { throw new HttpError(502, `Could not reach Hugging Face: ${error?.message || 'connection failed'}`); }
         if (!who.ok) throw new HttpError(who.status === 401 || who.status === 403 ? 401 : 502, who.status === 401 || who.status === 403 ? 'The provider rejected this key.' : `The provider answered HTTP ${who.status}.`);
       }
-      let payload; let suffix; let budgetModel; let budgetMax;
+      let payload; let suffix; let budgetModel; let budgetMax; let budgetMessages;
       if (path === '/api/chat') {
         if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 100 || body.messages.some(m => !m || !['system','user','assistant'].includes(m.role) || !validContent(m.content))) throw new HttpError(400, 'messages must contain standard role/content text pairs, optionally with up to five image parts.');
         if (target.nativeCohere && body.messages.some(m => Array.isArray(m.content))) throw new HttpError(400, 'Cohere native chat does not accept images here. Choose a vision model on OpenRouter or Groq.');
@@ -632,7 +632,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
         // which silently told every model to return a single-file component and nothing else —
         // the opposite of what a multi-file build or a plain chat asks for. Removed: what the
         // visitor's agent says is what the model gets.
-        const messages = body.messages;
+        const defaults = settings?.systemPrompts?.();
+        const messages = defaults ? [{ role: 'system', content: `${defaults.general}${body.interactionMode === 'build' || body.interactionMode === 'plan' ? `\n\n${defaults.build}` : ''}` }, ...body.messages] : body.messages;
+        budgetMessages = messages;
         const defaultMax = defaultMaxTokens(provider, body.model);
         const requested = body.max_tokens ?? body.max_output_tokens ?? body.max_completion_tokens ?? defaultMax;
         if (!Number.isInteger(requested) || requested < 1 || requested > MAX_OUTPUT_TOKENS) throw new HttpError(400, `max_tokens must be a whole number from 1 to ${MAX_OUTPUT_TOKENS}.`);
@@ -677,7 +679,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         // Reserve separately for every attempt, including credential retries. Uncertain
         // failures retain their reservation; another external call cannot reuse it.
-        if (path === '/api/chat' && funding.mode !== 'byok' && apiKey) reservation = await dailyBudget.reserve(provider, budgetModel, body.messages, budgetMax);
+        if (path === '/api/chat' && funding.mode !== 'byok' && apiKey) reservation = await dailyBudget.reserve(provider, budgetModel, budgetMessages, budgetMax);
         try {
           response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
         } catch (error) {

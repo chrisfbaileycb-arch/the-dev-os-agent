@@ -63,8 +63,6 @@ const MODE_ICONS: Record<WorkMode, typeof MessageSquare> = { chat: MessageSquare
 const SEND_LABEL: Record<WorkMode, string> = { chat: 'Send', build: 'Build', plan: 'Start plan' };
 
 export default function Dock(p: DockProps) {
-  const backends = p.backends ?? defaultBackends;
-  const lanes: Lane[] = [...(backends.us ? ['us' as const] : []), ...(backends.huggingface ? ['hf' as const] : []), 'experiment', 'own'];
   const [dragging, setDragging] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -123,16 +121,12 @@ export default function Dock(p: DockProps) {
 
       {/* One control row. On a phone the chip labels collapse to icons and the row wraps. */}
       <div className="dock-bar">
-        <span className="segmented work-modes" role="radiogroup" aria-label="How to work">
-          {(Object.keys(WORK_MODES) as WorkMode[]).map(m => { const Icon = MODE_ICONS[m]; return <button key={m} role="radio" aria-checked={p.workMode === m} className={p.workMode === m ? 'active' : ''} title={`${WORK_MODES[m].label}: ${WORK_MODES[m].description}`} disabled={p.busy} onClick={() => p.setWorkMode(m)}><Icon size={12} strokeWidth={1.9} /><span className="chip-label">{WORK_MODES[m].short}</span></button>; })}
-        </span>
+        <label className="chip-select interaction-mode">Interaction Mode: <select aria-label="Interaction Mode" value={p.workMode} disabled={p.busy} onChange={e => p.setWorkMode(e.target.value as WorkMode)}>{(Object.keys(WORK_MODES) as WorkMode[]).map(m => <option key={m} value={m}>{WORK_MODES[m].short}</option>)}</select><ChevronDown size={12} /></label>
         {p.workMode === 'plan' && <label className="chip-select"><select aria-label="Plan type" title="What kind of plan to run" value={p.plan} disabled={p.busy} onChange={e => p.setPlan(e.target.value as Workflow)}>
           {(Object.keys(workflows) as Workflow[]).map(w => <option key={w} value={w}>{workflows[w].label}</option>)}
         </select><ChevronDown size={12} /></label>}
         {p.workMode !== 'build' && <button className="chip-button" onClick={p.openRoster} title={p.workMode === 'plan' ? 'Choose the agent that leads the plan' : 'Choose an agent'} disabled={p.busy}><PersonaIcon size={13} strokeWidth={1.75} /><span className="chip-label">{p.persona.name}</span><ChevronDown size={12} /></button>}
-        {/* Three groups: Shield chat models, the experiment lane, and a model on this machine. */}
-        {lanes.map(lane => <ModelPicker key={lane} lane={lane} provider={p.provider} onOpenSettings={p.openSettings} model={p.model} inference={p.inference} free={p.free} paid={p.paid} labels={p.labels} reach={p.reach} keyed={p.keyed} discovered={p.discovered} discovering={p.discovering} pipes={p.pipes} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} onNeedsPlan={p.modelNeedsPlan} onDiscover={p.discover} />)}
-        <button className={p.connectorCount ? 'chip-button live' : 'chip-button'} title="Connectors: GitHub, web, documents, MCP, model providers" onClick={p.openConnectors} disabled={p.busy}><Plug size={13} strokeWidth={1.75} /><span className="chip-label">Connectors</span>{p.connectorCount ? <em>{p.connectorCount}</em> : null}</button>
+        <ModelPicker backends={p.backends} developer={p.workMode !== 'chat'} provider={p.provider} onOpenSettings={p.openSettings} onOpenConnectors={p.openConnectors} connectorCount={p.connectorCount} model={p.model} inference={p.inference} free={p.free} paid={p.paid} labels={p.labels} reach={p.reach} keyed={p.keyed} discovered={p.discovered} discovering={p.discovering} pipes={p.pipes} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} onNeedsPlan={p.modelNeedsPlan} onDiscover={p.discover} />
         {p.showEngine && <label className="chip-button engine-toggle" title="Run this task in Google's hosted Linux sandbox. Not a chat model. Off until its own key is saved.">
           <input type="checkbox" checked={Boolean(p.engineOn)} disabled={p.busy} onChange={e => p.setEngineOn?.(e.target.checked)} />
           <Cpu size={13} strokeWidth={1.75} />

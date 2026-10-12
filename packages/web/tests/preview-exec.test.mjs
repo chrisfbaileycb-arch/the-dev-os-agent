@@ -1,81 +1,59 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import esbuildNs from 'esbuild-wasm/lib/browser.js';
 import { chromium } from 'playwright';
-
-// Skip rather than fail when the browser binary is absent: CI installs Chromium, but a checkout
-// that skipped the Playwright download (PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1, or no `playwright
-// install` locally) cannot run this test, and a hard failure there reads as a code regression
-// that it is not. The esbuild-wasm build half still runs everywhere.
-const hasChromium = (() => { try { return existsSync(chromium.executablePath()); } catch { return false; } })();
-
+import { Window } from 'happy-dom';
+import { previewRuntimeModules } from '../server/previewRuntime.mjs';
 const require = createRequire(import.meta.url);
-// Resolution through the package, not a hand-counted path: npm hoists this to the workspace root.
-const esbuildWasmPath = require.resolve('esbuild-wasm/esbuild.wasm');
-
-// The full preview pipeline, executed for real: build a small React app with esbuild-wasm and the
-// same plugin the preview worker uses — fetching react and react-dom from esm.sh, exactly as a
-// visitor's build does — then run the finished HTML in headless Chromium and click the button.
-//
-// This test exists because both preview bugs so far were invisible to every cheaper check: a
-// `?bundle` suffix on esm.sh URLs put two private copies of React in one bundle (react-dom
-// installed the hooks dispatcher on its copy, the app's useState read from the other, every
-// component crashed), and a strict CSP silently stopped the script from running at all. Neither
-// shows up as a build error — only executing the app catches them.
-
 const esbuild = esbuildNs.default ?? esbuildNs;
 if (typeof globalThis.self === 'undefined') globalThis.self = globalThis;
-
 const files = {
-  'src/main.tsx': "import { createRoot } from 'react-dom/client';\nimport App from './App';\ncreateRoot(document.getElementById('root')).render(<App />);\n",
-  'src/App.tsx': "import { useState } from 'react';\nimport './App.css';\nexport default function App() {\n  const [n, setN] = useState(0);\n  return <div className=\"app\"><p id=\"count\">Count: {n}</p><button id=\"inc\" onClick={() => setN(n + 1)}>Increment</button></div>;\n}\n",
-  'src/App.css': '.app { padding: 12px; }',
+  'main.tsx': `import { createRoot } from 'react-dom/client';
+import React, { createContext, useContext, useState } from 'react';
+import { useContext as externalContext } from 'fixture-context-package';
+const Context = createContext('wrong default');
+function Child() { const n = externalContext(Context); return <p id="context">{n}</p>; }
+function App() { const [n, setN] = useState(0); return <Context.Provider value="provider works"><Child /><p id="count">Count: {n}</p><button id="inc" onClick={() => setN(n+1)}>Increment</button></Context.Provider>; }
+createRoot(document.getElementById('root')).render(<App />);`,
 };
-const dependencies = { react: '18.2.0', 'react-dom': '18.2.0' };
-
-/** The preview plugin is TypeScript; node's test runner can't load that, so esbuild itself — already required here — compiles it on the fly. */
-async function loadProjectPlugin() {
-  const source = readFileSync(fileURLToPath(new URL('../src/lib/bundle/plugin.ts', import.meta.url)), 'utf8');
-  const compiled = await esbuild.build({ stdin: { contents: source, loader: 'ts' }, write: false, format: 'esm', logLevel: 'silent' });
-  const text = compiled.outputFiles[0].text;
-  const mod = await import('data:text/javascript;base64,' + Buffer.from(text).toString('base64'));
-  return mod.projectPlugin;
-}
-
-test('a built React app runs in a real browser and its state works', { skip: hasChromium ? false : 'headless Chromium is not installed on this machine' }, async () => {
-  const wasmModule = new WebAssembly.Module(readFileSync(esbuildWasmPath));
-  await esbuild.initialize({ wasmModule, worker: false });
-  const projectPlugin = await loadProjectPlugin();
-  const result = await esbuild.build({
-    entryPoints: ['src/main.tsx'], bundle: true, write: false, format: 'iife', target: 'es2020',
-    jsx: 'automatic', jsxImportSource: 'react', platform: 'browser', logLevel: 'silent',
-    define: { 'process.env.NODE_ENV': '"production"' },
-    plugins: [projectPlugin(files, dependencies)],
-    outdir: '/out',
-  });
+let html;
+async function compilePreview() {
+  if (html) return html;
+  await esbuild.initialize({ wasmModule: new WebAssembly.Module(readFileSync(require.resolve('esbuild-wasm/esbuild.wasm'))), worker: false });
+  const compiled = await esbuild.build({ stdin: { contents: readFileSync(new URL('../src/lib/bundle/plugin.ts', import.meta.url), 'utf8'), loader: 'ts' }, write: false, format: 'esm' });
+  const { projectPlugin } = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64'));
+  const fetchFixture = async url => {
+    assert.equal(url, 'https://esm.sh/fixture-context-package');
+    return new Response(`export { useContext } from '/react@18.2.0/es2022/react.mjs';`);
+  };
+  const result = await esbuild.build({ entryPoints: ['main.tsx'], bundle: true, write: false, format: 'iife', target: 'es2020', jsx: 'automatic', platform: 'browser', define: { 'process.env.NODE_ENV': '"production"' }, plugins: [projectPlugin(files, { react: '18.2.0', 'react-dom': '19.3.0' }, fetchFixture, previewRuntimeModules())], outdir: '/out' });
   assert.equal(result.errors.length, 0);
-  const js = result.outputFiles.find(f => f.path.endsWith('.js')).text;
-  const css = result.outputFiles.find(f => f.path.endsWith('.css'))?.text ?? '';
-  // The same shell the preview worker emits. No CSP meta tag: that is the point — the preview
-  // shell's policy comes from the server response, not from the document.
-  const html = `<!doctype html><html><head><meta charset="utf-8" /><style>html,body{margin:0;padding:0;min-height:100%;} ${css}</style></head><body><div id="root"></div><script>\ntry {\n${js}\n} catch (err) {\n  document.body.innerHTML = '<pre>' + (err && err.stack || err) + '</pre>';\n}\n</script></body></html>`;
-
+  html = `<!doctype html><html><head></head><body><div id="root"></div><script>${result.outputFiles.find(f => f.path.endsWith('.js')).text}</script></body></html>`;
+  return html;
+}
+test('preview React context and hooks share one isolated runtime even across versioned third-party imports', async () => {
+  const window = new Window({ url: 'https://preview.example', settings: { enableJavaScriptEvaluation: true } });
+  const errors = []; window.addEventListener('error', e => errors.push(e.message));
+  try {
+    window.document.write(await compilePreview());
+    await window.happyDOM.whenAsyncComplete();
+    assert.equal(window.document.querySelector('#context')?.textContent, 'provider works');
+    assert.equal(window.document.querySelector('#count')?.textContent, 'Count: 0');
+    window.document.querySelector('#inc').click();
+    await window.happyDOM.whenAsyncComplete();
+    assert.equal(window.document.querySelector('#count')?.textContent, 'Count: 1');
+    assert.deepEqual(errors, []);
+  } finally { await window.happyDOM.close(); }
+});
+const hasChromium = existsSync(chromium.executablePath());
+test('the same context preview runs in Chromium', { skip: hasChromium ? false : 'Chromium download unavailable in this environment' }, async () => {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   try {
-    const page = await browser.newPage();
-    const errors = [];
-    page.on('pageerror', e => errors.push(String(e)));
-    await page.setContent(html);
-    await page.waitForSelector('#inc', { timeout: 15_000 });
-    const before = await page.textContent('#count');
-    assert.match(before, /Count: 0/);
-    assert.equal(errors.length, 0, `the app threw: ${errors.join('; ')}`);
-    await page.click('#inc');
-    await page.click('#inc');
-    const after = await page.textContent('#count');
-    assert.match(after, /Count: 2/);
+    const page = await browser.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
+    await page.setContent(await compilePreview());
+    assert.equal(await page.textContent('#context'), 'provider works');
+    await page.click('#inc'); assert.equal(await page.textContent('#count'), 'Count: 1'); assert.deepEqual(errors, []);
   } finally { await browser.close(); }
-}, 120_000);
+});

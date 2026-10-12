@@ -30,7 +30,7 @@ import { ensureRunnableBuild, expectsRunnablePreview, isContinuationRequest, nee
 import { listModels, ProviderError, validateConnection } from './lib/provider';
 import { clearProviderStorage, defaultConnection, requestConnection, emptyKeyring, forgetKeys, inferenceFor, initialProvider, loadKeyring, persistConnection, providers, saveKeyring, switchProvider, zeroConfigConnection, effectiveOutputLimit, type Keyring, type Provider } from './lib/providers';
 import { keyedProviders, type Reach } from './lib/availability';
-import { modelChoices, preferredModel, type ModelChoice } from './lib/modelChoices';
+import { modelChoices, preferredModel, isDeveloperModel, type ModelChoice } from './lib/modelChoices';
 import { firstHealthyFree } from './lib/freeHealth';
 import { clearDiscovered, isFresh, keyFingerprint, loadDiscovered, saveDiscovered, type Discovered } from './lib/discovered';
 import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
@@ -42,12 +42,14 @@ import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
 import { activeCount, activeTools, clearSettings, loadSettings, saveSettings, type ConnectorSettings, type GithubSettings } from './lib/connectors';
 import { loadSyncSettings } from './lib/githubSync';
-import type { Connection, Knowledge, MemoryEntry, MemoryKind, Run, Workflow, WorkerEvent } from './lib/types';
+import type { Connection, Knowledge, MemoryEntry, MemoryKind, Run, Workflow, WorkerEvent, WorkflowToolRequest } from './lib/types';
+import { redactSecrets } from './lib/secrets';
 import { loadTheme, saveTheme, type ThemeChoice } from './lib/theme';
 import { loadEngineKey, saveEngineKey } from './lib/engineKey';
-import { liveSkillsForEngine, loadSkillState, instructionText } from './lib/skillRegistry';
+import { liveSkillsForEngine, loadSkillState, instructionText, refreshSystemSkills, protectedSystemPrompts } from './lib/skillRegistry';
 import { readEngineStream, type EngineEvent } from './lib/engineClient';
 import { branchSession } from './lib/branch';
+import { workingMemoryText, clearWorkingMemory } from './lib/workingMemory';
 
 const ApiDirectory = lazy(() => import('./ui/ApiDirectory'));
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
@@ -169,6 +171,16 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const abortRef = useRef<AbortController | null>(null); const worker = useRef<Worker | null>(null); const recognition = useRef<Recognition | null>(null);
   const approvedRuns = useRef(false); const endRef = useRef<HTMLDivElement>(null);
   const attemptedPreviewRecovery = useRef(new Set<string>());
+  const [toolRequests, setToolRequests] = useState<WorkflowToolRequest[]>([]);
+  const toolRunner = useRef<((request: WorkflowToolRequest, allowed: boolean) => Promise<void>) | null>(null);
+  const toolAbort = useRef<AbortController | null>(null);
+  const [toolRunning, setToolRunning] = useState(false);
+
+  function taskInstructions() {
+    const defaults = protectedSystemPrompts();
+    return [connection.provider === 'ollama' ? defaults.general : '', connection.provider === 'ollama' && workMode !== 'chat' ? defaults.build : '', workingMemoryText(), instructionText()].filter(Boolean).join('\n\n');
+  }
+  useEffect(() => { void refreshSystemSkills().catch(() => {}); }, []);
 
   const setMcp = (list: McpConnection[]) => { saveConnections(list); setMcpState(list); };
   const setSettings = (next: ConnectorSettings) => { saveSettings(next); setSettingsState(next); };
@@ -212,7 +224,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
    * Every credential this visitor holds, matched exactly by the secret scanner: nothing on this
    * list is ever written to memory, and it is redacted from any ZIP or commit.
    */
-  const knownSecrets = useMemo(() => [...Object.values(keys), connection.token, connection.serverAccessToken ?? '', settings.github.token, loadSyncSettings().token, ...mcp.map(c => c.token)].filter(k => k && k.trim().length >= 8), [keys, connection.token, connection.serverAccessToken, settings.github.token, mcp]);
+  const knownSecrets = useMemo(() => [...Object.values(keys), connection.token, connection.serverAccessToken ?? '', settings.github.token, engineKey, loadSyncSettings().token, ...mcp.map(c => c.token)].filter(k => k && k.trim().length >= 8), [keys, connection.token, connection.serverAccessToken, settings.github.token, engineKey, mcp]);
   const keyed = useMemo(() => keyedProviders(reach), [reach]);
   const connectorCount = activeCount(settings, mcp);
   // The credit meter tracks whichever budget the current run actually draws from.
@@ -278,7 +290,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     loadWorkspace(controller.signal).then(ws => {
       if (controller.signal.aborted) return;
       commitSessions(ws.sessions); runsRef.current = ws.runs; setRuns(ws.runs); ledgerRef.current = ws.ledger; setLedger(ws.ledger);
-      setKnowledge(ws.knowledge); if (!connection.serverAccessToken?.trim()) setBalance(ws.balance); setFreeBalance(ws.freeBalance); setServerReachable(ws.serverReachable);
+      void refreshSystemSkills().catch(e => setNotice(errorText(e))); setKnowledge(ws.knowledge); if (!connection.serverAccessToken?.trim()) setBalance(ws.balance); setFreeBalance(ws.freeBalance); setServerReachable(ws.serverReachable);
       setActiveId(ws.sessions[0]?.id ?? null); if (ws.sessions[0]) { setPersonaId(ws.sessions[0].persona); setWorkModeState(ws.sessions[0].mode ?? 'chat'); setPlanState(ws.sessions[0].plan ?? 'build'); }
     })
       .catch(e => { if (!controller.signal.aborted) setNotice(errorText(e)); })
@@ -354,9 +366,13 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   /** The mode toggle, bound to the active session so switching sessions restores it. */
   function chooseWorkMode(next: WorkMode) {
     setWorkModeState(next);
+    if (next !== 'chat' && connection.model && !isDeveloperModel(connection.model)) {
+      const current = connection.provider ? discovered[connection.provider]?.models ?? [] : [];
+      setConnection(c => ({ ...c, model: preferredModel(current.filter(m => isDeveloperModel(m.id))) ?? '' }));
+    }
     if (next === 'chat' && personaId === BUILDER_PERSONA_ID) setPersonaId(defaultPersonaId);
     if (active) patchSession(active.id, s => ({ ...s, mode: next, ...(next === 'chat' && s.persona === BUILDER_PERSONA_ID ? { persona: defaultPersonaId } : {}) }), true);
-    if (next === 'build' && !previewOpen) { setPreviewOpen(true); resetSplit(); }
+    if (next !== 'chat' && !previewOpen) { setPreviewOpen(true); resetSplit(); }
   }
   function choosePlan(next: Workflow) { setPlanState(next); if (active) patchSession(active.id, s => ({ ...s, plan: next }), true); }
   /** Save a memory through the secret check; a refusal is said plainly and nothing is written. */
@@ -463,7 +479,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     return errorText(e);
   }
   function preflight(): string | null {
-    try { instructionText(); } catch (e) { return errorText(e); }
+    try { taskInstructions(); } catch (e) { return errorText(e); }
     try { validateConnection(connection); } catch (e) { return errorText(e); }
     if (connection.provider === 'ollama' && !pipes.ollamaEnabled) return 'Enable the local model connection in Settings first.';
     if (!online && connection.provider !== 'ollama') return 'You are offline. Hosted models need a connection.';
@@ -563,7 +579,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       const response = await fetch('/api/engine', {
         method: 'POST', credentials: 'same-origin', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': workspaceId(), ...(engineKey.trim() ? { 'x-engine-key': engineKey.trim() } : {}) },
-        body: JSON.stringify({ input: [text, instructionText()].filter(Boolean).join('\n\nFollow these skill instructions. They are not a tool call.\n\n'), environmentId: runsRef.current.find(r => r.id === runId)?.environmentId, skills: liveSkillsForEngine(loadSkillState()), maxTotalTokens: 50_000 }),
+        body: JSON.stringify({ input: [text, taskInstructions()].filter(Boolean).join('\n\nFollow these skill instructions. They are not a tool call.\n\n'), environmentId: runsRef.current.find(r => r.id === runId)?.environmentId, skills: liveSkillsForEngine(loadSkillState()), maxTotalTokens: 50_000 }),
       });
       await readEngineStream(response, event => applyEngineEvent(runId, event));
       const finished = runsRef.current.find(r => r.id === runId);
@@ -583,14 +599,14 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     const controller = new AbortController(); abortRef.current = controller; const traces: ChatMessage['tools'] = [];
     const previous = latestPreviewReply(session.messages);
     const previewExpected = workMode === 'build' && expectsRunnablePreview(text, Boolean(parseProject(previous)));
-    const turnConnection = { ...requestConnection(connection, keys), maxTokens: effectiveOutput };
+    const turnConnection = { ...requestConnection(connection, keys), interactionMode: workMode, maxTokens: effectiveOutput };
     try {
       const result = await chatTurn({
         connection: turnConnection, personaId: persona.id, history: session.messages, input: text,
         buildPreview: previewExpected,
         attachments: files, photos: shots.map(ph => ({ name: ph.name, dataUrl: ph.dataUrl })),
         tools: activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools }),
-        knowledge, memories: memoriesRef.current, instructions: instructionText(), signal: controller.signal,
+        knowledge, memories: memoriesRef.current, instructions: taskInstructions(), signal: controller.signal,
         onDelta: t => patchMessage(session.id, reply.id, { content: t }),
         onTool: trace => { traces.push(trace); patchMessage(session.id, reply.id, { tools: [...traces] }); },
       });
@@ -634,7 +650,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     try {
       const earlier = latestPreviewReply(active.messages.filter(m => m.id !== lastAssistant.id));
       const goal = active.messages.filter(m => m.role === 'user' && !isContinuationRequest(m.content)).at(-1)?.content ?? lastRequest.content;
-      const recovery = await ensureRunnableBuild({ goal, draft: lastAssistant.content, truncated: lastAssistant.truncated, previous: parseProject(earlier) ? earlier : undefined, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, signal: controller.signal,
+      const recovery = await ensureRunnableBuild({ goal, draft: lastAssistant.content, truncated: lastAssistant.truncated, previous: parseProject(earlier) ? earlier : undefined, connection: { ...requestConnection(connection, keys), interactionMode: workMode, maxTokens: effectiveOutput }, signal: controller.signal,
         onDelta: partial => patchMessage(active.id, lastAssistant.id, { content: partial, error: undefined }) });
       patchMessage(active.id, lastAssistant.id, { content: recovery.text, tokens: (lastAssistant.tokens ?? 0) + recovery.tokens, error: recovery.issue, truncated: recovery.truncated }, true);
       setNotice(recovery.issue ?? '');
@@ -668,22 +684,43 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     patchSession(session.id, s => ({ ...s, title, persona: persona.id, messages: [...s.messages, user, reply] }), true);
     updateRun({ id: runId, goal: text, workflow, mode: connection.mode, model: connection.model, status: 'running', startedAt: now(), steps: [], tokens: 0, calls: 0, cacheHits: 0, contextTitles: [], sessionId: session.id, persona: persona.id, origin: 'browser' });
     const fail = (message: string) => {
-      worker.current?.terminate(); worker.current = null; setBusy(false); setNotice(message);
+      worker.current?.terminate(); worker.current = null; setToolRequests([]); toolRunner.current = null; setBusy(false); setNotice(message);
       void remember('failure', failureText({ model: label, error: message, request: text }));
       const current = runsRef.current.find(r => r.id === runId);
       if (current) { const failed: Run = { ...current, status: 'failed', completedAt: now(), steps: current.steps.map(s => ['running', 'assigned', 'queued', 'pending'].includes(s.status) ? { ...s, status: 'cancelled' } : s) }; updateRun(failed); void persistRun(failed).catch(e => setNotice(errorText(e))); }
     };
     try {
+      const tools = activeTools({ settings, mcp, knowledge, search: retrieve, personaTools: persona.tools });
+      setToolRequests([]);
+      toolRunner.current = async (request, allowed) => {
+        if (!worker.current || !runsRef.current.some(r => r.id === request.runId && r.status === 'running')) return;
+        const spec = tools.find(t => t.name === request.tool);
+        const controller = new AbortController(); toolAbort.current = controller; setToolRunning(true);
+        try {
+          if (!allowed) throw new Error('Tool call declined by the user.');
+          if (!spec) throw new Error('This tool is not part of the configured workflow.');
+          const value = await spec.run(request.args, controller.signal);
+          const output = typeof value === 'string' ? value : value.output;
+          const summary = typeof value === 'string' ? value.slice(0, 160) : value.summary;
+          patchMessage(session.id, reply.id, m => ({ tools: [...(m.tools ?? []), { tool: request.tool, args: request.args, summary, ok: true }] }));
+          worker.current?.postMessage({ type: 'tool_result', id: request.id, output });
+        } catch (e) {
+          const message = errorText(e);
+          patchMessage(session.id, reply.id, m => ({ tools: [...(m.tools ?? []), { tool: request.tool, args: request.args, summary: message, ok: false }] }));
+          worker.current?.postMessage({ type: 'tool_result', id: request.id, output: '', error: message });
+        } finally { toolAbort.current = null; setToolRunning(false); setToolRequests(q => q.filter(r => r.id !== request.id)); }
+      };
       worker.current?.terminate(); worker.current = new Worker(new URL('./workers/swarm.worker.ts', import.meta.url), { type: 'module' });
       worker.current.onerror = () => fail('The browser worker stopped unexpectedly. Please retry.');
       worker.current.onmessage = (event: MessageEvent<WorkerEvent>) => {
         if (event.data.type === 'error') { fail(event.data.message); return; }
+        if (event.data.type === 'tool_request') { const request = event.data; setToolRequests(q => [...q, request]); return; }
         updateRun(event.data.run);
         if (event.data.type === 'done') {
           const done = event.data.run;
           void persistRun(done).catch(e => setNotice(errorText(e)));
           if (done.status === 'failed') { const why = done.steps.find(s => s.error)?.error || 'The run failed. Check your model and key in Settings.'; setNotice(why); void remember('failure', failureText({ model: label, error: why, request: text })); }
-          setBusy(false); worker.current?.terminate(); worker.current = null;
+          setBusy(false); worker.current?.terminate(); worker.current = null; setToolRequests([]); toolRunner.current = null;
           setStats(s => ({ latencyMs: s?.latencyMs ?? 0, tokensPerSecond: s?.tokensPerSecond ?? 0, tokens: done.tokens }));
           void charge(session.id, done.tokens); patchMessage(session.id, reply.id, { tokens: done.tokens }, true);
         }
@@ -693,11 +730,11 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // stage-candidate list is the deployment's funded ids only when the visitor is actually on
       // the free tier — a BYOK run stays on the visitor's own model for every stage.
       const stageCandidates = inference === 'free' ? deployment.free.models.filter(id => (deployment.free.providers[id] === 'huggingface-backend') === (connection.provider === 'huggingface-backend')) : [];
-      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, instructions: instructionText(), approvalGates: true });
+      worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: { ...requestConnection(connection, keys), interactionMode: workMode, maxTokens: effectiveOutput }, knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, instructions: taskInstructions(), approvalGates: true, tools: tools.map(t => ({ name: t.name, description: t.description })) });
     } catch (e) { fail(errorText(e)); }
   }
 
-  function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); worker.current?.postMessage({ type: 'cancel' }); }
+  function stop() { abortRef.current?.abort(new DOMException('Stopped by user', 'AbortError')); toolAbort.current?.abort(); setToolRequests([]); worker.current?.postMessage({ type: 'cancel' }); }
   /** Browser plan gates release the next phase; legacy managed-engine holds cannot grant access. */
   function approveRun(run?: Run) {
     if (run?.title === 'Execution engine') {
@@ -800,7 +837,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   async function clearAll() {
     setConfirm(null);
     try {
-      await clearWorkspaceData(); forgetKeys(); clearSessionSecrets(); setEngineKey(''); clearPipes(); setPipesState(loadPipes()); commitMemories([]); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents();
+      await clearWorkspaceData(); forgetKeys(); clearSessionSecrets(); setEngineKey(''); clearPipes(); setPipesState(loadPipes()); commitMemories([]); localStorage.removeItem('hb-rail'); localStorage.removeItem('hb-plan-token'); clearProviderStorage(); clearDiscovered(); setDiscovered({}); clearConnections(); clearSettings(); clearCustomAgents(); clearWorkingMemory();
       setMcpState([]); setSettingsState(loadSettings()); setPhotos([]); commitSessions([]); setCustom([]); setPersonaId(defaultPersonaId);
       runsRef.current = []; setRuns([]); ledgerRef.current = []; setLedger([]); setKnowledge([]); setActiveId(null);
       setBalance(b => computeBalance([], b.pool, b.source)); setFreeBalance(b => computeBalance([], b.pool, 'local', undefined, 'free'));
@@ -904,6 +941,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
             <button className="pane-divider" data-pane-divider {...dividerProps}><span /></button>
             <OutputPanel
               key={activeId ?? 'new'}
+              initialView={workMode === 'plan' ? 'execution' : 'preview'}
+              execution={{ runs: runs.filter(r => r.sessionId === activeId), messages: active?.messages ?? [], persona, connectors: mcp, secrets: knownSecrets, busy, onApprove: approveRun, onStop: stop }}
               content={previewContent}
               issue={previewIssue}
               onFinish={previewNeedsFinish ? () => void finishExistingPreview() : undefined}
@@ -920,7 +959,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         </div>}
         {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
-        {page === 'skills' && <div className="page"><div className="page-head"><div><h1>Agent Skills</h1><p>Reusable instructions for your agents. Read, import, edit, and enable the skills you want them to follow.</p></div></div><AgentSkills mcp={mcp} setMcp={setMcp} notify={setNotice} /></div>}
+        {page === 'skills' && <div className="page"><div className="page-head"><div><h1>Agent Skills</h1><p>Reusable instructions for your agents. Read and enable complete skill packages. Administrators manage repository imports.</p></div></div><AgentSkills mcp={mcp} setMcp={setMcp} notify={setNotice} /></div>}
         {page === 'apis' && <Suspense fallback={<div className="page" role="status">Loading API directory…</div>}><ApiDirectory webEnabled={settings.web.enabled} openConnectors={() => openConnectors('web')} onUse={text => { setDraft(text); setPage('workspace'); setNotice('API example added to the message box. Review it, then send when ready.'); }} /></Suspense>}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
         {page === 'settings' && <Settings backends={deployment.backends} connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} storage={deployment.storage} engineKey={engineKey} setEngineKey={value => { saveEngineKey(value); setEngineKey(value); }} />}
@@ -937,6 +976,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       removeDocument={id => { void storage.removeKnowledge(id).then(() => setKnowledge(k => k.filter(x => x.id !== id))).catch(e => setNotice(errorText(e))); }}
       notify={setNotice}
     />
+    {toolRequests[0] && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="workflow-tool-title"><h2 id="workflow-tool-title">Review workflow tool call</h2><p>The agent requests <strong>{toolRequests[0].tool}</strong>. Approve this specific request to execute it through its configured connector.</p><pre className="skill-body">{redactSecrets(JSON.stringify(toolRequests[0].args, null, 2), knownSecrets).text}</pre><div className="row gap"><button className="button primary" disabled={toolRunning} onClick={() => void toolRunner.current?.(toolRequests[0], true)}>Approve tool call</button><button className="button" disabled={toolRunning} onClick={() => void toolRunner.current?.(toolRequests[0], false)}>Decline</button><button className="button" onClick={stop}>Stop workflow</button></div></section></div>}
     {planPrompt && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="plan-title">
       <h2 id="plan-title">{planPrompt.label} is on the paid plan.</h2>
       <p>{deployment.paid.enabled ? 'Plan models run on this deployment\u2019s own keys and draw from a plan allowance. If you have subscribed, paste the access token from your welcome message in Settings and the plan models unlock straight away.' : 'The operator has listed this model for the paid plan, but checkout is not open on this deployment yet. The free tier and your own keys work as usual.'}</p>

@@ -108,8 +108,8 @@ test('the admin API lists the lane, parks leftover keys apart, says what is plan
   await withServer([createAdmin({ db, env, settings, log: () => {} })], async url => {
     const cookie = await login(url);
     const config = await (await call(url, '/api/admin/config', { cookie })).json();
-    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'google', 'groq', 'huggingface-backend', 'openai', 'xai']);
-    assert.ok(config.providers.every(p => p.backend === true));
+    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'google', 'groq', 'huggingface', 'huggingface-backend', 'openai', 'openrouter', 'xai']);
+    assert.ok(config.providers.every(p => p.backend === true || ['openrouter', 'huggingface'].includes(p.provider)));
     // Only a dashboard-stored leftover is offered for removal; an environment key has no row at all.
     assert.deepEqual(config.retired.map(p => p.provider), ['venice']);
     assert.deepEqual(config.planned, []);

@@ -574,3 +574,28 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .api-directory-result pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font: 11.5px/1.5 var(--mono); background: var(--panel-2); padding: 10px; border-radius: 5px; }
 .api-directory-pagination { justify-content: center; }
 @media (max-width: 700px) { .api-directory-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Consolidated workspace controls and observable execution. */
+.interaction-mode { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; white-space: nowrap; }
+.unified-model-picker .model-trigger { max-width: min(560px, 100%); }
+.unified-model-picker .model-menu { width: min(540px, calc(100vw - 28px)); max-height: min(620px, 75vh); overflow-y: auto; }
+.model-menu-actions { padding: 10px; position: sticky; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); }
+.provider-registry { display: grid; gap: 12px; }
+.provider-key-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.hub-skill { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.hub-skill summary { cursor: pointer; font-weight: 600; }
+.hub-skill summary small { display: block; font-weight: 400; color: var(--muted); }
+.execution-panel { height: 100%; overflow-y: auto; padding: 18px; }
+.execution-panel h2 { font-size: 16px; }
+.execution-panel h3 { margin: 20px 0 10px; }
+.execution-panel .panel-head { flex-wrap: wrap; align-items: start; }
+.execution-run { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin: 10px 0; overflow-wrap: anywhere; }
+.execution-steps { padding-left: 22px; }
+.execution-steps li { border-left: 2px solid var(--line); padding: 8px 12px; margin-top: 8px; }
+.execution-panel .skill-body, .hub-skill .skill-body { max-height: 400px; overflow: auto; white-space: pre-wrap; }
+@media (max-width: 700px) {
+  .unified-model-picker { min-width: 0; width: 100%; }
+  .unified-model-picker .model-trigger { width: 100%; }
+  .unified-model-picker .model-trigger > span:first-of-type { flex-shrink: 0; }
+  .execution-panel { padding: 12px; }
+}
