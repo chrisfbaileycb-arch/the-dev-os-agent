@@ -1,7 +1,7 @@
 import { sessionSecret, setSessionSecret } from './sessionSecrets';
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'nvidia' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'huggingface-backend' | 'nvidia' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -33,6 +33,7 @@ export const providers: Record<Provider, ProviderInfo> = {
   // No flagship on purpose: HF's free credit is small, so a new token starts on the first,
   // low-compute seed rather than on the strongest model it could reach.
   huggingface: { name: 'Hugging Face', tier: 'Open models', endpoint: 'https://router.huggingface.co/v1', models: [] },
+  'huggingface-backend': { name: 'Hugging Face backend', tier: 'Optional backend', endpoint: 'https://router.huggingface.co/v1', models: [] },
   nvidia: { name: 'NVIDIA NIM', tier: 'Hosted', endpoint: 'https://integrate.api.nvidia.com/v1', models: [] },
   // Managed hosted route. The endpoint is intentionally empty in the browser: the server pins
   // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.

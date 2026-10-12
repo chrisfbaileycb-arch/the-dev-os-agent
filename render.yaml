@@ -122,7 +122,13 @@ services:
         value: "0"
       - key: MANAGED_MODEL_COST_BOUNDS_JSON
         value: "[]"
-      # There is no longer a switch for US-only funding: the server funds only the backend lane
+      - key: US_BACKEND_ENABLED
+        value: "true"
+      - key: HF_BACKEND_ENABLED
+        value: "true"
+      # Optional HF_BACKEND_API_KEY belongs in Render or Admin when owner funding is approved.
+      # Personal-key usage does not need it. Experiment's HF_TOKEN is never inherited here.
+      # Backend availability switches do not override the funding stop or USD reservations.
       # (OpenAI, Anthropic, Google, Groq, xAI; see server/providerRegistry.mjs). Add those keys, and pick
       # which of their models are free or paid, in the admin dashboard. Every other provider is
       # used with a key the visitor types into the browser.

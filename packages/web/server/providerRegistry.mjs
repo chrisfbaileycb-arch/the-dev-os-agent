@@ -25,6 +25,7 @@
 
 /** @typedef {{ id: string, name: string, hq: string, kind: 'direct'|'cloud'|'host'|'relay'|'local'|'custom', integrated: boolean, retention: 'unverified'|'verified', verifiedOn: string|null, source: string|null, note?: string }} ProviderRecord */
 
+import { backendEnabled, HF_BACKEND_ID } from './backends.mjs';
 const unchecked = { retention: 'unverified', verifiedOn: null, source: null };
 
 /** @type {ProviderRecord[]} */
@@ -61,6 +62,8 @@ export const REGISTRY = [
     note: 'US company, but it routes to many upstream hosts, including non-US ones. Experiment lane. Not Shield and not the free tier.' },
   { id: 'huggingface', name: 'Hugging Face', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
     note: 'Inference Providers router at router.huggingface.co. Experiment lane. Your key. Not Shield and not the free tier.' },
+  { id: HF_BACKEND_ID, name: 'Hugging Face backend', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
+    note: 'Optional owner-configured router or dedicated endpoint. Separate credential and availability switch. Not Shield; budget and tier approval are still required for funding.' },
   { id: 'cohere', name: 'Cohere', hq: 'CA', kind: 'direct', integrated: true, ...unchecked },
   { id: 'venice', name: 'Venice', hq: 'unknown', kind: 'direct', integrated: true, ...unchecked },
   { id: 'vercel', name: 'Vercel AI Gateway', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
@@ -96,7 +99,7 @@ export const KEY_LANE_IDS = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 /** Experiment lane. Own keys. Never Shield, never the funded free tier. */
 export const EXPERIMENT_IDS = ['openrouter', 'huggingface'];
 
-const BACKEND_IDS = KEY_LANE_IDS;
+const BACKEND_IDS = [...KEY_LANE_IDS, HF_BACKEND_ID];
 
 let laneEnforced = true;
 /**
@@ -121,6 +124,6 @@ export function experimentProviders() {
 }
 
 /** Backend provider ids. With `onlyIntegrated` (the default) only the ones the proxy can route to today. */
-export function backendProviders({ onlyIntegrated = true } = {}) {
-  return REGISTRY.filter(r => isBackendProvider(r.id) && (!onlyIntegrated || r.integrated)).map(r => r.id);
+export function backendProviders({ onlyIntegrated = true, env = process.env } = {}) {
+  return REGISTRY.filter(r => isBackendProvider(r.id) && backendEnabled(r.id, env) && (!onlyIntegrated || r.integrated)).map(r => r.id);
 }

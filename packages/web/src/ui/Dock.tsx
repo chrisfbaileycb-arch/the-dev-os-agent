@@ -15,6 +15,7 @@ import type { PipeSettings } from '../lib/pipes';
 import ModelPicker from './ModelPicker';
 import { GithubMark } from './GithubMark';
 import { iconFor } from './icons';
+import { defaultBackends, type BackendAvailability, type Lane } from '../lib/modelLanes';
 
 // The prompt dock: a solid bar pinned to the bottom of the conversation, above the status bar,
 // with everything a message needs within one reach — how you are working, agent, model,
@@ -33,6 +34,7 @@ export type RunMode = 'chat' | Workflow;
 export interface Attached { name: string; content: string; }
 
 export interface DockProps {
+  backends?: BackendAvailability;
   draft: string; setDraft: (v: string) => void;
   workMode: WorkMode; setWorkMode: (m: WorkMode) => void;
   plan: Workflow; setPlan: (w: Workflow) => void;
@@ -61,6 +63,8 @@ const MODE_ICONS: Record<WorkMode, typeof MessageSquare> = { chat: MessageSquare
 const SEND_LABEL: Record<WorkMode, string> = { chat: 'Send', build: 'Build', plan: 'Start plan' };
 
 export default function Dock(p: DockProps) {
+  const backends = p.backends ?? defaultBackends;
+  const lanes: Lane[] = [...(backends.us ? ['us' as const] : []), ...(backends.huggingface ? ['hf' as const] : []), 'experiment', 'own'];
   const [dragging, setDragging] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -127,7 +131,7 @@ export default function Dock(p: DockProps) {
         </select><ChevronDown size={12} /></label>}
         {p.workMode !== 'build' && <button className="chip-button" onClick={p.openRoster} title={p.workMode === 'plan' ? 'Choose the agent that leads the plan' : 'Choose an agent'} disabled={p.busy}><PersonaIcon size={13} strokeWidth={1.75} /><span className="chip-label">{p.persona.name}</span><ChevronDown size={12} /></button>}
         {/* Three groups: Shield chat models, the experiment lane, and a model on this machine. */}
-        {(['us', 'experiment', 'own'] as const).map(lane => <ModelPicker key={lane} lane={lane} provider={p.provider} onOpenSettings={p.openSettings} model={p.model} inference={p.inference} free={p.free} paid={p.paid} labels={p.labels} reach={p.reach} keyed={p.keyed} discovered={p.discovered} discovering={p.discovering} pipes={p.pipes} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} onNeedsPlan={p.modelNeedsPlan} onDiscover={p.discover} />)}
+        {lanes.map(lane => <ModelPicker key={lane} lane={lane} provider={p.provider} onOpenSettings={p.openSettings} model={p.model} inference={p.inference} free={p.free} paid={p.paid} labels={p.labels} reach={p.reach} keyed={p.keyed} discovered={p.discovered} discovering={p.discovering} pipes={p.pipes} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} onNeedsPlan={p.modelNeedsPlan} onDiscover={p.discover} />)}
         <button className={p.connectorCount ? 'chip-button live' : 'chip-button'} title="Connectors: GitHub, web, documents, MCP, model providers" onClick={p.openConnectors} disabled={p.busy}><Plug size={13} strokeWidth={1.75} /><span className="chip-label">Connectors</span>{p.connectorCount ? <em>{p.connectorCount}</em> : null}</button>
         {p.showEngine && <label className="chip-button engine-toggle" title="Run this task in Google's hosted Linux sandbox. Not a chat model. Off until its own key is saved.">
           <input type="checkbox" checked={Boolean(p.engineOn)} disabled={p.busy} onChange={e => p.setEngineOn?.(e.target.checked)} />

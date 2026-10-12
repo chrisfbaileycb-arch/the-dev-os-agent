@@ -1,6 +1,7 @@
 import { DEFAULT_FREE_POOL } from './catalog';
 import { workspaceId } from './store';
 import type { FreeTier } from './store';
+import { defaultBackends, type BackendAvailability } from './modelLanes';
 
 // What this particular deployment can do, read once at startup from /api/providers.
 //
@@ -41,7 +42,7 @@ export const emptyPaidTier: PaidTier = { enabled: false, configured: false, mode
 export interface HostStorage { durable: boolean; kind: 'postgres' | 'sqlite' | 'ephemeral' | 'unconfigured'; ledger: 'server' | 'browser'; }
 export const browserStorage: HostStorage = { durable: false, kind: 'unconfigured', ledger: 'browser' };
 
-export interface Deployment { free: FreeTier; paid: PaidTier; billing: Billing; gateway: string | null; gatewayCatalog: GatewayCatalog; ollamaBridge: string | null; reachable: boolean; storage: HostStorage; }
+export interface Deployment { free: FreeTier; paid: PaidTier; billing: Billing; gateway: string | null; gatewayCatalog: GatewayCatalog; ollamaBridge: string | null; reachable: boolean; storage: HostStorage; backends?: BackendAvailability; }
 
 /**
  * What a visitor sees whenever the zero-config tier cannot serve them: keys unset, provider
@@ -68,6 +69,7 @@ export const offlineDeployment: Deployment = {
   ollamaBridge: null,
   reachable: false,
   storage: browserStorage,
+  backends: defaultBackends,
 };
 
 /**
@@ -207,7 +209,7 @@ async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): 
   try {
     const response = await fetch('/api/providers', { credentials: 'same-origin', signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(timeoutMs)]) });
     if (!response.ok) return offlineDeployment;
-    const body = await response.json() as { free?: Partial<FreeTier>; paid?: unknown; billing?: unknown; gateway?: unknown; gatewayCatalog?: unknown; ollamaBridge?: string | null; storage?: unknown };
+    const body = await response.json() as { free?: Partial<FreeTier>; paid?: unknown; billing?: unknown; gateway?: unknown; gatewayCatalog?: unknown; ollamaBridge?: string | null; storage?: unknown; backends?: Partial<BackendAvailability> };
     const free = body.free ?? {};
     return {
       reachable: true,
@@ -217,6 +219,7 @@ async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): 
       paid: paidFrom(body.paid),
       ollamaBridge: typeof body.ollamaBridge === 'string' ? body.ollamaBridge : null,
       storage: storageFrom(body.storage),
+      backends: { us: body.backends?.us !== false, huggingface: body.backends?.huggingface === true, hfMode: body.backends?.hfMode === 'endpoint' ? 'endpoint' : 'router', hfConfigured: body.backends?.hfConfigured === true, hfModels: Array.isArray(body.backends?.hfModels) ? body.backends.hfModels.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200).slice(0, 100) : [] },
       free: {
         enabled: free.enabled === true && Array.isArray(free.models) && free.models.length > 0,
         models: Array.isArray(free.models) ? free.models.filter((m): m is string => typeof m === 'string') : [],

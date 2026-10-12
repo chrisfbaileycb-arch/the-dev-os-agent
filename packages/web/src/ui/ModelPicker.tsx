@@ -98,28 +98,29 @@ export default function ModelPicker(p: ModelPickerProps) {
 
   // The deployment funds only US labs, so its free and plan groups belong to the US dropdown and
   // the own-key dropdown never lists them.
-  const managed = p.lane === 'us';
+  const managed = p.lane === 'us' || p.lane === 'hf';
+  const inLane = (id: string, providers: Record<string, string>) => (providers[id] === 'huggingface-backend') === (p.lane === 'hf');
   // Only the dropdown that owns the current model shows it; with no model chosen yet, both show their lane name.
   const holdsCurrent = laneOf(p.provider, p.inference) === p.lane && Boolean(p.model);
   /** Personal vendor groups require personal keys; managed plan models use a separate group. */
   const reachable = (provider: Provider) => p.keyed.has(provider);
   const nameFor = (id: string) => p.labels[id] ?? p.free.labels[id] ?? findModel(id)?.label ?? id;
-  const freeModels = useMemo<ModelChoice[]>(() => rankChoices(managed && p.free.enabled ? p.free.models.map(id => ({ id, label: nameFor(id) })) : []), [managed, p.free.enabled, p.free.models, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
-  const paidModels = useMemo<ModelChoice[]>(() => rankChoices(managed && p.reach.credits ? p.paid.models.map(id => ({ id, label: p.paid.labels[id] ?? nameFor(id) })) : []), [managed, p.reach.credits, p.paid.models, p.paid.labels, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
+  const freeModels = useMemo<ModelChoice[]>(() => rankChoices(managed && p.free.enabled ? p.free.models.filter(id => inLane(id, p.free.providers)).map(id => ({ id, label: nameFor(id) })) : []), [managed, p.lane, p.free.enabled, p.free.models, p.free.providers, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
+  const paidModels = useMemo<ModelChoice[]>(() => rankChoices(managed && p.reach.credits ? p.paid.models.filter(id => inLane(id, p.paid.providers)).map(id => ({ id, label: p.paid.labels[id] ?? nameFor(id) })) : []), [managed, p.lane, p.reach.credits, p.paid.models, p.paid.providers, p.paid.labels, p.labels]); // eslint-disable-line react-hooks/exhaustive-deps
   const selected = (id: string) => p.model.toLowerCase() === id.toLowerCase();
   const badge = payLabel(p.inference);
 
   const [pickedTab, setPickedTab] = useState<'ready' | 'extended' | null>(null);
   const [pins, setPins] = useState<string[]>(() => loadPins());
   const experiment = p.lane === 'experiment';
-  const ORDER: Provider[] = experiment ? ['openrouter', 'huggingface'] : BASE_ORDER;
+  const ORDER: Provider[] = experiment ? ['openrouter', 'huggingface'] : p.lane === 'hf' ? ['huggingface-backend'] : BASE_ORDER;
 
   // Keyed vendors first, in a fixed order, then the rest as previews of what a key would unlock.
   const vendors = useMemo(() => {
     const shownPipe = (id: Provider) => pipeEnabled(id, p.pipes);
     const order = providersInLane(ORDER, p.lane);
     const keyed = order.filter(id => p.keyed.has(id) && shownPipe(id));
-    const unkeyed = order.filter(id => !p.keyed.has(id) && shownPipe(id) && !providers[id].keyless && (experiment || catalog.some(m => m.provider === id) || providers[id].models.length > 0));
+    const unkeyed = order.filter(id => !p.keyed.has(id) && shownPipe(id) && !providers[id].keyless && (experiment || p.lane === 'hf' || catalog.some(m => m.provider === id) || providers[id].models.length > 0));
     return [...keyed, ...unkeyed].map(provider => {
       const credential = provider === p.provider && p.reach.token?.trim() ? p.reach.token : p.reach.keys[provider];
       const fingerprint = keyFingerprint(provider === 'ollama' ? p.pipes.ollamaUrl + (credential ?? '') : credential);
@@ -183,7 +184,7 @@ export default function ModelPicker(p: ModelPickerProps) {
     const providerName = providers[provider].name;
     const unlocked = reachable(provider);
     const busy = p.discovering.has(provider);
-    const ordered = provider === 'huggingface' ? [...list].sort((a, b) => Number(pins.includes(b.id)) - Number(pins.includes(a.id))) : list;
+    const ordered = (provider === 'huggingface' || provider === 'huggingface-backend') ? [...list].sort((a, b) => Number(pins.includes(b.id)) - Number(pins.includes(a.id))) : list;
     return <div key={`${provider}-${sectionType}`} className="model-group">
       <span className="model-group-label"><KeyRound size={11} strokeWidth={2} />{providerName} {providers[provider].keyless ? (live ? `· ${list.length.toLocaleString()} installed` : '· local') : unlocked ? (live ? `· ${list.length.toLocaleString()} on your key` : '· key active') : '· bring your key'}
         {unlocked && <button type="button" className="model-refresh" title={busy ? 'Reading the live list…' : 'Re-read the live model list'} aria-label={`Refresh ${providerName} models`} disabled={busy} onClick={e => { e.stopPropagation(); p.onDiscover(provider); }}>{busy ? <LoaderCircle size={11} className="spin" /> : <RefreshCw size={11} />}</button>}
@@ -195,8 +196,8 @@ export default function ModelPicker(p: ModelPickerProps) {
       {ordered.slice(0, VISIBLE_CAP).map(m => {
         const local = Boolean(providers[provider].keyless);
         const badgeText = local ? 'Local' : m.free ? 'Free on your key' : 'Your key';
-        const pinned = provider === 'huggingface' && pins.includes(m.id);
-        return row(m, () => chooseVendor(provider, m), badgeText, local || Boolean(m.free), local ? 'runs on this machine' : experiment ? 'your key · not the free tier' : 'on your key', provider === 'huggingface' && unlocked ? () => togglePin(m.id) : undefined, pinned);
+        const pinned = (provider === 'huggingface' || provider === 'huggingface-backend') && pins.includes(m.id);
+        return row(m, () => chooseVendor(provider, m), badgeText, local || Boolean(m.free), local ? 'runs on this machine' : experiment ? 'your key · not the free tier' : 'on your key', (provider === 'huggingface' || provider === 'huggingface-backend') && unlocked ? () => togglePin(m.id) : undefined, pinned);
       })}
       {list.length > VISIBLE_CAP && <small className="model-group-note">{(list.length - VISIBLE_CAP).toLocaleString()} more — type to narrow the list.</small>}
     </div>;

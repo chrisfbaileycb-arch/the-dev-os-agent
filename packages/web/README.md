@@ -9,6 +9,13 @@ visitors can use their own provider keys. Read the [root README](../../README.md
 current funding defenses, cost-bound configuration and USB limitations, and
 [Render setup](../../docs/render-setup.md) for owner access and deployment details.
 
+Admin → Backend connections controls the US group and a separate optional Hugging Face
+backend. The HF connection accepts its router or an existing official dedicated chat endpoint,
+with an owner-configured model name. It has its own `HF_BACKEND_API_KEY`; Experiment's
+`HF_TOKEN` is never reused. Availability switches block personal-key and managed traffic without
+deleting keys. The router uses a provider catalog; dedicated model lists are explicitly configured.
+Hub repositories are model files, not a running inference service. See the root README for setup.
+
 ## Execution and storage
 
 - The tool-enabled chat loop permits three model requests and two tool calls per message. Each workflow has five

@@ -10,13 +10,14 @@ import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
 import type { Balance, FreeTier, LedgerEntry, PlanReading } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
-import { EXPERIMENT_SUBTITLE } from '../lib/modelLanes';
+import { defaultBackends, EXPERIMENT_SUBTITLE, type BackendAvailability } from '../lib/modelLanes';
 import { testLocalEndpoint } from '../lib/localNetwork';
 import type { HostStorage } from '../lib/deployment';
 import ThemePicker from './ThemePicker';
 import type { ThemeChoice } from '../lib/theme';
 
 export interface SettingsProps {
+  backends?: BackendAvailability;
   connection: Connection; setConnection: (c: Connection) => void;
   keys: Keyring; setKeys: (next: Keyring) => void; keyed: Set<Provider>;
   /** What each connected key reaches, read live from its provider; the same lists the dock shows. */
@@ -37,8 +38,9 @@ export interface SettingsProps {
 }
 
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
-const BYOK_PROVIDERS: Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
+const US_BYOK_PROVIDERS: Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
+  'huggingface-backend': 'hf_… scoped for inference',
   openai: 'sk-…',
   anthropic: 'sk-ant-…',
   google: 'Your Google AI Studio key',
@@ -47,8 +49,10 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
 };
 
 export default function Settings(p: SettingsProps) {
+  const backends = p.backends ?? defaultBackends;
+  const BYOK_PROVIDERS: Provider[] = [...(backends.us ? US_BYOK_PROVIDERS : []), ...(backends.huggingface ? ['huggingface-backend' as const] : [])];
   const c = p.connection;
-  const provider: Provider = BYOK_PROVIDERS.includes(c.provider as Provider) ? c.provider as Provider : 'openai';
+  const provider: Provider = BYOK_PROVIDERS.includes(c.provider as Provider) ? c.provider as Provider : BYOK_PROVIDERS[0] ?? 'openai';
   const inference = c.inference === 'free' ? 'free' : c.inference === 'credits' ? 'credits' : 'byok';
   const hasToken = Boolean(c.serverAccessToken?.trim());
   const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch, mode: 'remote' });
@@ -134,7 +138,7 @@ export default function Settings(p: SettingsProps) {
             </div>
             <p className="help" role="status">{p.planChecking ? 'Verifying your plan…' : p.subscription ? `${p.subscription.plan.name} verified · ${p.subscription.pool.toLocaleString()} credits per month · up to ${p.subscription.plan.maxOutputTokens.toLocaleString()} output tokens per reply.` : p.planError || 'Enter your individual plan token to verify its tier and allowance.'}</p>
           </> : <>
-            <p className="help">Orator sends requests through its protected gateway. Select the provider you already use and enter its key — that is all. It starts on the provider's flagship model and reads the live catalog by itself; change the model here or from the dropdown on the prompt bar whenever you like. Your key is used only for that provider and is never bundled into the app.</p>
+            <p className="help">Select an enabled backend and enter your personal key. Requests go through this app's proxy to that backend. Select an available model here or from the prompt bar. Your key is used only for the selected backend and is never bundled into the app.</p>
             <details className="free-keys">
               <summary>No key yet? Get a free one in a few minutes</summary>
               <p className="help">Each of these is free from a US company. Your own free key comes with its own limits, so it keeps working when the shared free tier is busy.</p>
@@ -151,7 +155,7 @@ export default function Settings(p: SettingsProps) {
               </ul>
             </details>
             <div className="form-grid">
-              <label>Provider<select value={provider} disabled={p.busy} onChange={e => pickProvider(e.target.value as Provider)}>{BYOK_PROVIDERS.map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
+              <label>Provider<select value={provider} disabled={p.busy || !BYOK_PROVIDERS.length} onChange={e => pickProvider(e.target.value as Provider)}>{!BYOK_PROVIDERS.length && <option value="openai">Backends switched off by the owner</option>}{BYOK_PROVIDERS.map(id => <option key={id} value={id}>{providers[id].name}</option>)}</select></label>
               <label>API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={c.provider === provider ? c.token || p.keys[provider] || '' : p.keys[provider] || ''} placeholder={KEY_HINTS[provider]} onChange={e => setKey(provider, e.target.value)} /></label>
               <label className="grow">Model <small className="muted">(optional — starts on {providers[provider].flagship ?? 'the strongest model found'})</small><span className="row">
                 <select aria-label="Preferred model" value={selectedInChoices ? c.model : ''} disabled={p.busy || choices.length === 0} onChange={e => pickModel(e.target.value)}>
@@ -162,7 +166,8 @@ export default function Settings(p: SettingsProps) {
                 <button className="button primary small" disabled={p.busy || checking || !(c.token || p.keys[provider])} onClick={() => p.discover(provider)}>{checking ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}{live ? 'Refresh' : 'Discover'}</button>
               </span></label>
             </div>
-            {live && !live.error && <p className="help">{choices.length.toLocaleString()} models this {providers[provider].name} key can call, read {new Date(live.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. The same list is in the chat window.</p>}
+            {provider === 'huggingface-backend' && <p className="help">{backends.hfMode === 'endpoint' ? 'This connection uses the owner-configured dedicated Hugging Face endpoint. Its model list is configured by the owner; listing it does not validate your token.' : 'This connection uses Hugging Face Inference Providers. Uploading a model repository alone does not make it available through the router.'} Use a token scoped for inference on your chosen models. Your personal key stays in page memory.</p>}
+            {live && !live.error && <p className="help">{choices.length.toLocaleString()} {provider === 'huggingface-backend' && backends.hfMode === 'endpoint' ? 'configured endpoint models' : `models this ${providers[provider].name} key can call`}, read {new Date(live.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. The same list is in the chat window.</p>}
             {!live?.error && !choices.length && <p className="help">{checking ? 'Reading the models this key can call…' : 'Enter a key. The list is only the models that key can call.'}</p>}
             {live?.error && <p className="help" role="alert">Could not read the live list: {live.error}.</p>}
           </>}

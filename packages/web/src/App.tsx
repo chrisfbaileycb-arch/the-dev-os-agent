@@ -692,7 +692,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // worker cannot read it, so an id alone would silently lose the lead the user chose. The
       // stage-candidate list is the deployment's funded ids only when the visitor is actually on
       // the free tier — a BYOK run stays on the visitor's own model for every stage.
-      const stageCandidates = inference === 'free' ? deployment.free.models : [];
+      const stageCandidates = inference === 'free' ? deployment.free.models.filter(id => (deployment.free.providers[id] === 'huggingface-backend') === (connection.provider === 'huggingface-backend')) : [];
       worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: { ...requestConnection(connection, keys), maxTokens: effectiveOutput }, knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, instructions: instructionText(), approvalGates: true });
     } catch (e) { fail(errorText(e)); }
   }
@@ -879,6 +879,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
               <div ref={endRef} />
             </div>
             <Dock
+              backends={deployment.backends}
               draft={draft} setDraft={setDraft} workMode={workMode} setWorkMode={chooseWorkMode} plan={plan} setPlan={choosePlan}
               persona={persona} openRoster={() => setRosterOpen(true)}
               attachments={attachments} photos={photos} addFiles={f => void addFiles(f)}
@@ -922,8 +923,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
         {page === 'skills' && <div className="page"><div className="page-head"><div><h1>Agent Skills</h1><p>Reusable instructions for your agents. Read, import, edit, and enable the skills you want them to follow.</p></div></div><AgentSkills mcp={mcp} setMcp={setMcp} notify={setNotice} /></div>}
         {page === 'apis' && <Suspense fallback={<div className="page" role="status">Loading API directory…</div>}><ApiDirectory webEnabled={settings.web.enabled} openConnectors={() => openConnectors('web')} onUse={text => { setDraft(text); setPage('workspace'); setNotice('API example added to the message box. Review it, then send when ready.'); }} /></Suspense>}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
-        {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} storage={deployment.storage} engineKey={engineKey} setEngineKey={value => { saveEngineKey(value); setEngineKey(value); }} />}
-        {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} />}
+        {page === 'settings' && <Settings backends={deployment.backends} connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} storage={deployment.storage} engineKey={engineKey} setEngineKey={value => { saveEngineKey(value); setEngineKey(value); }} />}
+        {page === 'admin' && <Admin notify={setNotice} onSignedIn={setAdminActive} onConfigChanged={() => { void loadDeployment().then(setDeployment); }} />}
       </div>
       <StatusBar outputLimit={effectiveOutput} planName={subscription?.plan.name} paymentMode={inference} localModel={connection.provider === 'ollama'} model={label} tier={tierLabel} mode={payLabel(inference)} stats={stats} balance={activeBalance} freeTier={inference === 'free'} backgroundWorker={backgroundWorker} busy={busy} online={online} synced={serverReachable} ledger={deployment.storage.ledger} />
     </div>

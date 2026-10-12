@@ -9,7 +9,9 @@ import type { Provider } from './providers';
 //
 // The US list mirrors backendProviders() in server/providerRegistry.mjs.
 
-export type Lane = 'us' | 'own' | 'experiment';
+export type Lane = 'us' | 'hf' | 'own' | 'experiment';
+export interface BackendAvailability { us: boolean; huggingface: boolean; hfMode?: 'router' | 'endpoint'; hfConfigured?: boolean; hfModels?: string[]; }
+export const defaultBackends: BackendAvailability = { us: true, huggingface: false };
 
 export const US_LANE_PROVIDERS: readonly Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 export const EXPERIMENT_LANE_PROVIDERS: readonly Provider[] = ['openrouter', 'huggingface'];
@@ -23,9 +25,10 @@ export const isExperimentProvider = (provider: Provider | string | undefined): b
 
 export const providersInLane = (all: readonly Provider[], lane: Lane): Provider[] =>
   all.filter(id => {
+    if (lane === 'hf') return id === 'huggingface-backend';
     if (lane === 'us') return isUsProvider(id);
     if (lane === 'experiment') return isExperimentProvider(id);
-    return !isUsProvider(id) && !isExperimentProvider(id);
+    return id !== 'huggingface-backend' && !isUsProvider(id) && !isExperimentProvider(id);
   });
 
 /**
@@ -33,9 +36,10 @@ export const providersInLane = (all: readonly Provider[], lane: Lane): Provider[
  * A key run follows its provider. OpenRouter and Hugging Face are the experiment group.
  */
 export function laneOf(provider: Provider | undefined, inference: InferenceMode): Lane {
+  if (provider === 'huggingface-backend') return 'hf';
   if (inference === 'free' || inference === 'credits') return 'us';
   if (isExperimentProvider(provider)) return 'experiment';
   return isUsProvider(provider) ? 'us' : 'own';
 }
 
-export const LANE_LABEL: Record<Lane, string> = { us: 'Models', own: 'On this machine', experiment: 'Experiment' };
+export const LANE_LABEL: Record<Lane, string> = { us: 'Models', hf: 'Hugging Face', own: 'On this machine', experiment: 'Experiment' };

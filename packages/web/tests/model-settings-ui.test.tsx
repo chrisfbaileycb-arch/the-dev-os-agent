@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import ModelPicker, { type ModelPickerProps } from '../src/ui/ModelPicker';
 import Settings, { type SettingsProps } from '../src/ui/Settings';
+import Admin from '../src/ui/Admin';
 import StatusBar from '../src/ui/StatusBar';
 import Pricing from '../src/ui/Pricing';
 import { defaultConnection, emptyKeyring } from '../src/lib/providers';
@@ -23,6 +24,32 @@ function picker(patch: Partial<ModelPickerProps> = {}): ModelPickerProps {
   return { lane: 'us', model: '', inference: 'byok', provider: 'openai', free, paid, labels: {}, reach: { free, keys: emptyKeyring(), credits: false }, keyed: new Set(), discovered: {}, discovering: new Set(), pipes: defaultPipes(), onPick: vi.fn(), onOpenSettings: vi.fn(), onNeedsKey: vi.fn(), onNeedsPlan: vi.fn(), onDiscover: vi.fn(), ...patch };
 }
 function open() { act(() => (host.querySelector('.model-trigger') as HTMLButtonElement).click()); }
+
+it('Hugging Face managed models stay in their own backend menu', () => {
+  const hfFree = { ...free, models: ['us-model', 'hf-model'], providers: { 'us-model': 'openai', 'hf-model': 'huggingface-backend' }, labels: { 'us-model': 'US fixture', 'hf-model': 'HF fixture' } };
+  const props = picker({ lane: 'hf', provider: 'huggingface-backend', free: hfFree });
+  mount(<ModelPicker {...props} />); open();
+  expect(host.textContent).toContain('HF fixture'); expect(host.textContent).not.toContain('US fixture');
+  act(() => (host.querySelector('[role=option]') as HTMLButtonElement).click());
+  expect(props.onPick).toHaveBeenCalledWith('hf-model', 'free', 'huggingface-backend');
+});
+
+it('Settings offers HF without US providers when the owner switches US off', () => {
+  const props: SettingsProps = { backends: { us: false, huggingface: true, hfMode: 'endpoint' }, connection: defaultConnection('huggingface-backend'), setConnection: vi.fn(), keys: emptyKeyring(), setKeys: vi.fn(), keyed: new Set(), discovered: {}, discovering: new Set(), discover: vi.fn(), save: vi.fn(), forget: vi.fn(), balance: serverBalance(0, 0), freeBalance: serverBalance(0, 0), free: offlineDeployment.free, paid: offlineDeployment.paid, adminConfigured: true, openAdmin: vi.fn(), ledger: [], busy: false, canInstall: false, serverReachable: true, requestClear: vi.fn(), theme: 'light', setTheme: vi.fn(), pipes: defaultPipes(), setPipes: vi.fn() };
+  mount(<Settings {...props} />);
+  const select = [...host.querySelectorAll('select')].find(s => s.querySelector('option[value="huggingface-backend"]'))!;
+  expect([...select.options].map(o => o.value)).toEqual(['huggingface-backend']);
+  expect(host.textContent).toContain('listing it does not validate your token');
+});
+
+it('admin setup names the bootstrap variable and links to this service Environment', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ configured: false, authenticated: false, persistent: true, setup: true, source: 'none', storage: true, setupEnvironmentUrl: 'https://dashboard.render.com/web/srv-fixture123/env' })));
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(<Admin notify={vi.fn()} onSignedIn={vi.fn()} />));
+  expect(host.textContent).toContain('ADMIN_BOOTSTRAP_TOKEN');
+  expect(host.querySelector('a')?.getAttribute('href')).toBe('https://dashboard.render.com/web/srv-fixture123/env');
+  expect(host.textContent).toContain('After setup, remove that variable from Render');
+});
 
 describe('chat is selection-only and respects the connected funding lane', () => {
   it('both menus have no API-key fields and locked plan models are not selectable', () => {

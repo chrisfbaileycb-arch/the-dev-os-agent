@@ -8,6 +8,7 @@ import { modelsUrl, normalizeModelList } from './models.mjs';
 import { PROVIDER_META, TUNABLES } from './settings.mjs';
 import { loadVault, saveVault, getClientConfig } from './vault.mjs';
 import { REGISTRY, isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
+import { HF_BACKEND_ID, HF_ROUTER_BASE, hfEndpointModels } from './backends.mjs';
 import { accountProbe, keyShapeError } from './keyProbe.mjs';
 
 // The operator's dashboard: /api/admin/*.
@@ -79,6 +80,11 @@ export async function discoverForProvider(provider, env, fetchImpl = fetch) {
     if (!who.ok) throw new HttpError(who.status === 401 || who.status === 403 ? 401 : 502, who.status === 401 || who.status === 403 ? 'The provider rejected this key.' : `The provider answered HTTP ${who.status}.`);
   }
   const target = await resolveTarget(provider, '', env);
+  if (provider === HF_BACKEND_ID && target.base !== HF_ROUTER_BASE) {
+    const models = hfEndpointModels(env.HF_BACKEND_MODELS);
+    if (!models.length) throw new HttpError(400, 'Set the dedicated endpoint model IDs in Backend connections first.');
+    return models.map(id => ({ id, label: id }));
+  }
   const headers = { Accept: 'application/json', 'User-Agent': USER_AGENT };
   if (target.nativeAnthropic) { headers['x-api-key'] = key; headers['anthropic-version'] = ANTHROPIC_VERSION; }
   else if (provider === 'google') headers['x-goog-api-key'] = key;
@@ -141,7 +147,7 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
       // (from before the lane split) is listed apart, removable and otherwise inert: nothing funds
       // from it any more. An environment-sourced one has no row, since the dashboard cannot remove it.
       providers: rows.filter(p => p.backend),
-      retired: rows.filter(p => !p.backend && p.source === 'dashboard'),
+      retired: rows.filter(p => !p.backend && !isExperimentProvider(p.provider) && p.source === 'dashboard'),
       // Backend providers the registry has decided on but the proxy cannot route to yet, so the
       // dashboard says so instead of offering a key field that would do nothing.
       planned: REGISTRY.filter(r => isBackendProvider(r.id) && !r.integrated).map(r => ({ provider: r.id, name: r.name, note: r.note ?? '' })),
@@ -162,7 +168,7 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
     const path = new URL(req.url, 'http://admin').pathname;
     if (!path.startsWith('/api/admin/')) return false;
     try {
-      if (path === '/api/admin/status' && req.method === 'GET') { json(res, 200, { configured: configured(), authenticated: authenticated(req), persistent: Boolean(settings?.persistent), setup: canSetUp(), source: tokenSource(), storage: Boolean(settings?.persistent) }); return true; }
+      if (path === '/api/admin/status' && req.method === 'GET') { json(res, 200, { configured: configured(), authenticated: authenticated(req), persistent: Boolean(settings?.persistent), setup: canSetUp(), source: tokenSource(), storage: Boolean(settings?.persistent), setupEnvironmentUrl: /^srv-[a-z0-9]+$/.test(baseEnv.RENDER_SERVICE_ID ?? '') ? `https://dashboard.render.com/web/${baseEnv.RENDER_SERVICE_ID}/env` : null }); return true; }
       // Initial setup needs the operator's hosting credential. Origin checks alone do not
       // establish ownership. An atomic insert prevents concurrent password replacement.
       if (path === '/api/admin/setup' && req.method === 'POST') {
@@ -227,7 +233,7 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
         const body = await readBody(req, 16_384);
         const provider = typeof body.provider === 'string' ? body.provider : '';
         const experiment = isExperimentProvider(provider) || provider === 'antigravity';
-        if (experiment && !storage?.durable) throw new HttpError(409, 'This host forgets its database on restart. Keep this key in Settings on this browser. It is not written here.');
+        if ((experiment || provider === HF_BACKEND_ID) && !storage?.durable) throw new HttpError(409, 'This host forgets its database on restart. Keep this key in Settings on this browser. It is not written here.');
         if (typeof body.key === 'string' && body.key.trim()) {
           if (experiment) await settings.setExperimentKey(provider, body.key, { durable: true });
           else await settings.setKey(provider, body.key);

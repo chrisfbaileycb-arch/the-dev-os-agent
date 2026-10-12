@@ -14,6 +14,7 @@ existing service unless the service is managed through a Blueprint.
 
 1. Open Render > hey-buddy-web > Environment. Copy `ADMIN_BOOTSTRAP_TOKEN` using the
    dashboard's secret control. Do not put it in source code, a skill, a URL, or an issue.
+   Direct link: https://dashboard.render.com/web/srv-dahrsjad0e5s738lvfsg/env.
 2. Open https://hey-buddy-web.onrender.com/admin, enter the setup code, and choose your own
    password of at least 12 characters. Keep the password in your password manager.
 3. After successful setup, remove the bootstrap variable from Render. The stored password is
@@ -23,6 +24,19 @@ Without a configured bootstrap code or an existing `ADMIN_TOKEN`, admin setup is
 An existing environment `ADMIN_TOKEN` overrides a database password; direct-token operators
 manage that token in Render. `SETTINGS_SECRET` seals operator settings outside the database.
 Keep it stable across redeployments. Personal visitor keys stay in page memory and clear on reload.
+
+## Backends and naming
+
+Admin → Backend connections switches US providers and the optional Hugging Face backend
+independently. Hugging Face has its own `HF_BACKEND_API_KEY`; it never inherits `HF_TOKEN`
+from Experiment. A blank backend URL uses the HF router. Connect an already deployed custom
+chat model with its dedicated HF endpoint URL and exact endpoint model name; see the root README.
+Backend availability does not change the hosting funding stop or zero dollar budget.
+
+Render currently has one web service, `hey-buddy-web`, and the separate Postgres resource
+`signal-forge-test-db`. The database is not a second deployment of the app. This update does
+not rename the web service, public URL or GitHub repository. A later rename should verify the
+Render source-repository setting, public URL, `APP_ORIGIN`, and any configured OAuth callbacks.
 
 ## Workspace ownership
 

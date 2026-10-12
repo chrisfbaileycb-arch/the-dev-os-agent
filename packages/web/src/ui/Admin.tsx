@@ -11,18 +11,20 @@ import { filterChoices, isChatModel, type ModelChoice } from '../lib/modelChoice
 // have taken effect without opening a second tab.
 
 type Source = 'dashboard' | 'environment' | 'none';
-interface ProviderRow { provider: string; name: string; env: string; console: string | null; source: Source; hint: string; count: number; unreadable: boolean; backend?: boolean; }
+interface ProviderRow { provider: string; name: string; env: string; console: string | null; source: Source; hint: string; count: number; unreadable: boolean; backend?: boolean; enabled?: boolean; }
 /** A US backend provider the registry has decided on but the proxy cannot route to yet. */
 interface PlannedProvider { provider: string; name: string; note: string; }
-interface Tunable { name: string; kind: 'number' | 'boolean' | 'secret' | 'url'; label: string; source: Source; value: string; unreadable: boolean; }
+interface Tunable { name: string; kind: 'number' | 'boolean' | 'secret' | 'url' | 'text'; label: string; source: Source; value: string; unreadable: boolean; }
 interface TierEntry { id: string; provider: string; label?: string; }
 interface Tiers { mode: 'auto' | 'manual'; free: TierEntry[]; paid: TierEntry[]; warnings: string[]; }
 interface Published { free: { enabled: boolean; models: string[]; providers: Record<string, string>; labels: Record<string, string>; monthlyCredits: number; perHour: number }; paid: { enabled: boolean; configured: boolean; models: string[] }; }
 interface ExperimentSlot { provider: string; name: string; env: string; source: Source; hint: string; unreadable: boolean; }
 interface Config { fundingDisabled?: boolean; persistent: boolean; durable?: boolean; ledger?: 'browser' | 'server'; experiment?: ExperimentSlot[]; providers: ProviderRow[]; retired: ProviderRow[]; planned: PlannedProvider[]; tunables: Tunable[]; tunableSpecs: Record<string, { kind: string; label: string; min?: number; max?: number }>; tiers: Tiers; unreadable: string[]; published: Published; gateway: { discovered: boolean; count: number; free: number; error: string | null }; }
-interface Status { configured: boolean; authenticated: boolean; persistent: boolean; setup: boolean; source: Source; storage: boolean; }
+interface Status { configured: boolean; authenticated: boolean; persistent: boolean; setup: boolean; source: Source; storage: boolean; setupEnvironmentUrl?: string | null; }
 
-export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; }
+export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; onConfigChanged?: () => void; }
+
+const backendSetting = (name: string) => name === 'US_BACKEND_ENABLED' || name.startsWith('HF_BACKEND_');
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -59,7 +61,7 @@ export default function Admin(p: AdminProps) {
 
   async function run<T>(work: () => Promise<T>, done?: (result: T) => void) {
     setBusy(true);
-    try { const result = await work(); done?.(result); } catch (e) { p.notify(errorText(e)); } finally { setBusy(false); }
+    try { const result = await work(); done?.(result); p.onConfigChanged?.(); } catch (e) { p.notify(errorText(e)); } finally { setBusy(false); }
   }
   const applyConfig = (c: Config) => { setConfig(c); setTiers(t => t && dirty ? { ...t, warnings: c.tiers.warnings } : c.tiers); };
 
@@ -90,7 +92,7 @@ export default function Admin(p: AdminProps) {
     });
     setDirty(true);
   }
-  const keyedProviders = useMemo(() => (config?.providers ?? []).filter(r => r.source !== 'none' && !['cheaper-inference'].includes(r.provider)), [config]);
+  const keyedProviders = useMemo(() => (config?.providers ?? []).filter(r => r.source !== 'none' && r.enabled !== false && !['cheaper-inference'].includes(r.provider)), [config]);
 
   if (!status) return <div className="page"><p className="help"><LoaderCircle size={14} className="spin" /> Checking the dashboard…</p></div>;
 
@@ -109,7 +111,8 @@ export default function Admin(p: AdminProps) {
     <div className="page-head"><div><h1><ShieldCheck size={18} strokeWidth={1.75} /> Set up your dashboard</h1><p>Choose a password for this deployment. It is the only credential; store it somewhere safe.</p></div></div>
     <section className="panel" style={{ maxWidth: 460 }}>
       <h2>Create the admin password</h2>
-      <p className="help">Enter the owner's setup code from Render, then choose your password. The password is hashed before storage.</p>
+      <p className="help">Open your web service in Render, choose Environment, and reveal/copy ADMIN_BOOTSTRAP_TOKEN. Paste its value below, then choose your password. After setup, remove that variable from Render.</p>
+      {status.setupEnvironmentUrl && <p><a className="button small" href={status.setupEnvironmentUrl} target="_blank" rel="noreferrer">Open Render Environment <ExternalLink size={12} /></a></p>}
       <label>Setup code<input type="password" autoComplete="off" spellCheck={false} value={bootstrapToken} disabled={busy} onChange={e => setBootstrapToken(e.target.value)} /></label>
       <label>Password<input type="password" autoComplete="new-password" spellCheck={false} value={password} disabled={busy} onChange={e => setPassword(e.target.value)} /></label>
       <label>Repeat password<input type="password" autoComplete="new-password" spellCheck={false} value={passwordAgain} disabled={busy} onChange={e => setPasswordAgain(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && bootstrapToken && password.length >= 12 && password === passwordAgain) setUp(); }} /></label>
@@ -143,12 +146,26 @@ export default function Admin(p: AdminProps) {
     {config.unreadable.length > 0 && <div className="notice"><TriangleAlert size={13} /><span>Stored values for {config.unreadable.join(', ')} were sealed under a secret this server no longer has (ADMIN_TOKEN or SESSION_SECRET changed). Enter them again to reseal.</span></div>}
 
     <section className="panel">
+      <h2>Backend connections</h2>
+      <p className="help">Switch the US and Hugging Face connections independently. Off blocks both personal-key and managed traffic to that backend; keys and model picks are retained. Enabling a connection does not enable owner spending.</p>
+      <p className="help">Hugging Face uses its router when the URL is blank. For your own deployed chat model, enter its official dedicated endpoint URL and exact model name from the endpoint overview. The dedicated model list is owner-configured, not a live token check. Hub model files alone are not an inference service.</p>
+      <div className="form-grid">
+        {config.tunables.filter(t => backendSetting(t.name)).map(t => <label key={t.name}>{t.label}<span className="row gap">
+          {t.kind === 'boolean'
+            ? <select value={tunableDrafts[t.name] ?? t.value ?? ''} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))}><option value="">use hosting/default</option><option value="true">true</option><option value="false">false</option></select>
+            : <input type={t.kind === 'secret' ? 'password' : t.kind === 'url' ? 'url' : t.kind === 'text' ? 'text' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}
+          <button className="button small" disabled={busy || !(t.name in tunableDrafts)} onClick={() => saveTunable(t.name)}><Check size={12} /></button>
+        </span><small className="help">{t.unreadable ? 'Re-enter: sealed under an old secret.' : `${sourceLabel[t.source]} · ${t.name}`}</small></label>)}
+      </div>
+    </section>
+
+    <section className="panel">
       <div className="panel-head"><h2><KeyRound size={15} strokeWidth={1.75} /> Provider keys</h2><span className="pill">{config.providers.filter(r => r.source !== 'none').length} of {config.providers.length} connected</span></div>
-      <p className="help"><strong>These five keys are the backend and the visitor key list.</strong> OpenAI, Anthropic, Google, Groq, and xAI. A visitor can bring the same five. After a key is connected, the chat window lists only the models that key’s own endpoint returns. A key entered here is encrypted before it is stored and is never returned to any browser. It wins over the same variable in the hosting environment; remove it and the environment value applies again. <strong>Stack several keys</strong> by putting one per line.</p>
+      <p className="help"><strong>US providers and the optional Hugging Face backend.</strong> OpenAI, Anthropic, Google, Groq, and xAI share the US switch. Hugging Face has a separate switch, token and endpoint configuration above. Visitors can bring personal keys for enabled backends. Hugging Face is not a US-only or Shield route. Router catalogs come from the provider; dedicated Hugging Face model names are configured by the owner. Keys entered here are encrypted before storage and never returned to a browser. A dashboard value wins over the corresponding hosting variable. <strong>Stack several keys</strong> by putting one per line.</p>
       <div className="ledger-wrap"><table className="ledger admin-keys"><thead><tr><th>Provider</th><th>Status</th><th>Key</th><th></th></tr></thead><tbody>
         {config.providers.map(r => <tr key={r.provider}>
           <td><strong>{r.name}</strong><br /><small className="mono">{r.env}</small>{r.console && <> · <a href={r.console} target="_blank" rel="noreferrer" className="text-button">get a key <ExternalLink size={10} /></a></>}</td>
-          <td>{r.unreadable ? <span className="pill warn">Re-enter</span> : <span className={r.source === 'none' ? 'pill' : 'pill ok'}>{r.source === 'none' ? <CircleAlert size={11} /> : <Check size={11} />}{sourceLabel[r.source]}{r.hint ? ` ${r.hint}` : ''}</span>}</td>
+          <td>{r.enabled === false && <span className="pill">Backend off</span>}{r.unreadable ? <span className="pill warn">Re-enter</span> : <span className={r.source === 'none' ? 'pill' : 'pill ok'}>{r.source === 'none' ? <CircleAlert size={11} /> : <Check size={11} />}{sourceLabel[r.source]}{r.hint ? ` ${r.hint}` : ''}</span>}</td>
           <td><textarea rows={r.count > 1 ? 2 : 1} autoComplete="off" spellCheck={false} placeholder={r.source === 'none' ? 'Paste a key, or one per line to stack' : 'Paste a new key, or one per line to replace'} value={drafts[r.provider] ?? ''} disabled={busy} onChange={e => setDrafts(d => ({ ...d, [r.provider]: e.target.value }))} /></td>
           <td className="row gap"><button className="button primary small" disabled={busy || !(drafts[r.provider] ?? '').trim()} onClick={() => saveKey(r.provider)}><Check size={12} />Save</button>{r.source === 'dashboard' && <button className="button small" title="Remove the stored key" aria-label={`Remove ${r.name} key`} disabled={busy} onClick={() => removeKey(r.provider)}><Trash2 size={12} /></button>}</td>
         </tr>)}
@@ -204,10 +221,10 @@ export default function Admin(p: AdminProps) {
       <p className="help">Each plan includes the same published US provider models, personal keys, connectors, and local models. Give each subscriber a unique token in their tier’s list; remove it to revoke access. Credits are weighted usage units, not dollars. New checkout URLs must charge the displayed prices; old checkout links are not reused.</p>
       <p className="help">Numbers apply on the next request. A blank value removes the dashboard setting and the environment (or the built-in default) applies again.</p>
       <div className="form-grid">
-        {config.tunables.map(t => <label key={t.name}>{t.label}<span className="row gap">
+        {config.tunables.filter(t => !backendSetting(t.name)).map(t => <label key={t.name}>{t.label}<span className="row gap">
           {t.kind === 'boolean'
-            ? <select value={tunableDrafts[t.name] ?? t.value ?? ''} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))}><option value="">default (false)</option><option value="true">true</option><option value="false">false</option></select>
-            : <input type={t.kind === 'secret' ? 'password' : t.kind === 'url' ? 'url' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}
+            ? <select value={tunableDrafts[t.name] ?? t.value ?? ''} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))}><option value="">use hosting/default</option><option value="true">true</option><option value="false">false</option></select>
+            : <input type={t.kind === 'secret' ? 'password' : t.kind === 'url' ? 'url' : t.kind === 'text' ? 'text' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}
           <button className="button small" disabled={busy || !(t.name in tunableDrafts)} onClick={() => saveTunable(t.name)}><Check size={12} /></button>
         </span><small className="help">{t.unreadable ? 'Re-enter: sealed under an old secret.' : `${sourceLabel[t.source]} · ${t.name}`}</small></label>)}
       </div>

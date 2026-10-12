@@ -12,6 +12,30 @@ owner bootstrap protection, and `/api/health` monitoring. Owner-funded inference
 Visitors can use their own provider keys in Settings or an explicitly enabled local model server.
 Personal keys stay in page memory and clear on reload; never include them in prompts or skills.
 
+## Optional backends
+
+Admin → **Backend connections** has independent US and Hugging Face availability switches.
+The US group contains OpenAI, Anthropic, Google, Groq and xAI. Switching a group off blocks its
+personal-key and managed requests at the proxy; it retains stored keys and model selections.
+Availability does not enable owner spending or silently substitute a different backend.
+
+The separate `huggingface-backend` connection uses `HF_BACKEND_API_KEY`, never the Experiment
+tab's `HF_TOKEN`. `HF_BACKEND_ENABLED=true` makes it available; `US_BACKEND_ENABLED=false`
+disables the US group. These nonsecret switches can also be saved in Admin. Hugging Face stays
+outside Shield and is not a US-only routing guarantee. All funded calls still need tier approval,
+durable cost reservations and an enabled spending policy; this test host still has a zero budget.
+
+With `HF_BACKEND_BASE_URL` blank, it uses `https://router.huggingface.co/v1` and discovers the
+router's available models. This route does not request account-profile access. For an existing
+dedicated chat endpoint, set its official HTTPS `endpoints.huggingface.cloud` URL (with `/v1`)
+and put its exact endpoint model name in `HF_BACKEND_MODELS`. That list is owner-configured;
+listing it does not validate a token or invoke paid inference. Browser-supplied URLs cannot
+redirect this backend. Use a Hugging Face token scoped for the required inference route.
+
+An uploaded Hub repository alone is not a running inference endpoint. This update connects
+existing services; it does not download model weights or provision new GPU/endpoint hosting.
+OpenRouter and the original Hugging Face Experiment connection remain personal-key-only.
+
 ## xKiro Gateway & Discovery Protocol
 
 - **Dynamic discovery:** the server reads `GET {base}/models` at boot and refreshes its cached
@@ -24,8 +48,9 @@ Personal keys stay in page memory and clear on reload; never include them in pro
   Outbound requests use the gateway's canonical ID. A failed refresh retains the last good
   catalogue and retries after a minute; cached metadata is not a permanent price guarantee.
 - **Funding policy:** discovery is catalogue information, not permission to spend. The operator
-  backend currently permits OpenAI, Anthropic, Google, Groq and xAI. xKiro, OpenRouter and
-  Hugging Face are excluded from operator-funded pools. A provider's headquarters does not
+  US backend permits OpenAI, Anthropic, Google, Groq and xAI. The separate optional Hugging Face
+  backend requires an explicit switch, credential and approved tier/cost bounds; the Experiment
+  Hugging Face route, xKiro and OpenRouter remain excluded from funded pools. A provider's headquarters does not
   establish the model developer's nationality, processing region, or data-retention terms.
 - **Experimental isolation:** Experiment chat and discovery requests send
   `X-Forge-Is-Experimental: true`. The proxy also recognizes `experimental: true` metadata and

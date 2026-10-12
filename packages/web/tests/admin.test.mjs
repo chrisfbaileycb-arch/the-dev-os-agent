@@ -93,14 +93,14 @@ test('the dashboard is off without ADMIN_TOKEN and refuses a wrong token', async
   await withServer([createAdmin({ db, env: {}, settings, log: () => {} })], async url => {
     const status = await (await call(url, '/api/admin/status')).json();
     // Storage alone cannot offer initial setup without the operator bootstrap credential.
-    assert.deepEqual(status, { configured: false, authenticated: false, persistent: true, setup: false, source: 'none', storage: true });
+    assert.deepEqual(status, { configured: false, authenticated: false, persistent: true, setup: false, source: 'none', storage: true, setupEnvironmentUrl: null });
     assert.equal((await call(url, '/api/admin/config')).status, 503);
   });
   const env = { ADMIN_TOKEN: TOKEN };
   const s2 = await openSettings({ db, env });
   await withServer([createAdmin({ db, env, settings: s2, log: () => {} })], async url => {
     // With an environment token the setup route is closed for good and sign-in is the only way in.
-    assert.deepEqual(await (await call(url, '/api/admin/status')).json(), { configured: true, authenticated: false, persistent: true, setup: false, source: 'environment', storage: true });
+    assert.deepEqual(await (await call(url, '/api/admin/status')).json(), { configured: true, authenticated: false, persistent: true, setup: false, source: 'environment', storage: true, setupEnvironmentUrl: null });
     assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'another-long-password' }, origin: url })).status, 403);
     assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'wrong' }, origin: url })).status, 401);
     assert.equal((await call(url, '/api/admin/config')).status, 401);
@@ -122,7 +122,7 @@ test('only the owner bootstrap credential can create the initial password, once'
     assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password', bootstrapToken }, origin: 'https://elsewhere.example' })).status, 403);
     assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-long-enough-password', bootstrapToken }, origin: url })).status, 200);
     // Setting it closes setup and opens the dashboard with the password just chosen.
-    assert.deepEqual(await (await call(url, '/api/admin/status')).json(), { configured: true, authenticated: false, persistent: true, setup: false, source: 'dashboard', storage: true });
+    assert.deepEqual(await (await call(url, '/api/admin/status')).json(), { configured: true, authenticated: false, persistent: true, setup: false, source: 'dashboard', storage: true, setupEnvironmentUrl: null });
     assert.equal((await call(url, '/api/admin/setup', { method: 'POST', body: { token: 'a-second-password-choice' }, origin: url })).status, 403);
     assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'a-long-enough-password', bootstrapToken }, origin: url })).status, 200);
     assert.equal((await call(url, '/api/admin/login', { method: 'POST', body: { token: 'a-second-password-choice' }, origin: url })).status, 401);

@@ -16,6 +16,7 @@ import { createHash, randomBytes } from 'node:crypto';
 // source of truth and nothing for a UI catalogue to drift away from.
 
 import { isBackendLaneEnforced, isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
+import { backendEnabled } from './backends.mjs';
 /** Credits per 1,000 tokens. Mirrors CREDIT_WEIGHTS.fast in src/lib/catalog.ts. */
 export const FREE_WEIGHT = 0.5;
 
@@ -254,6 +255,7 @@ export const PROVIDER_KEY_VARS = {
   xkiro: 'XKIRO_API_KEY',
   aihubmix: 'AIHUBMIX_API_KEY',
   huggingface: 'HF_TOKEN',
+  'huggingface-backend': 'HF_BACKEND_API_KEY',
   nvidia: 'NVIDIA_API_KEY',
   'cheaper-inference': 'CHEAPER_INFERENCE_API_KEY',
   omniroute: 'OMNIROUTE_API_KEY',
@@ -355,7 +357,7 @@ const STATIC_FREE = [
 export function freeModels(env = process.env, discovered = discoveredXkiro, tiers = adminTiers) {
   // Not an option: the backend lane is the architecture, not a launch setting. It applies to the
   // operator's own dashboard entries too, so a non-lane entry is dropped rather than quietly funded.
-  return allFreeModels(env, discovered, tiers).filter(m => isBackendProvider(m.provider) && !isExperimentProvider(m.provider));
+  return allFreeModels(env, discovered, tiers).filter(m => isBackendProvider(m.provider) && backendEnabled(m.provider, env) && !isExperimentProvider(m.provider));
 }
 
 function allFreeModels(env, discovered, tiers) {
@@ -437,7 +439,7 @@ export function openRouterPool(env = process.env, discovered = discoveredOpenRou
  * would be a locked door with nothing behind it.
  */
 export function paidModels(env = process.env, tiers = adminTiers) {
-  return tiers.paid.filter(m => isBackendProvider(m.provider) && !isExperimentProvider(m.provider) && Boolean(freeKey(m, env).key));
+  return tiers.paid.filter(m => isBackendProvider(m.provider) && backendEnabled(m.provider, env) && !isExperimentProvider(m.provider) && Boolean(freeKey(m, env).key));
 }
 export function paidModel(id, env = process.env, tiers = adminTiers) {
   if (typeof id !== 'string') return undefined;
