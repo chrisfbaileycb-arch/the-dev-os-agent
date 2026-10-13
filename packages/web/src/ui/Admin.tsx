@@ -26,7 +26,12 @@ interface Status { configured: boolean; authenticated: boolean; persistent: bool
 
 export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; onConfigChanged?: () => void; }
 
-const backendSetting = (name: string) => name === 'US_BACKEND_ENABLED' || name.startsWith('HF_BACKEND_');
+/** The one backend switch the dashboard still exposes; Hugging Face's are gone from the UI. */
+const backendSetting = (name: string) => name === 'US_BACKEND_ENABLED';
+/** Retired tunables that stay in the registry (and the environment) but are never shown here. */
+const hiddenSetting = (name: string) => name.startsWith('HF_BACKEND_');
+/** The uniform key list: a fixed order and a fixed set, so the table never drifts by provider. */
+const ADMIN_PROVIDER_ORDER = ['groq', 'openai', 'anthropic', 'google', 'xai', 'openrouter'] as const;
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.';
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -95,6 +100,8 @@ export default function Admin(p: AdminProps) {
     setDirty(true);
   }
   const keyedProviders = useMemo(() => (config?.providers ?? []).filter(r => r.source !== 'none' && r.enabled !== false && !['cheaper-inference'].includes(r.provider)), [config]);
+  /** The provider keys table is a fixed, uniform list rather than whatever the registry happens to publish. */
+  const keyProviders = useMemo(() => ADMIN_PROVIDER_ORDER.flatMap(id => (config?.providers ?? []).filter(r => r.provider === id)), [config]);
 
   if (!status) return <div className="page"><p className="help"><LoaderCircle size={14} className="spin" /> Checking the dashboard…</p></div>;
 
@@ -144,13 +151,12 @@ export default function Admin(p: AdminProps) {
     </div>
     {config.fundingDisabled && <div className="notice"><ShieldCheck size={13} /><span>Owner-funded requests are disabled for this test deployment until dollar budgets and approved routes are configured. Personal session keys remain available.</span></div>}
     {!config.persistent && <div className="notice"><CircleAlert size={13} /><span>This server has no settings storage: values you enter apply until the next restart only. Set DATABASE_URL or a persistent DATA_FILE to keep them.</span></div>}
-    {config.durable === false && <div className="notice"><CircleAlert size={13} /><span>This host forgets its database on restart. The monthly free-tier number is counted in each browser. OpenRouter, Hugging Face, and the execution-engine key stay in Settings on that browser. They are not written here.</span></div>}
+    {config.durable === false && <div className="notice"><CircleAlert size={13} /><span>This host forgets its database on restart. The monthly free-tier number is counted in each browser. OpenRouter and the execution-engine key stay in Settings on that browser. They are not written here.</span></div>}
     {config.unreadable.length > 0 && <div className="notice"><TriangleAlert size={13} /><span>Stored values for {config.unreadable.join(', ')} were sealed under a secret this server no longer has (ADMIN_TOKEN or SESSION_SECRET changed). Enter them again to reseal.</span></div>}
 
     <section className="panel">
       <h2>Backend connections</h2>
-      <p className="help">Switch the US and Hugging Face connections independently. Off blocks both personal-key and managed traffic to that backend; keys and model picks are retained. Enabling a connection does not enable owner spending.</p>
-      <p className="help">Hugging Face uses its router when the URL is blank. For your own deployed chat model, enter its official dedicated endpoint URL and exact model name from the endpoint overview. The dedicated model list is owner-configured, not a live token check. Hub model files alone are not an inference service.</p>
+      <p className="help">One switch for the US provider group. Off blocks both personal-key and managed traffic to it; keys and model picks are retained. Enabling a connection does not enable owner spending.</p>
       <div className="form-grid">
         {config.tunables.filter(t => backendSetting(t.name)).map(t => <label key={t.name}>{t.label}<span className="row gap">
           {t.kind === 'boolean'
@@ -162,10 +168,10 @@ export default function Admin(p: AdminProps) {
     </section>
 
     <section className="panel">
-      <div className="panel-head"><h2><KeyRound size={15} strokeWidth={1.75} /> Provider keys</h2><span className="pill">{config.providers.filter(r => r.source !== 'none').length} of {config.providers.length} connected</span></div>
-      <p className="help"><strong>US providers and the optional Hugging Face backend.</strong> OpenAI, Anthropic, Google, Groq, and xAI share the US switch. Hugging Face has a separate switch, token and endpoint configuration above. Visitors can bring personal keys for enabled backends. Hugging Face is not a US-only or Shield route. Router catalogs come from the provider; dedicated Hugging Face model names are configured by the owner. Keys entered here are encrypted before storage and never returned to a browser. A dashboard value wins over the corresponding hosting variable. <strong>Stack several keys</strong> by putting one per line.</p>
+      <div className="panel-head"><h2><KeyRound size={15} strokeWidth={1.75} /> Provider keys</h2><span className="pill">{keyProviders.filter(r => r.source !== 'none').length} of {keyProviders.length} set</span></div>
+      <p className="help"><strong>One row per provider, one key field each.</strong> Groq, OpenAI, Anthropic, Google Gemini and xAI Grok run the US backend; OpenRouter is a personal-key experiment route. A visitor only ever needs the key for the one provider they intend to use. Keys entered here are encrypted before storage and never returned to a browser, and a dashboard value wins over the corresponding hosting variable. <strong>Stack several keys</strong> by putting one per line.</p>
       <div className="ledger-wrap"><table className="ledger admin-keys"><thead><tr><th>Provider</th><th>Status</th><th>Key</th><th></th></tr></thead><tbody>
-        {config.providers.map(r => <tr key={r.provider}>
+        {keyProviders.map(r => <tr key={r.provider}>
           <td><strong>{r.name}</strong><br /><small className="mono">{r.env}</small>{r.console && <> · <a href={r.console} target="_blank" rel="noreferrer" className="text-button">get a key <ExternalLink size={10} /></a></>}</td>
           <td>{r.enabled === false && <span className="pill">Backend off</span>}{r.unreadable ? <span className="pill warn">Re-enter</span> : <span className={r.source === 'none' ? 'pill' : 'pill ok'}>{r.source === 'none' ? <CircleAlert size={11} /> : <Check size={11} />}{sourceLabel[r.source]}{r.hint ? ` ${r.hint}` : ''}</span>}</td>
           <td><textarea rows={r.count > 1 ? 2 : 1} autoComplete="off" spellCheck={false} placeholder={r.source === 'none' ? 'Paste a key, or one per line to stack' : 'Paste a new key, or one per line to replace'} value={drafts[r.provider] ?? ''} disabled={busy} onChange={e => setDrafts(d => ({ ...d, [r.provider]: e.target.value }))} /></td>
@@ -213,7 +219,7 @@ export default function Admin(p: AdminProps) {
       <p className="help">Each plan includes the same published US provider models, personal keys, connectors, and local models. Give each subscriber a unique token in their tier’s list; remove it to revoke access. Credits are weighted usage units, not dollars. New checkout URLs must charge the displayed prices; old checkout links are not reused.</p>
       <p className="help">Numbers apply on the next request. A blank value removes the dashboard setting and the environment (or the built-in default) applies again.</p>
       <div className="form-grid">
-        {config.tunables.filter(t => !backendSetting(t.name)).map(t => <label key={t.name}>{t.label}<span className="row gap">
+        {config.tunables.filter(t => !backendSetting(t.name) && !hiddenSetting(t.name)).map(t => <label key={t.name}>{t.label}<span className="row gap">
           {t.kind === 'boolean'
             ? <select value={tunableDrafts[t.name] ?? t.value ?? ''} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))}><option value="">use hosting/default</option><option value="true">true</option><option value="false">false</option></select>
             : <input type={t.kind === 'secret' ? 'password' : t.kind === 'url' ? 'url' : t.kind === 'text' ? 'text' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}

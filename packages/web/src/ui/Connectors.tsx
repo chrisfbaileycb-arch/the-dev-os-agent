@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Check, Database, FileText, Globe, ListChecks, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X, Zap } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check, ChevronDown, Database, FileText, Globe, ListChecks, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X, Zap } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import { guessTransport, refreshTools, type McpConnection, type McpTransport, type McpAuthHeader } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
@@ -58,6 +58,11 @@ export default function Connectors(p: ConnectorsProps) {
   const [presetQuery, setPresetQuery] = useState('');
   const [activeGroup, setActiveGroup] = useState<McpPresetGroup | 'All'>('All');
   const [skillCount, setSkillCount] = useState(() => loadSkillState().filter(s => s.enabled).length + loadYourSkills().filter(s => s.enabled).length);
+
+  // The tool directory is the reason the drawer is open, so it always starts empty and unfiltered.
+  // Clearing on mount also defeats a browser that autofills the search field on its own, which
+  // otherwise hides every card behind a query the visitor never typed.
+  useEffect(() => { setPresetQuery(''); setActiveGroup('All'); }, []);
 
   const urlError = (() => {
     const v = url.trim();
@@ -156,7 +161,7 @@ export default function Connectors(p: ConnectorsProps) {
         <section className="panel">
           <h3><Zap size={14} /> Remote MCP servers & tool directory · {MCP_PRESETS.length} integrations</h3>
           <p className="help">Configure only the tools you need. Remote servers require their own authorization; local tools require your authenticated HTTPS bridge. Model inference keys belong in Settings.</p>
-          <input aria-label="Search tool directory" type="search" placeholder="Search tools" value={presetQuery} onChange={e => setPresetQuery(e.target.value)} />
+          <input aria-label="Search tool directory" type="search" autoComplete="off" placeholder="Search tools" value={presetQuery} onChange={e => setPresetQuery(e.target.value)} />
           <div className="tool-category-tabs" role="group" aria-label="Tool categories">{(['All', ...MCP_PRESET_GROUPS] as (McpPresetGroup | 'All')[]).map(group => <button key={group} className={activeGroup === group ? 'output-tab active' : 'output-tab'} aria-pressed={activeGroup === group} onClick={() => setActiveGroup(group)}>{group}</button>)}</div>
           <div className="preset-grid">{MCP_PRESETS.filter(server => (activeGroup === 'All' || server.group === activeGroup) && `${server.name} ${server.blurb}`.toLowerCase().includes(presetQuery.trim().toLowerCase())).map(server => {
             const config = media.find(c => c.provider === server.id);
@@ -164,15 +169,29 @@ export default function Connectors(p: ConnectorsProps) {
             return <article key={server.id} className={preset?.id === server.id ? 'preset active' : 'preset'}>
               <div className="panel-head"><strong>{server.name}</strong>{configured && <span className="pill"><Check size={12} />Configured</span>}</div>
               <p className="help">{server.blurb}</p><small className="pill">{server.kind === 'media' ? 'Optional media tool' : server.kind === 'bridge' ? 'Local / HTTPS bridge' : 'Remote MCP'}</small>
-              <div className="row gap"><button className="button small" onClick={() => server.kind === 'media' ? document.getElementById(`media-${server.id}`)?.scrollIntoView({ behavior: 'smooth' }) : configure(server)}>Configure</button><a className="text-button" href={server.docs} target="_blank" rel="noopener noreferrer">Setup guide</a></div>
+              <div className="row gap"><button className="button small" onClick={() => { if (server.kind !== 'media') { configure(server); return; } const row = document.getElementById(`media-${server.id}`) as HTMLDetailsElement | null; if (row) { row.open = true; row.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }}>Configure</button><a className="text-button" href={server.docs} target="_blank" rel="noopener noreferrer">Setup guide</a></div>
             </article>;
           })}</div>
         </section>
-        <section className="panel"><h3>Optional creative / media tools</h3><p className="help">Enable with your own key. These tools are offered only when configured, require approval for generation, and are independent of coding models and preview compilation. Keys stay in page memory; reload requires re-entry.</p>
-          {media.map(config => <fieldset className="media-provider" id={`media-${config.provider}`} key={config.provider}><legend>{config.provider === 'heygen' ? 'HeyGen / Video Avatar Generator' : 'Nano Banana / Image Generation'}</legend><label className="check"><input type="checkbox" checked={config.enabled} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, enabled: e.target.checked } : c))} />Enable optional tool</label>
-            <label>Personal API key · {config.key ? 'Active for this tab' : 'Unset'}<input type="password" autoComplete="off" value={config.key} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, key: e.target.value } : c))} placeholder={config.provider === 'heygen' ? 'HeyGen API key' : 'Google Gemini image API key'} /></label>
-            {config.provider === 'heygen' ? <div className="form-grid"><label>Default Avatar ID<input value={config.avatarId} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, avatarId: e.target.value } : c))} /></label><label>Default Voice ID<input value={config.voiceId} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, voiceId: e.target.value } : c))} /></label></div> : <label>Image tool model<select value={config.model} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, model: e.target.value } : c))}>{IMAGE_MODELS.map(model => <option key={model} value={model}>{model}</option>)}</select></label>}
-          </fieldset>)}
+        <section className="panel media-tools">
+          <h3>Optional creative / media tools</h3>
+          <p className="help">Off by default, enabled with your own key, and independent of coding models. Keys stay in page memory; reload requires re-entry.</p>
+          <div className="media-tool-list">
+            {media.map(config => <details className="media-tool" id={`media-${config.provider}`} key={config.provider}>
+              <summary>
+                <span className="media-tool-name">{config.provider === 'heygen' ? 'HeyGen / Video Avatar Generator' : 'Nano Banana / Image Generation'}</span>
+                <span className={config.enabled && config.key ? 'pill ok' : 'pill'}>{config.enabled && config.key ? 'Configured' : config.key ? 'Key set · off' : 'Off'}</span>
+                <ChevronDown size={13} className="media-tool-caret" />
+              </summary>
+              <div className="media-tool-body">
+                <label className="check"><input type="checkbox" checked={config.enabled} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, enabled: e.target.checked } : c))} />Enable optional tool</label>
+                <label>Personal API key<input type="password" autoComplete="off" value={config.key} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, key: e.target.value } : c))} placeholder={config.provider === 'heygen' ? 'HeyGen API key' : 'Google Gemini image API key'} /></label>
+                {config.provider === 'heygen'
+                  ? <div className="form-grid"><label>Default Avatar ID<input value={config.avatarId} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, avatarId: e.target.value } : c))} /></label><label>Default Voice ID<input value={config.voiceId} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, voiceId: e.target.value } : c))} /></label></div>
+                  : <label>Image tool model<select value={config.model} onChange={e => writeMedia(media.map(c => c.provider === config.provider ? { ...c, model: e.target.value } : c))}>{IMAGE_MODELS.map(model => <option key={model} value={model}>{model}</option>)}</select></label>}
+              </div>
+            </details>)}
+          </div>
         </section>
         {p.mcp.map(connection => <section key={connection.id} className="panel mcp-row"><div className="panel-head"><div><strong>{connection.name}</strong><small className="mono"> {host(connection.url)} · {connection.transport}</small></div><label className="switch"><input type="checkbox" checked={connection.enabled} onChange={e => p.setMcp(p.mcp.map(c => c.id === connection.id ? { ...c, enabled: e.target.checked } : c))} />Enabled</label></div>{connection.error ? <p className="msg-error">{connection.error}</p> : <p className="help">{connection.tools.length} available tools · {connection.token ? 'Session credential active' : 'No session credential'}</p>}
           {connection.tools.length > 0 && <details><summary>Attached tool schemas</summary>{connection.tools.map(tool => <details key={tool.name}><summary>{tool.name}</summary><p>{tool.description}</p><pre className="skill-body">{JSON.stringify(tool.inputSchema ?? {}, null, 2)}</pre></details>)}</details>}

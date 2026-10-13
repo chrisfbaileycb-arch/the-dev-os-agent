@@ -154,7 +154,7 @@ export default function Settings(p: SettingsProps) {
               </ul>
             </details>
             <h3>Active Provider Keys</h3>
-            <p className="help">Each connected provider automatically discovers its models and updates Model &amp; Source. Keys stay in this page session.</p>
+            <p className="help">Start with the one provider you intend to use — its key is all you need to get going. Each connected provider discovers its models automatically and updates Model &amp; Source. Keys stay in this page session.</p>
             <div className="provider-registry">
               {BYOK_PROVIDERS.map(id => {
                 const token = c.provider === id ? c.token || p.keys[id] || '' : p.keys[id] || '';

@@ -250,7 +250,18 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .dock-recording { display: flex; align-items: center; gap: 6px; padding: 0 6px; color: var(--danger); font-size: 11.5px; }
 .rec-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
 .button.send { border-radius: 999px; padding: 5px 12px; }
-.dock-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 2px; }
+.dock-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 2px 0; }
+/* One horizontal line of controls. Each is a flat outlined control — no circular wrapper — so the
+   mode, agent and model read as peers and a menu opening upward cannot distort a rounded parent. */
+.dock-control { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 3px 8px; font-size: 12px; background: var(--panel); position: relative; max-width: 100%; }
+.dock-control:hover:not(:disabled) { border-color: var(--accent); }
+.dock-control.open { border-color: var(--accent); }
+.dock-control-label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.dock-control-value { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-control select { appearance: none; border: 0; background: transparent; padding-right: 14px; font-size: 12px; max-width: 160px; }
+.dock-control > svg:last-child { position: absolute; right: 7px; pointer-events: none; }
+.dock-control-toggle { cursor: pointer; }
+.dock-control-toggle input { margin: 0; }
 .dock-counters { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; } .dock-counters em { font-style: normal; color: var(--ink); }
 .dock-attachments { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 2px 0; }
 .dock-continuation { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; background: var(--accent-soft); border: 1px solid var(--line); border-radius: 8px; font-size: 11.5px; color: var(--ink); }
@@ -268,6 +279,7 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 /* Model picker — a popover anchored to the dock, opening upward. */
 .model-picker { position: relative; }
 .model-trigger { max-width: 260px; } .model-trigger.open { border-color: var(--accent); }
+.model-trigger-label { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pay-badge { font-style: normal; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; border-radius: 4px; padding: 1px 5px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 .pay-badge.free { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }
@@ -421,9 +433,10 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
   .dock-shell { padding: 0 8px calc(6px + env(safe-area-inset-bottom)); }
   .dock { border-radius: 12px; }
   .dock-hint { display: none; }
-  .chip-label { display: none; }
+  /* The control labels are the only words that drop; the values stay so a thumb still reads them. */
+  .dock-control-label { display: none; }
   /* The execution engine is a checkbox with no other name. Keep the words at phone width. */
-  .engine-toggle .chip-label { display: inline; font-size: 11px; }
+  .engine-toggle .dock-control-label { display: inline; font-size: 11px; }
   .model-trigger { max-width: 190px; }
   /* On a phone the trigger sits mid-row, so a popover anchored to it runs off the edge.
      The menu becomes a bottom sheet instead: always fully on screen, wherever the chip is. */
@@ -576,7 +589,6 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 @media (max-width: 700px) { .api-directory-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* Consolidated workspace controls and observable execution. */
-.interaction-mode { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; white-space: nowrap; }
 .unified-model-picker .model-trigger { max-width: min(560px, 100%); }
 .unified-model-picker .model-menu { width: min(540px, calc(100vw - 28px)); max-height: min(620px, 75vh); overflow-y: auto; }
 .model-menu-actions { padding: 10px; position: sticky; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); }
@@ -619,8 +631,15 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .sandbox-event .skill-body { color: var(--ink); }
 .sandbox-artifact-image { display: block; width: 100%; max-height: 360px; object-fit: contain; margin-top: 12px; }
 .tool-category-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0; }
-.media-provider { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin: 14px 0; min-width: 0; }
-.media-provider legend { padding: 0 6px; font-weight: 600; }
+/* Optional media tools stay a compact accordion so they never push the real MCP tools off-screen. */
+.media-tool-list { display: flex; flex-direction: column; gap: 6px; }
+.media-tool { border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
+.media-tool > summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.media-tool > summary::-webkit-details-marker { display: none; }
+.media-tool-name { flex: 1; min-width: 0; font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-tool-caret { color: var(--muted); flex: 0 0 auto; transition: transform 120ms ease; }
+.media-tool[open] .media-tool-caret { transform: rotate(180deg); }
+.media-tool-body { display: flex; flex-direction: column; gap: 9px; padding: 4px 10px 12px; }
 .preset-grid .preset { display: flex; align-items: stretch; flex-direction: column; gap: 8px; }
 .preset-grid .preset .row { margin-top: auto; }
 @media (max-width: 900px) {

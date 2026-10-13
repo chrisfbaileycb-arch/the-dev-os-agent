@@ -14,6 +14,8 @@ export interface ModelPickerProps {
   lane?: Lane;
   backends?: BackendAvailability;
   developer?: boolean;
+  /** Trigger caption, so the dock's single control line reads "Model" instead of a second title. */
+  label?: string;
   provider?: Provider;
   onOpenSettings: () => void;
   onOpenConnectors?: () => void;
@@ -82,9 +84,9 @@ export default function ModelPicker(p: ModelPickerProps) {
     const provider = g.provider ?? (g.mode === 'free' ? p.free.providers[m.id] : p.paid.providers[m.id]) as Provider;
     p.onPick(m.id, g.mode, provider); setOpen(false); setQuery('');
   }
-  return <div className="model-picker unified-model-picker" ref={root}>
-    <button type="button" className={`chip-button model-trigger${open ? ' open' : ''}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} aria-label="Model & Source" onClick={() => setOpen(v => !v)}>
-      <KeyRound size={13} /><span>Model &amp; Source</span><span className="model-name">{p.model ? modelLabel(p.model, p.labels) : 'Choose a model'}</span>{p.model && <em className="pay-badge">[{source}]</em>}<ChevronDown size={12} />
+  return <div className={`model-picker unified-model-picker${open ? ' open' : ''}`} ref={root}>
+    <button type="button" className={`dock-control model-trigger${open ? ' open' : ''}`} disabled={p.disabled} aria-haspopup="listbox" aria-expanded={open} aria-label="Model & Source" onClick={() => setOpen(v => !v)}>
+      <KeyRound size={13} /><span className="model-trigger-label">{p.label ?? 'Model & Source'}</span><span className="model-name">{p.model ? modelLabel(p.model, p.labels) : 'Choose a model'}</span>{p.model && <em className="pay-badge">[{source}]</em>}<ChevronDown size={12} />
     </button>
     {open && <div className="model-menu">
       <div className="model-lane-head"><strong>Model &amp; Source</strong><small>{p.developer ? 'Developer workspace · coding-capable models' : 'Connected provider catalogs'}</small></div>
