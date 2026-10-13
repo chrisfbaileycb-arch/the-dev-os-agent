@@ -39,7 +39,7 @@ export interface ModelPickerProps {
 export function modelLabel(model: string, labels: Record<string, string> = {}): string { return labels[model] ?? findModel(model)?.label ?? model ?? 'No model'; }
 export function payLabel(inference: InferenceMode): string { return inference === 'free' ? 'managed' : inference === 'credits' ? 'plan' : 'your key'; }
 type Group = { id: string; name: string; source: 'BYOK' | 'Local' | 'Managed/Membership'; mode: InferenceMode; provider?: Provider; choices: ModelChoice[]; error?: string };
-const ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'groq', 'xai', 'huggingface-backend', 'huggingface', 'openrouter', 'cerebras', 'github', 'nvidia', 'cohere', 'venice', 'vercel', 'aihubmix', 'xkiro', 'custom'];
+const ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'groq', 'xai', 'huggingface', 'openrouter', 'cerebras', 'github', 'nvidia', 'cohere', 'venice', 'vercel', 'aihubmix', 'xkiro', 'custom'];
 export default function ModelPicker(p: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -63,7 +63,7 @@ export default function ModelPicker(p: ModelPickerProps) {
   }, [open]);
   const groups = useMemo<Group[]>(() => {
     const backends = p.backends ?? defaultBackends;
-    const available = (provider?: Provider) => provider === 'huggingface-backend' ? backends.huggingface : isUsProvider(provider) ? backends.us : true;
+    const available = (provider?: Provider) => isUsProvider(provider) ? backends.us : true;
     const eligible = (choices: ModelChoice[]) => rankChoices(choices.filter(m => !p.developer || isDeveloperModel(m.id)));
     const result: Group[] = [];
     if (p.free.enabled) result.push({ id: 'managed', name: 'Managed access', source: 'Managed/Membership', mode: 'free', choices: eligible(modelChoices(p.free.models.filter(id => available(p.free.providers[id] as Provider)).map(id => ({ id, label: p.labels[id] ?? p.free.labels[id] ?? id })))) });

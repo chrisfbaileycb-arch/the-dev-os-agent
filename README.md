@@ -14,27 +14,17 @@ Personal keys stay in page memory and clear on reload; never include them in pro
 
 ## Optional backends
 
-Admin → **Backend connections** has independent US and Hugging Face availability switches.
-The US group contains OpenAI, Anthropic, Google, Groq and xAI. Switching a group off blocks its
-personal-key and managed requests at the proxy; it retains stored keys and model selections.
-Availability does not enable owner spending or silently substitute a different backend.
-
-The separate `huggingface-backend` connection uses `HF_BACKEND_API_KEY`, never the Experiment
-tab's `HF_TOKEN`. `HF_BACKEND_ENABLED=true` makes it available; `US_BACKEND_ENABLED=false`
-disables the US group. These nonsecret switches can also be saved in Admin. Hugging Face stays
-outside Shield and is not a US-only routing guarantee. All funded calls still need tier approval,
+Admin → **Backend connections** has a single US availability switch. The US group contains
+OpenAI, Anthropic, Google, Groq and xAI. Switching it off blocks personal-key and managed
+requests at the proxy; it retains stored keys and model selections. Availability does not enable
+owner spending or silently substitute a different backend. `US_BACKEND_ENABLED=false` disables
+the group; the switch can also be saved in Admin. All funded calls still need tier approval,
 durable cost reservations and an enabled spending policy; this test host still has a zero budget.
 
-With `HF_BACKEND_BASE_URL` blank, it uses `https://router.huggingface.co/v1` and discovers the
-router's available models. This route does not request account-profile access. For an existing
-dedicated chat endpoint, set its official HTTPS `endpoints.huggingface.cloud` URL (with `/v1`)
-and put its exact endpoint model name in `HF_BACKEND_MODELS`. That list is owner-configured;
-listing it does not validate a token or invoke paid inference. Browser-supplied URLs cannot
-redirect this backend. Use a Hugging Face token scoped for the required inference route.
-
-An uploaded Hub repository alone is not a running inference endpoint. This update connects
-existing services; it does not download model weights or provision new GPU/endpoint hosting.
-OpenRouter and the original Hugging Face Experiment connection remain personal-key-only.
+The optional, owner-configured Hugging Face backend (`huggingface-backend`, `HF_BACKEND_*` and
+its dedicated-endpoint route) was removed. Its egress was neither US-only nor Shield-eligible,
+and the Experiment lane already covers a visitor's own Hugging Face key. OpenRouter and the
+Hugging Face Experiment connection remain personal-key-only and are never funded or Shield.
 
 ## xKiro Gateway & Discovery Protocol
 

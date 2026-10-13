@@ -35,7 +35,7 @@ test('the registry names the key lane: the same five providers on the dashboard 
   assert.deepEqual(backendProviders({ onlyIntegrated: false }).sort(), lane);
   for (const id of lane) assert.equal(isBackendProvider(id), true, id);
   for (const id of [...NON_LANE, 'not-a-provider', '', undefined]) assert.equal(isBackendProvider(id), false, String(id));
-  for (const r of REGISTRY) if (isBackendProvider(r.id)) assert.equal(isShieldEligible(r), r.id !== 'huggingface-backend', r.id);
+  for (const r of REGISTRY) if (isBackendProvider(r.id)) assert.equal(isShieldEligible(r), true, r.id);
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'huggingface')), false);
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'nvidia')), true);
   assert.equal(isShieldEligible(REGISTRY.find(r => r.id === 'github')), true);
@@ -108,7 +108,7 @@ test('the admin API lists the lane, parks leftover keys apart, says what is plan
   await withServer([createAdmin({ db, env, settings, log: () => {} })], async url => {
     const cookie = await login(url);
     const config = await (await call(url, '/api/admin/config', { cookie })).json();
-    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'google', 'groq', 'huggingface', 'huggingface-backend', 'openai', 'openrouter', 'xai']);
+    assert.deepEqual(config.providers.map(p => p.provider).sort(), ['anthropic', 'google', 'groq', 'huggingface', 'openai', 'openrouter', 'xai']);
     assert.ok(config.providers.every(p => p.backend === true || ['openrouter', 'huggingface'].includes(p.provider)));
     // Only a dashboard-stored leftover is offered for removal; an environment key has no row at all.
     assert.deepEqual(config.retired.map(p => p.provider), ['venice']);

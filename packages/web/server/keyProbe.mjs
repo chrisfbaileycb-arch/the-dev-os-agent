@@ -2,7 +2,6 @@
 // provider's own account endpoint, called by discover — never a compiled model list.
 
 const SHAPES = {
-  'huggingface-backend': { test: value => value.startsWith('hf_'), error: 'Hugging Face tokens start with hf_.' },
   openai: { test: value => value.startsWith('sk-'), error: 'OpenAI keys start with sk-.' },
   anthropic: { test: value => value.startsWith('sk-ant-'), error: 'Anthropic keys start with sk-ant-.' },
 };

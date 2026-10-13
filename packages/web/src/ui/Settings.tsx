@@ -41,7 +41,6 @@ export interface SettingsProps {
 /** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
 const US_BYOK_PROVIDERS: Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
-  'huggingface-backend': 'hf_… scoped for inference',
   openai: 'sk-…',
   anthropic: 'sk-ant-…',
   google: 'Your Google AI Studio key',
@@ -51,7 +50,7 @@ const KEY_HINTS: Partial<Record<Provider, string>> = {
 
 export default function Settings(p: SettingsProps) {
   const backends = p.backends ?? defaultBackends;
-  const BYOK_PROVIDERS: Provider[] = [...(backends.us ? US_BYOK_PROVIDERS : []), ...(backends.huggingface ? ['huggingface-backend' as const] : []), 'huggingface', 'openrouter', 'cerebras', 'github', 'nvidia', 'cohere', 'venice', 'vercel'];
+  const BYOK_PROVIDERS: Provider[] = [...(backends.us ? US_BYOK_PROVIDERS : []), 'huggingface', 'openrouter', 'cerebras', 'github', 'nvidia', 'cohere', 'venice', 'vercel'];
   const [workingMemory, setWorkingMemory] = useState(loadWorkingMemory);
   const [memoryNote, setMemoryNote] = useState('');
   const c = p.connection;

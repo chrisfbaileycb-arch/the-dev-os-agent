@@ -26,10 +26,8 @@ interface Status { configured: boolean; authenticated: boolean; persistent: bool
 
 export interface AdminProps { notify: (message: string) => void; onSignedIn: (yes: boolean) => void; onConfigChanged?: () => void; }
 
-/** The one backend switch the dashboard still exposes; Hugging Face's are gone from the UI. */
+/** The one backend switch the dashboard exposes; the Hugging Face backend was removed entirely. */
 const backendSetting = (name: string) => name === 'US_BACKEND_ENABLED';
-/** Retired tunables that stay in the registry (and the environment) but are never shown here. */
-const hiddenSetting = (name: string) => name.startsWith('HF_BACKEND_');
 /** The uniform key list: a fixed order and a fixed set, so the table never drifts by provider. */
 const ADMIN_PROVIDER_ORDER = ['groq', 'openai', 'anthropic', 'google', 'xai', 'openrouter'] as const;
 
@@ -219,7 +217,7 @@ export default function Admin(p: AdminProps) {
       <p className="help">Each plan includes the same published US provider models, personal keys, connectors, and local models. Give each subscriber a unique token in their tier’s list; remove it to revoke access. Credits are weighted usage units, not dollars. New checkout URLs must charge the displayed prices; old checkout links are not reused.</p>
       <p className="help">Numbers apply on the next request. A blank value removes the dashboard setting and the environment (or the built-in default) applies again.</p>
       <div className="form-grid">
-        {config.tunables.filter(t => !backendSetting(t.name) && !hiddenSetting(t.name)).map(t => <label key={t.name}>{t.label}<span className="row gap">
+        {config.tunables.filter(t => !backendSetting(t.name)).map(t => <label key={t.name}>{t.label}<span className="row gap">
           {t.kind === 'boolean'
             ? <select value={tunableDrafts[t.name] ?? t.value ?? ''} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))}><option value="">use hosting/default</option><option value="true">true</option><option value="false">false</option></select>
             : <input type={t.kind === 'secret' ? 'password' : t.kind === 'url' ? 'url' : t.kind === 'text' ? 'text' : 'number'} autoComplete="off" value={tunableDrafts[t.name] ?? (t.kind === 'secret' ? '' : t.value)} placeholder={t.kind === 'secret' ? (t.value ? `set ${t.value}` : 'not set') : 'default'} min={config.tunableSpecs[t.name]?.min} max={config.tunableSpecs[t.name]?.max} disabled={busy} onChange={e => setTunableDrafts(d => ({ ...d, [t.name]: e.target.value }))} />}

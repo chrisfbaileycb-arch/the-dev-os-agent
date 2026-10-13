@@ -8,7 +8,7 @@ import { modelsUrl, normalizeModelList } from './models.mjs';
 import { PROVIDER_META, TUNABLES } from './settings.mjs';
 import { loadVault, saveVault, getClientConfig } from './vault.mjs';
 import { REGISTRY, isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
-import { HF_BACKEND_ID, HF_ROUTER_BASE, hfEndpointModels } from './backends.mjs';
+
 import { accountProbe, keyShapeError } from './keyProbe.mjs';
 import { BUILTIN_SKILLS, importRepositorySkills } from './skills.mjs';
 
@@ -81,11 +81,6 @@ export async function discoverForProvider(provider, env, fetchImpl = fetch) {
     if (!who.ok) throw new HttpError(who.status === 401 || who.status === 403 ? 401 : 502, who.status === 401 || who.status === 403 ? 'The provider rejected this key.' : `The provider answered HTTP ${who.status}.`);
   }
   const target = await resolveTarget(provider, '', env);
-  if (provider === HF_BACKEND_ID && target.base !== HF_ROUTER_BASE) {
-    const models = hfEndpointModels(env.HF_BACKEND_MODELS);
-    if (!models.length) throw new HttpError(400, 'Set the dedicated endpoint model IDs in Backend connections first.');
-    return models.map(id => ({ id, label: id }));
-  }
   const headers = { Accept: 'application/json', 'User-Agent': USER_AGENT };
   if (target.nativeAnthropic) { headers['x-api-key'] = key; headers['anthropic-version'] = ANTHROPIC_VERSION; }
   else if (provider === 'google') headers['x-goog-api-key'] = key;
@@ -263,7 +258,7 @@ export function createAdmin({ db = null, env: baseEnv = process.env, settings, s
         const body = await readBody(req, 16_384);
         const provider = typeof body.provider === 'string' ? body.provider : '';
         const experiment = isExperimentProvider(provider) || provider === 'antigravity';
-        if ((experiment || provider === HF_BACKEND_ID) && !storage?.durable) throw new HttpError(409, 'This host forgets its database on restart. Keep this key in Settings on this browser. It is not written here.');
+        if (experiment && !storage?.durable) throw new HttpError(409, 'This host forgets its database on restart. Keep this key in Settings on this browser. It is not written here.');
         if (typeof body.key === 'string' && body.key.trim()) {
           if (experiment) await settings.setExperimentKey(provider, body.key, { durable: true });
           else await settings.setKey(provider, body.key);

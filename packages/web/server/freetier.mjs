@@ -255,7 +255,6 @@ export const PROVIDER_KEY_VARS = {
   xkiro: 'XKIRO_API_KEY',
   aihubmix: 'AIHUBMIX_API_KEY',
   huggingface: 'HF_TOKEN',
-  'huggingface-backend': 'HF_BACKEND_API_KEY',
   nvidia: 'NVIDIA_API_KEY',
   'cheaper-inference': 'CHEAPER_INFERENCE_API_KEY',
   omniroute: 'OMNIROUTE_API_KEY',
@@ -313,21 +312,6 @@ export const FRONTIER = /claude|opus|sonnet|gpt-[45]|(^|[/_.-])o[134](?![0-9a-z]
 export const isFrontier = id => typeof id === 'string' && FRONTIER.test(id);
 
 /**
- * Hugging Face serverless pool, reached through the Inference Providers router.
- *
- * A deployment holding HF_TOKEN can fund a handful of small instruct models from that token's
- * monthly inference credit — a cheap way to widen the zero-config tier. Like every static entry
- * these pass the FRONTIER guard: `deepseek-ai/DeepSeek-R1:auto` is deliberately excluded, both
- * because a reasoning chain is exactly what this tier must not fund by default and because
- * `:auto` is a router directive, not a price — the operator can name a concrete cheap id in
- * XKIRO-style narrowing instead of letting the router pick an expensive provider for them.
- */
-export const HF_POOL = [
-  'Qwen/Qwen2.5-7B-Instruct',
-  'meta-llama/Llama-3.1-8B-Instruct',
-];
-
-/**
  * Groq and OpenRouter free entries, which are still declared here.
  *
  * Neither provider publishes a machine-readable "this is free" flag the way the gateway does —
@@ -382,10 +366,8 @@ function allFreeModels(env, discovered, tiers) {
   // HF serverless joins only when the deployment holds a token: without one these ids would
   // advertise as free and answer 503, which is the exact "warming up" lie the status message
   // exists to avoid.
-  const hf = isBackendLaneEnforced() ? [] : (HF_POOL.some(id => isFrontier(id)) ? [] : (env.HF_TOKEN ? HF_POOL.map(id => ({ id, provider: 'huggingface', envKey: 'HF_TOKEN' })) : []));
   const automatic = [
     ...guarded,
-    ...hf,
     // Every zero-cost id OpenRouter itself reports, plus the three-id static pool as a floor for a
     // deployment whose discovery has not answered yet. The static entries are deduplicated against
     // the discovered list below, so a live catalogue supersedes them rather than fighting them.

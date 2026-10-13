@@ -4,7 +4,7 @@ import { PROVIDER_KEY_VARS, setAdminTiers } from './freetier.mjs';
 import { isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 import { keyShapeError } from './keyProbe.mjs';
 import { freeOutputTokens, planLimits } from './plans.mjs';
-import { backendEnabled, hfBackendBase, hfEndpointModels } from './backends.mjs';
+import { backendEnabled } from './backends.mjs';
 import { DEFAULT_SYSTEM_PROMPTS } from './skills.mjs';
 
 // Dashboard-managed deployment settings: provider keys, free-tier knobs, and the model tiers.
@@ -40,7 +40,6 @@ export const PROVIDER_META = {
   xkiro: { name: 'xKiro', console: 'https://xkiro.com' },
   aihubmix: { name: 'AIHubMix', console: 'https://aihubmix.com' },
   huggingface: { name: 'Hugging Face', console: 'https://huggingface.co/settings/tokens' },
-  'huggingface-backend': { name: 'Hugging Face backend', console: 'https://huggingface.co/settings/tokens' },
   nvidia: { name: 'NVIDIA NIM', console: 'https://build.nvidia.com/' },
   'cheaper-inference': { name: 'Managed inference', console: 'https://cheaperinference.com' },
   // OmniRoute is self-hosted, so there is no vendor console page to link to; the operator's own
@@ -55,9 +54,6 @@ export const PROVIDER_META = {
  */
 export const TUNABLES = {
   US_BACKEND_ENABLED: { kind: 'boolean', default: 'true', label: 'US backend available' },
-  HF_BACKEND_ENABLED: { kind: 'boolean', default: 'false', label: 'Hugging Face backend available' },
-  HF_BACKEND_BASE_URL: { kind: 'url', label: 'Hugging Face backend URL (blank uses the router)' },
-  HF_BACKEND_MODELS: { kind: 'text', label: 'Dedicated endpoint model IDs (comma separated)' },
   FREE_CREDIT_MONTHLY_POOL: { kind: 'number', min: 0, max: 10_000_000, label: 'Free credits per workspace per month' },
   FREE_MAX_PER_HOUR: { kind: 'number', min: 1, max: 1000, label: 'Free requests per rolling hour from one network' },
   FREE_MAX_OUTPUT_TOKENS: { kind: 'number', min: 64, max: 65536, label: 'Output cap on a free reply (default 16,384; explicit smaller caps are respected)' },
@@ -148,8 +144,6 @@ export function cleanTunable(name, value) {
   const spec = TUNABLES[name];
   if (!spec) throw new Error(`Unknown setting: ${String(name).slice(0, 40)}`);
   if (value === '' || value === null || value === undefined) return null;
-  if (name === 'HF_BACKEND_BASE_URL') return hfBackendBase(value);
-  if (name === 'HF_BACKEND_MODELS') return hfEndpointModels(value).join(',');
   if (spec.kind === 'boolean') {
     if (value === true || value === 'true') return 'true';
     if (value === false || value === 'false') return 'false';

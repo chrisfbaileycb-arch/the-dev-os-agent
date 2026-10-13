@@ -219,7 +219,7 @@ async function attemptLoad(signal: AbortSignal | undefined, timeoutMs: number): 
       paid: paidFrom(body.paid),
       ollamaBridge: typeof body.ollamaBridge === 'string' ? body.ollamaBridge : null,
       storage: storageFrom(body.storage),
-      backends: { us: body.backends?.us !== false, huggingface: body.backends?.huggingface === true, hfMode: body.backends?.hfMode === 'endpoint' ? 'endpoint' : 'router', hfConfigured: body.backends?.hfConfigured === true, hfModels: Array.isArray(body.backends?.hfModels) ? body.backends.hfModels.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200).slice(0, 100) : [] },
+      backends: { us: body.backends?.us !== false },
       free: {
         enabled: free.enabled === true && Array.isArray(free.models) && free.models.length > 0,
         models: Array.isArray(free.models) ? free.models.filter((m): m is string => typeof m === 'string') : [],

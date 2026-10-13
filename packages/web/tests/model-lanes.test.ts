@@ -15,9 +15,7 @@ describe('model lanes', () => {
     const us = providersInLane(all, 'us');
     const experiment = providersInLane(all, 'experiment');
     const own = providersInLane(all, 'own');
-    const hf = providersInLane(all, 'hf');
-    expect(hf).toEqual(['huggingface-backend']);
-    expect([...us, ...hf, ...experiment, ...own].sort()).toEqual([...all].sort());
+    expect([...us, ...experiment, ...own].sort()).toEqual([...all].sort());
     expect(us.sort()).toEqual([...US_LANE_PROVIDERS].sort());
     expect(experiment.sort()).toEqual([...EXPERIMENT_LANE_PROVIDERS].sort());
     for (const id of ['github', 'vercel', 'ollama', 'cohere', 'venice', 'xkiro', 'aihubmix', 'custom', 'cerebras', 'meta', 'nvidia'] as Provider[]) {
@@ -37,8 +35,6 @@ describe('model lanes', () => {
     expect(laneOf('anthropic', 'byok')).toBe('us');
     expect(laneOf('openrouter', 'byok')).toBe('experiment');
     expect(laneOf('huggingface', 'byok')).toBe('experiment');
-    expect(laneOf('huggingface-backend', 'byok')).toBe('hf');
-    expect(laneOf('huggingface-backend', 'free')).toBe('hf');
     expect(laneOf('ollama', 'byok')).toBe('own');
     expect(laneOf(undefined, 'byok')).toBe('own');
   });

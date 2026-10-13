@@ -25,22 +25,21 @@ function picker(patch: Partial<ModelPickerProps> = {}): ModelPickerProps {
 }
 function open() { act(() => (host.querySelector('.model-trigger') as HTMLButtonElement).click()); }
 
-it('unifies managed HF and US models under one source selector while retaining their provider', () => {
-  const hfFree = { ...free, models: ['us-model', 'hf-model'], providers: { 'us-model': 'openai', 'hf-model': 'huggingface-backend' }, labels: { 'us-model': 'US fixture', 'hf-model': 'HF fixture' } };
-  const props = picker({ backends: { us: true, huggingface: true }, free: hfFree });
+it('unifies managed US models under one source selector while retaining their provider', () => {
+  const usFree = { ...free, models: ['openai-model', 'groq-model'], providers: { 'openai-model': 'openai', 'groq-model': 'groq' }, labels: { 'openai-model': 'OpenAI fixture', 'groq-model': 'Groq fixture' } };
+  const props = picker({ backends: { us: true }, free: usFree });
   mount(<ModelPicker {...props} />); open();
   expect(host.querySelectorAll('.model-trigger')).toHaveLength(1);
-  expect(host.textContent).toContain('HF fixture'); expect(host.textContent).toContain('US fixture');
-  const option = [...host.querySelectorAll('[role=option]')].find(b => b.textContent?.includes('HF fixture')) as HTMLButtonElement;
+  expect(host.textContent).toContain('OpenAI fixture'); expect(host.textContent).toContain('Groq fixture');
+  const option = [...host.querySelectorAll('[role=option]')].find(b => b.textContent?.includes('Groq fixture')) as HTMLButtonElement;
   act(() => option.click());
-  expect(props.onPick).toHaveBeenCalledWith('hf-model', 'free', 'huggingface-backend');
+  expect(props.onPick).toHaveBeenCalledWith('groq-model', 'free', 'groq');
 });
 
 it('Settings offers a unified provider list and honors the US backend switch', () => {
-  const props: SettingsProps = { backends: { us: false, huggingface: true, hfMode: 'endpoint' }, connection: defaultConnection('huggingface-backend'), setConnection: vi.fn(), keys: emptyKeyring(), setKeys: vi.fn(), keyed: new Set(), discovered: {}, discovering: new Set(), discover: vi.fn(), save: vi.fn(), forget: vi.fn(), balance: serverBalance(0, 0), freeBalance: serverBalance(0, 0), free: offlineDeployment.free, paid: offlineDeployment.paid, adminConfigured: true, openAdmin: vi.fn(), ledger: [], busy: false, canInstall: false, serverReachable: true, requestClear: vi.fn(), theme: 'light', setTheme: vi.fn(), pipes: defaultPipes(), setPipes: vi.fn() };
+  const props: SettingsProps = { backends: { us: false }, connection: defaultConnection('groq'), setConnection: vi.fn(), keys: emptyKeyring(), setKeys: vi.fn(), keyed: new Set(), discovered: {}, discovering: new Set(), discover: vi.fn(), save: vi.fn(), forget: vi.fn(), balance: serverBalance(0, 0), freeBalance: serverBalance(0, 0), free: offlineDeployment.free, paid: offlineDeployment.paid, adminConfigured: true, openAdmin: vi.fn(), ledger: [], busy: false, canInstall: false, serverReachable: true, requestClear: vi.fn(), theme: 'light', setTheme: vi.fn(), pipes: defaultPipes(), setPipes: vi.fn() };
   mount(<Settings {...props} />);
   expect(host.textContent).toContain('Active Provider Keys');
-  expect(host.textContent).toContain('Hugging Face backend API key');
   expect(host.textContent).not.toContain('OpenAI API key');
   expect(host.textContent).toContain('OpenRouter API key');
   expect([...host.querySelectorAll('button')].some(b => b.textContent?.includes('Free Tier'))).toBe(false);

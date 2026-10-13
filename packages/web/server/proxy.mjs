@@ -15,7 +15,7 @@ import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog, ensureOpenRout
 import { billingStatus } from './billing.mjs';
 import { createMeter } from './meter.mjs';
 import { BudgetError, createDailyBudget } from './budget.mjs';
-import { backendEnabled, backendStatus, HF_BACKEND_ID, HF_ROUTER_BASE, hfBackendBase, hfEndpointModels, sameBackendGroup } from './backends.mjs';
+import { backendEnabled, backendStatus } from './backends.mjs';
 
 export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
 export function publicAddress(ip) {
@@ -35,10 +35,6 @@ export function publicAddress(ip) {
  */
 export async function resolveTarget(provider, baseUrl, env = process.env, resolve = lookup) {
   if (!backendEnabled(provider, env)) throw new HttpError(403, 'This backend is switched off by the owner.', 'backend_disabled');
-  if (provider === HF_BACKEND_ID) {
-    let base; try { base = hfBackendBase(env.HF_BACKEND_BASE_URL); } catch (error) { throw new HttpError(503, error.message, 'backend_not_configured'); }
-    return { base };
-  }
   const fixed = {
     openrouter: 'https://openrouter.ai/api/v1',
     groq: 'https://api.groq.com/openai/v1',
@@ -139,7 +135,7 @@ export function fundingFor(body, env = process.env) {
   if (supplied) return { mode: typeof body.apiKey === 'string' && body.apiKey.trim() ? 'byok' : 'credits', apiKey: supplied };
   if (env.FREE_TIER_DISABLED === 'true') return { mode: 'none', apiKey: '' };
   const entry = freeModel(body.model, env);
-  if (entry && !sameBackendGroup(body.provider, entry.provider)) throw new HttpError(403, 'That model belongs to a different backend. Choose it from that backend menu.', 'backend_model_mismatch');
+  if (entry && body.provider !== entry.provider) throw new HttpError(403, 'That model belongs to a different backend. Choose it from that backend menu.', 'backend_model_mismatch');
   // The entry's own provider key, or the operator's owner key where that key can serve this pool
   // (see freeKey in freetier.mjs). Either way the credential is resolved here, on the server, and
   // never travels to the browser. When the provider's cell holds several keys the rotation picks
@@ -328,7 +324,7 @@ export function outputLimit(provider, model, max = DEFAULT_OUTPUT_TOKENS) {
  * token count into a failed run. Requested only where it is known to be supported.
  */
 export const usageReportable = (provider, target) =>
-  !target.nativeCohere && !target.nativeAnthropic && ((provider === HF_BACKEND_ID && target.base === HF_ROUTER_BASE) || ['openrouter', 'groq', 'openai', 'xai', 'cerebras', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider));
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xai', 'cerebras', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
 
 /**
  * Sentinel SSE chunk appended when an upstream stream is cut short by token output limits.
@@ -534,7 +530,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       if (access && !personalKey && path === '/api/chat') {
         const entry = paidModel(body.model, env);
         if (!entry) throw new HttpError(403, 'That model is not on the connected paid-plan list. Select an available plan model.', 'plan_model_required');
-        if (!sameBackendGroup(body.provider, entry.provider)) throw new HttpError(403, 'That model belongs to a different backend. Choose it from that backend menu.', 'backend_model_mismatch');
+        if (body.provider !== entry.provider) throw new HttpError(403, 'That model belongs to a different backend. Choose it from that backend menu.', 'backend_model_mismatch');
         // The dashboard is authoritative even if a stale client names a different provider.
         body.provider = entry.provider;
       }
@@ -558,13 +554,6 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
         funding = { ...funding, apiKey: cleanKey(env[plan.envKey]) || funding.apiKey };
       }
       const target = await resolveTarget(provider, body.baseUrl, env, resolve);
-      const hfDedicated = provider === HF_BACKEND_ID && target.base !== HF_ROUTER_BASE;
-      let endpointModels = [];
-      if (hfDedicated) {
-        try { endpointModels = hfEndpointModels(env.HF_BACKEND_MODELS); } catch (error) { throw new HttpError(503, error.message, 'backend_not_configured'); }
-        if (!endpointModels.length) throw new HttpError(503, 'Configure this Hugging Face endpoint model in the admin dashboard first.', 'backend_not_configured');
-        if (path === '/api/chat' && !endpointModels.includes(body.model)) throw new HttpError(400, 'Choose a model configured for this Hugging Face endpoint.', 'endpoint_model_required');
-      }
       const apiKey = funding.apiKey;
       if (!apiKey && provider !== 'custom' && !(path === '/api/models' && (provider === 'openrouter' || provider === 'cheaper-inference'))) {
         // A model on the free allowlist that is simply not funded right now reads as a warming-up
@@ -610,10 +599,6 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       if (path === '/api/models' && provider === 'google' && apiKey) {
         delete headers.Authorization;
         headers['x-goog-api-key'] = apiKey;
-      }
-      if (path === '/api/models' && hfDedicated) {
-        json(res, 200, { data: endpointModels.map(id => ({ id })), configured: true });
-        return true;
       }
       if (path === '/api/models' && provider === 'huggingface' && apiKey) {
         const probe = accountProbe('huggingface');

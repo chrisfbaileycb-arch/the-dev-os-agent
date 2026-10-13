@@ -779,7 +779,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       // worker cannot read it, so an id alone would silently lose the lead the user chose. The
       // stage-candidate list is the deployment's funded ids only when the visitor is actually on
       // the free tier — a BYOK run stays on the visitor's own model for every stage.
-      const stageCandidates = inference === 'free' ? deployment.free.models.filter(id => (deployment.free.providers[id] === 'huggingface-backend') === (connection.provider === 'huggingface-backend')) : [];
+      const stageCandidates = inference === 'free' ? deployment.free.models.filter(id => deployment.free.providers[id] === connection.provider) : [];
       worker.current.postMessage({ type: 'start', runId, goal: text, workflow, connection: { ...requestConnection(connection, keys), interactionMode: workMode, maxTokens: effectiveOutput }, knowledge, sessionId: session.id, persona: persona.id, leadPersona: persona, attachments: files, stageCandidates, memories: memoriesRef.current, instructions: taskInstructions(), approvalGates: true, tools: tools.map(t => ({ name: t.name, description: t.description })) });
     } catch (e) { fail(errorText(e)); }
   }

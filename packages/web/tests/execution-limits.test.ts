@@ -7,13 +7,13 @@ import type { StartMessage } from '../src/lib/types';
 
 const event = (text: string) => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
 
-it('the separate HF backend sends a personal token without an Experiment flag', async () => {
-  const fetchMock = vi.fn(async () => event('HF fixture reply')); vi.stubGlobal('fetch', fetchMock);
+it('a BYOK run sends the personal token without an Experiment flag', async () => {
+  const fetchMock = vi.fn(async () => event('BYOK fixture reply')); vi.stubGlobal('fetch', fetchMock);
   try {
-    await complete({ ...defaultConnection('huggingface-backend'), model: 'fixture-model', token: 'hf_personal_fixture' }, 'system', 'prompt', new AbortController().signal);
+    await complete({ ...defaultConnection('groq'), model: 'fixture-model', token: 'gsk_personal_fixture' }, 'system', 'prompt', new AbortController().signal);
     const options = (fetchMock.mock.calls as unknown as [string, RequestInit][])[0][1];
     expect(options.headers).not.toHaveProperty('X-Forge-Is-Experimental');
-    expect(JSON.parse(String(options.body))).toMatchObject({ provider: 'huggingface-backend', apiKey: 'hf_personal_fixture' });
+    expect(JSON.parse(String(options.body))).toMatchObject({ provider: 'groq', apiKey: 'gsk_personal_fixture' });
   } finally { vi.unstubAllGlobals(); }
 });
 
