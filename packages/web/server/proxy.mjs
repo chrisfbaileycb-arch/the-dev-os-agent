@@ -135,7 +135,6 @@ export function fundingFor(body, env = process.env) {
   if (supplied) return { mode: typeof body.apiKey === 'string' && body.apiKey.trim() ? 'byok' : 'credits', apiKey: supplied };
   if (env.FREE_TIER_DISABLED === 'true') return { mode: 'none', apiKey: '' };
   const entry = freeModel(body.model, env);
-  if (entry && body.provider !== entry.provider) throw new HttpError(403, 'That model belongs to a different backend. Choose it from that backend menu.', 'backend_model_mismatch');
   // The entry's own provider key, or the operator's owner key where that key can serve this pool
   // (see freeKey in freetier.mjs). Either way the credential is resolved here, on the server, and
   // never travels to the browser. When the provider's cell holds several keys the rotation picks
@@ -530,7 +529,6 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       if (access && !personalKey && path === '/api/chat') {
         const entry = paidModel(body.model, env);
         if (!entry) throw new HttpError(403, 'That model is not on the connected paid-plan list. Select an available plan model.', 'plan_model_required');
-        if (body.provider !== entry.provider) throw new HttpError(403, 'That model belongs to a different backend. Choose it from that backend menu.', 'backend_model_mismatch');
         // The dashboard is authoritative even if a stale client names a different provider.
         body.provider = entry.provider;
       }
