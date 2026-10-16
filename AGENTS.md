@@ -25,6 +25,16 @@ Repository notes for agents working in Signal Forge OS.
 
 - `packages/web/server/index.mjs` composes an ordered `handlers` array; each handler gets
   `(req, res)` and returns `true` when it handled the request.
+- `packages/web/server/controller.mjs` (the customer spending controller: per-account
+  allowance, global cap, concurrency gate, watchdog) is **unit-tested but not wired** into
+  `index.mjs`. It is `node:sqlite`-only and refuses a non-`DatabaseSync` handle on purpose —
+  production is Postgres, so a Postgres-backed adapter is required before it can guard live
+  traffic. Do not call it from `proxy.mjs` without that adapter.
+- Funded pools are metered **server-side on the wire**: `proxy.mjs` writes `mode:'free'`/
+  `mode:'credits'` ledger rows from `createMeter` usage, and the free/plan gates read those
+  server keys (`usedThisMonth`). The client-authored ledger pushed to `/api/state` feeds only
+  display and the legacy `CREDIT_MONTHLY_POOL`, which gates nothing — do not move a spending
+  decision onto it.
 - Shared helpers: `HttpError`, `readBody`, `publicAddress`, `resolveTarget` in
   `server/proxy.mjs`; `checkOrigin` in `server/state.mjs`.
 - Provider eligibility lives in `server/providerRegistry.mjs`

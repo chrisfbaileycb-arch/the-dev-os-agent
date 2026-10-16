@@ -91,3 +91,9 @@ test('the controller accepts a shared sqlite handle instead of opening its own',
     assert.equal(first.authorizeTask({ userId: 'shared-a', activeRuns: 2 }), true);
   } finally { db.close(); }
 });
+
+test('the controller refuses a non-sqlite handle rather than no-opping on Postgres', () => {
+  // Production runs Postgres, which this module does not speak. Handing it a pg-shaped pool must
+  // fail loudly so it can never be wired in and silently guard nothing.
+  assert.throws(() => createSpendingController({ db: { query: async () => ({ rows: [] }) } }), /node:sqlite only/);
+});

@@ -2,6 +2,18 @@ import { DatabaseSync } from 'node:sqlite';
 
 // Customer-facing spending controller for a multi-tenant deployment.
 //
+// STATUS: implemented and unit-tested, but NOT wired into the request path. Nothing in
+// server/index.mjs imports this module. It exists as a staged building block toward the
+// per-account quotas, global cap, and concurrency limits described in
+// docs/agent-libraries-and-execution-next-steps.md, alongside the nanos budget in
+// server/budget.mjs (which is wired and gates the managed free tier today).
+//
+// Before this can guard live traffic it must run on the deployment's real datastore. Production
+// uses Postgres (render.yaml sets DATABASE_URL); this module is written against node:sqlite
+// (`DatabaseSync`, `BEGIN IMMEDIATE`), so wiring it as-is would leave the tenant guard inert on
+// the very topology it is meant to protect. The fix is a Postgres-backed adapter with the same
+// surface, not a direct call from proxy.mjs.
+//
 // The managed free tier already meters its own spend in server/budget.mjs (nanos, per-attempt
 // reservations). This controller is the customer side: an allowance per account, a deployment-wide
 // ceiling, a concurrency gate, an execution watchdog, and settlement that will not let one tenant's
@@ -41,6 +53,10 @@ export class SpendingError extends Error {
  * @param {string} [opts.file] Path when opening its own handle.
  */
 export function createSpendingController({ db, file = process.env.DATABASE_PATH || ':memory:' } = {}) {
+  // This module speaks node:sqlite only. On Postgres (the production datastore) it must not be
+  // handed a pg pool and quietly no-op; refuse loudly until a Postgres adapter exists. A shared
+  // node:sqlite handle is fine; an unrecognised object is not.
+  if (db !== undefined && !(db instanceof DatabaseSync)) throw new Error('createSpendingController is node:sqlite only; a Postgres-backed adapter is required before this can guard live traffic.');
   // A shared handle owns its own migration ordering; apply ours alone only when we opened it.
   const handle = db ?? new DatabaseSync(file);
   handle.exec(SCHEMA);
