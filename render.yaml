@@ -124,10 +124,8 @@ services:
         value: "[]"
       - key: US_BACKEND_ENABLED
         value: "true"
-      - key: HF_BACKEND_ENABLED
-        value: "true"
-      # Optional HF_BACKEND_API_KEY belongs in Render or Admin when owner funding is approved.
-      # Personal-key usage does not need it. Experiment's HF_TOKEN is never inherited here.
+      # The optional Hugging Face backend was removed entirely: its egress was neither US-only
+      # nor Shield-eligible, and the experiment lane already covers a visitor's own key.
       # Backend availability switches do not override the funding stop or USD reservations.
       # (OpenAI, Anthropic, Google, Groq, xAI; see server/providerRegistry.mjs). Add those keys, and pick
       # which of their models are free or paid, in the admin dashboard. Every other provider is
