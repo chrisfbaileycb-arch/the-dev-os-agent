@@ -32,6 +32,20 @@ describe('agent and runtime exports', () => {
     expect(parseYaml(yaml)).toEqual(JSON.parse(json)); expect(json).not.toContain(connector.token); expect(json).not.toContain('hidden-key');
     expect(agentDefinition(context, false).workingMemory).toBeUndefined();
   });
+  it('scopes the bundle to one agent: only enabled skills, never the whole library', () => {
+    saveSkillState(loadSkillState().map(row => ({ ...row, enabled: false })));
+    const definition = agentDefinition({ persona: personaById('assistant'), connectors: [] });
+    // The persona is the selected one, and nothing from the 65-package catalog rides along.
+    expect(definition.name).toBe('Assistant');
+    expect(definition.persona.id).toBe('assistant');
+    expect(definition.skills).toEqual([]);
+    expect(CREW_SKILLS.length).toBeGreaterThan(60);
+    // Turning on exactly one skill ships exactly that one.
+    const skill = CREW_SKILLS.find(s => s.kind === 'instructions' && s.markdown)!;
+    saveSkillState(loadSkillState().map(row => ({ ...row, enabled: row.id === skill.id })));
+    const one = agentDefinition({ persona: personaById('assistant'), connectors: [] });
+    expect(one.skills.map(s => s.id)).toEqual([skill.id]);
+  });
   it('strips credentials in connector URLs but retains safe project scoping', () => {
     expect(publicConnectorUrl('https://user:password@tools.example/mcp?project=p1&access_token=secret&X-Amz-Credential=secret')).toBe('https://tools.example/mcp?project=p1');
   });

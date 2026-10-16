@@ -1,24 +1,25 @@
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown, Database, FileText, Globe, ListChecks, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X, Zap } from 'lucide-react';
+import { Check, ChevronDown, Database, FileText, Globe, LoaderCircle, Plug, Plus, RefreshCw, Trash2, Upload, X, Zap } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import { guessTransport, refreshTools, type McpConnection, type McpTransport, type McpAuthHeader } from '../lib/mcp';
 import { type ConnectorSettings } from '../lib/connectors';
 import { MCP_PRESETS, MCP_PRESET_GROUPS, presetConnected, presetForm, type McpPreset, type McpPresetGroup } from '../lib/mcpServers';
 import { IMAGE_MODELS, loadMediaConfigs, saveMediaConfigs, type MediaConfig } from '../lib/mediaTools';
-import { loadSkillState, loadYourSkills } from '../lib/skillRegistry';
-import AgentSkills from './AgentSkills';
 import { useDismiss } from './useDismiss';
 import type { Persona } from '../lib/roster';
 import type { Knowledge } from '../lib/types';
 
-// The Connectors hub. One menu, four kinds of reach, each switchable on its own.
+// The Connectors hub. One menu, four kinds of external reach, each switchable on its own.
 //
 // Each connector is named for what it does — read a repository, read a URL, read your
 // documents — and custom MCP is one of four, not the whole idea. Model keys are not
 // connectors. They live in Settings. An MCP server is a tool the agent may call; a chat
 // prompt is never sent to one.
+//
+// Pathways (skills) are deliberately not a tab here. They live on the Agents & Skills page
+// with the roster. This drawer is only about connections to the outside world.
 
-export type ConnectorTab = 'github' | 'web' | 'files' | 'mcp' | 'skills';
+export type ConnectorTab = 'github' | 'web' | 'files' | 'mcp';
 
 export interface ConnectorsProps {
   persona?: Persona; secrets?: string[];
@@ -38,7 +39,6 @@ const TABS: { id: ConnectorTab; label: string; icon: typeof GithubMark; blurb: s
   { id: 'web', label: 'Web', icon: Globe, blurb: 'URL crawler, no CORS limits' },
   { id: 'files', label: 'Documents', icon: FileText, blurb: 'Drag-and-drop knowledge index' },
   { id: 'mcp', label: 'MCP & Tools', icon: Plug, blurb: 'External agent servers' },
-  { id: 'skills', label: 'Skills', icon: ListChecks, blurb: 'Markdown pathways, plus a connector when one is named' },
 ];
 
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
@@ -57,7 +57,6 @@ export default function Connectors(p: ConnectorsProps) {
   const [preset, setPreset] = useState<McpPreset | null>(null);
   const [presetQuery, setPresetQuery] = useState('');
   const [activeGroup, setActiveGroup] = useState<McpPresetGroup | 'All'>('All');
-  const [skillCount, setSkillCount] = useState(() => loadSkillState().filter(s => s.enabled).length + loadYourSkills().filter(s => s.enabled).length);
 
   // The tool directory is the reason the drawer is open, so it always starts empty and unfiltered.
   // Clearing on mount also defeats a browser that autofills the search field on its own, which
@@ -105,7 +104,7 @@ export default function Connectors(p: ConnectorsProps) {
   }
 
   const mcpTools = p.mcp.filter(c => c.enabled).reduce((n, c) => n + c.tools.length, 0);
-  const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools, skills: skillCount };
+  const counts: Record<ConnectorTab, number> = { github: p.settings.github.enabled ? 1 : 0, web: p.settings.web.enabled ? 1 : 0, files: p.settings.knowledge.enabled ? p.knowledge.length : 0, mcp: mcpTools };
 
 
   return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) p.close(); }}>
@@ -206,7 +205,7 @@ export default function Connectors(p: ConnectorsProps) {
         </section>
       </>}
 
-      {p.tab === 'skills' && <AgentSkills persona={p.persona} secrets={p.secrets} media={media} mcp={p.mcp} setMcp={p.setMcp} notify={p.notify} onChange={() => setSkillCount(loadSkillState().filter(s => s.enabled).length + loadYourSkills().filter(s => s.enabled).length)} />}
+
     </section>
   </div>;
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Plus, Trash2, X } from 'lucide-react';
+import { Check, Download, Plus, Trash2, X } from 'lucide-react';
 import { allSkills, generalPersonas, skills, workflows, type Persona } from '../lib/roster';
 import { MAX_NAME, MAX_PROMPT, MAX_ROLE, createCustomAgent, validateDraft, type CustomAgentDraft } from '../lib/customAgents';
 import type { Workflow } from '../lib/types';
@@ -17,13 +17,14 @@ import { useDismiss } from './useDismiss';
 // personas talks the way you want, writing one is the answer, and it should not be the thing you
 // discover last.
 
-function Card({ p, active, onPick, onDelete }: { p: Persona; active: boolean; onPick?: (id: string) => void; onDelete?: (id: string) => void }) {
+function Card({ p, active, onPick, onDelete, onExport }: { p: Persona; active: boolean; onPick?: (id: string) => void; onDelete?: (id: string) => void; onExport?: (id: string) => void }) {
   const Icon = iconFor(p.icon);
   return <div className={active ? 'persona-card active' : 'persona-card'}>
     <button className="persona-hit" onClick={() => onPick?.(p.id)} disabled={!onPick} aria-pressed={active}>
       <span className="persona-icon"><Icon size={17} strokeWidth={1.75} /></span>
       <span className="persona-text"><strong>{p.name}{active && <Check size={13} />}</strong><small>{p.tagline}</small><span className="caps">{p.capabilities.map(c => <em key={c}>{c}</em>)}{p.tools?.map(t => <em key={t} className="tool">{t}</em>)}</span></span>
     </button>
+    {onExport && <button className="icon-button persona-export" title={`Export ${p.name} only`} aria-label={`Export ${p.name}`} onClick={() => onExport(p.id)}><Download size={13} /></button>}
     {onDelete && <button className="icon-button persona-delete" title={`Delete ${p.name}`} aria-label={`Delete ${p.name}`} onClick={() => onDelete(p.id)}><Trash2 size={13} /></button>}
   </div>;
 }
@@ -61,18 +62,20 @@ export interface RosterListProps {
   custom: Persona[];
   onCreate: (p: Persona) => void;
   onDelete: (id: string) => void;
+  /** When given, each card carries its own scoped export — that agent alone, never the library. */
+  onExport?: (id: string) => void;
 }
 
 export function RosterList(p: RosterListProps) {
   return <>
     <CreateAgent onCreate={p.onCreate} />
     <h3 className="group-label">General <small>direct chat and code — no planning steps</small></h3>
-    <div className="persona-grid">{generalPersonas.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} />)}</div>
+    <div className="persona-grid">{generalPersonas.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} onExport={p.onExport} />)}</div>
     <h3 className="group-label">Skills & AI Crew <small>task specialists and companions in the owner's voice</small></h3>
-    <div className="persona-grid">{allSkills.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} />)}</div>
+    <div className="persona-grid">{allSkills.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} onExport={p.onExport} />)}</div>
     {p.custom.length > 0 && <>
       <h3 className="group-label">Your agents <small>saved in this browser</small></h3>
-      <div className="persona-grid">{p.custom.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} onDelete={p.onDelete} />)}</div>
+      <div className="persona-grid">{p.custom.map(x => <Card key={x.id} p={x} active={x.id === p.activeId} onPick={p.onPick} onDelete={p.onDelete} onExport={p.onExport} />)}</div>
     </>}
     <details className="roster-advanced">
       <summary>Multi-agent workflows and their stage agents</summary>

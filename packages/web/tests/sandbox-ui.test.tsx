@@ -23,6 +23,8 @@ it('keeps the custom MCP form visible and distinguishes all 25 tools and the two
   expect(host.querySelectorAll('.preset')).toHaveLength(25); expect(host.querySelector('#mcp-config-form')).not.toBeNull();
   expect(host.textContent).toContain('Add or Configure a Model Context Protocol server'); expect(host.textContent).toContain('HeyGen'); expect(host.textContent).toContain('Nano Banana'); expect(host.textContent).not.toContain('Hugging Face'); expect(host.textContent).not.toContain('Context7');
   expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Connect listed servers')).toBe(false);
+  // The drawer is for external connections only. Skills moved to the Agents & Skills page.
+  expect([...host.querySelectorAll('.connector-tab strong')].map(n => n.textContent)).toEqual(['GitHub', 'Web', 'Documents', 'MCP & Tools']);
 });
 it('switches the right pane between the exact requested tabs and supports keyboard navigation', () => {
   mount(<OutputPanel execution={execution} content="" close={vi.fn()} github={defaultSettings().github} openConnectors={vi.fn()} onPreviewFocus={vi.fn()} updateGithub={vi.fn()} secrets={[]} />);

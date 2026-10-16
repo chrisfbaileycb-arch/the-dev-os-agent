@@ -17,7 +17,7 @@ import OutputPanel from './ui/OutputPanel';
 import Workspace from './ui/Workspace';
 import { loadMediaConfigs, saveMediaConfigs, clearMediaConfigs, mediaToolSpecs, type MediaConfig } from './lib/mediaTools';
 import { sandboxedTools, type ToolObservation } from './lib/toolSandbox';
-import { redactExportValue } from './lib/exportAgentBundle';
+import { exportAgentBundle, redactExportValue } from './lib/exportAgentBundle';
 import { generatedFiles } from './lib/project';
 import type { ExecutionEvent, RuntimeArtifact } from './lib/executionTypes';
 import Pricing from './ui/Pricing';
@@ -845,8 +845,8 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   }, [page]);
   useEffect(() => {
     const view = new URLSearchParams(location.search).get('view');
-    if (view === 'crew') setPage('roster');
-    else if (view === 'skills') setPage('skills');
+    // The roster and the skills catalog are one page now; both old share links land on it.
+    if (view === 'crew' || view === 'skills' || view === 'roster' || view === 'agents') setPage('agents');
     else if (view === 'apis') setPage('apis');
     else if (view === 'knowledge') setPage('knowledge');
     else if (view === 'chat') setPage('workspace');
@@ -1010,9 +1010,11 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
             />
           </>}
         </Workspace>}
-        {page === 'roster' && <div className="page"><div className="page-head"><div><h1>Agent roster</h1><p>One agent answers you directly. The general agents are the plain ones, the specialists take a stronger view, and you can write your own. Every prompt starts with the same safety baseline.</p></div></div><RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent} /></div>}
+        {page === 'agents' && <div className="page"><div className="page-head"><div><h1>Agents &amp; Skills</h1><p>Your squad at the top, the reusable skill library below. One agent answers you directly; a skill is a complete set of instructions you switch on for the tasks that need it.</p></div></div>
+          <RosterList activeId={persona.id} onPick={id => { choosePersona(id); setPage('workspace'); }} custom={custom} onCreate={addCustomAgent} onDelete={deleteCustomAgent}
+            onExport={id => { const target = personaById(id); exportAgentBundle({ persona: target, connectors: mcp, secrets: knownSecrets, media, memories }, 'json', true).catch(e => setNotice(errorText(e))); }} />
+          <AgentSkills persona={persona} secrets={knownSecrets} media={media} mcp={mcp} setMcp={setMcp} notify={setNotice} /></div>}
         {page === 'knowledge' && <KnowledgeHub knowledge={knowledge} busy={busy} notify={setNotice} memory={{ memories, add: async text => { await remember('preference', text, true); }, remove: async id => { try { commitMemories(await removeMemory(id, memoriesRef.current)); } catch (e) { setNotice(errorText(e)); } } }} save={async doc => { await storage.saveKnowledge(doc); setKnowledge(k => [doc, ...k]); }} remove={async id => { try { await storage.removeKnowledge(id); setKnowledge(k => k.filter(x => x.id !== id)); } catch (e) { setNotice(errorText(e)); } }} />}
-        {page === 'skills' && <div className="page"><div className="page-head"><div><h1>Agent Skills</h1><p>Reusable instructions for your agents. Read and enable complete skill packages. Administrators manage repository imports.</p></div></div><AgentSkills persona={persona} secrets={knownSecrets} media={media} mcp={mcp} setMcp={setMcp} notify={setNotice} /></div>}
         {page === 'apis' && <Suspense fallback={<div className="page" role="status">Loading API directory…</div>}><ApiDirectory webEnabled={settings.web.enabled} openConnectors={() => openConnectors('web')} onUse={text => { setDraft(text); setPage('workspace'); setNotice('API example added to the message box. Review it, then send when ready.'); }} /></Suspense>}
         {page === 'pricing' && <Pricing free={deployment.free} billing={deployment.billing} freeBalance={freeBalance} onStart={() => setPage('workspace')} onAddKey={() => { setConnection(c => ({ ...c, inference: 'byok' })); setPage('settings'); }} />}
         {page === 'settings' && <Settings connection={connection} setConnection={setConnection} keys={keys} setKeys={setKeys} keyed={keyed} discovered={discovered} discovering={discovering} discover={id => void discover(id)} save={saveSettingsForm} forget={forget} balance={balance} freeBalance={freeBalance} free={deployment.free} paid={deployment.paid} subscription={subscription} planChecking={planChecking} planError={planError} adminConfigured={adminActive} openAdmin={() => setPage('admin')} ledger={ledger} busy={busy} canInstall={canInstall} serverReachable={serverReachable} requestClear={() => setConfirm('clear')} theme={theme} setTheme={chooseTheme} pipes={pipes} setPipes={setPipes} storage={deployment.storage} engineKey={engineKey} setEngineKey={value => { saveEngineKey(value); setEngineKey(value); }} />}

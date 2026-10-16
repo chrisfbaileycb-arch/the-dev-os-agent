@@ -1,10 +1,34 @@
 import { useEffect, useState } from 'react';
-import { Check, Download, FileText, Pencil, Plug, Plus, Trash2 } from 'lucide-react';
-import { CREW_SKILLS, exportSkillStack, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, parseSkillStack, saveSkillState, saveYourSkills, instructionText, SKILL_CAP, SKILL_FILE_CAP, refreshSystemSkills, type SkillState, type YourSkill } from '../lib/skillRegistry';
-import { exportAgentBundle, type AgentExportFormat } from '../lib/exportAgentBundle';
-import { defaultPersona, type Persona } from '../lib/roster';
+import { Check, FileText, Pencil, Plug, Plus, Trash2 } from 'lucide-react';
+import { CREW_SKILLS, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, parseSkillStack, saveSkillState, saveYourSkills, instructionText, SKILL_CAP, SKILL_FILE_CAP, refreshSystemSkills, type SkillState, type YourSkill } from '../lib/skillRegistry';
+import { type Persona } from '../lib/roster';
 import type { MediaConfig } from '../lib/mediaTools';
 import type { McpConnection } from '../lib/mcp';
+
+// The skill library, split into named categories so it reads as a catalog rather than one long
+// list. The categories follow the skill id: the imported agency packages are all `agency-<category>-…`,
+// and the first-party pathways are their own group. A category only appears when it holds a match
+// for the current search, so the tabs describe what is actually on screen.
+const CATEGORY_LABELS: Record<string, string> = {
+  engineering: 'Engineering',
+  general: 'General & craft',
+  marketing: 'Marketing',
+  product: 'Product',
+  design: 'Design',
+  data: 'Data & AI',
+  security: 'Security',
+  operations: 'Operations',
+  support: 'Support & docs',
+  sales: 'Sales',
+  other: 'Other',
+};
+const FIRST_PARTY = 'first-party';
+function categoryOf(id: string, kind: string): string {
+  if (kind !== 'instructions') return FIRST_PARTY;
+  const match = /^agency-([a-z0-9]+)-/.exec(id);
+  return match ? match[1] : FIRST_PARTY;
+}
+const categoryLabel = (key: string) => (key === FIRST_PARTY ? 'First-party pathways' : CATEGORY_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1));
 
 export interface AgentSkillsProps {
   persona?: Persona; secrets?: string[]; media?: MediaConfig[];
@@ -15,12 +39,7 @@ export interface AgentSkillsProps {
   adminMode?: boolean;
 }
 
-/** The same skill library is available from navigation and the connectors drawer. */
 export default function AgentSkills(p: AgentSkillsProps) {
-  const [exportFormat, setExportFormat] = useState<AgentExportFormat>('json');
-  const [includeMemory, setIncludeMemory] = useState(true);
-  const [exportingAgent, setExportingAgent] = useState(false);
-  async function exportAgent() { setExportingAgent(true); try { await exportAgentBundle({ persona: p.persona ?? defaultPersona(), connectors: p.mcp, secrets: p.secrets, media: p.media }, exportFormat, includeMemory); } catch (error) { p.notify(error instanceof Error ? error.message : 'Could not export agent.'); } finally { setExportingAgent(false); } }
   const [skills, setSkills] = useState<SkillState[]>(() => loadSkillState());
   const [yours, setYours] = useState<YourSkill[]>(() => loadYourSkills());
   const [openSkill, setOpenSkill] = useState<string | null>(null);
@@ -29,12 +48,19 @@ export default function AgentSkills(p: AgentSkillsProps) {
   const [draftUse, setDraftUse] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [query, setQuery] = useState('');
+  const [category, setCategory] = useState<string>('All');
   const [editing, setEditing] = useState<string | null>(null);
   useEffect(() => { const controller = new AbortController(); void refreshSystemSkills(controller.signal).then(() => setSkills(loadSkillState())).catch(e => { if (!controller.signal.aborted) p.notify(e instanceof Error ? e.message : 'Could not read catalog.'); }); return () => controller.abort(); }, []);
   let activation = '';
   let activationError = '';
   try { activation = instructionText(skills, yours); } catch (e) { activationError = e instanceof Error ? e.message : 'Could not activate skills.'; }
   const matches = (name: string, description: string) => `${name} ${description}`.toLowerCase().includes(query.trim().toLowerCase());
+  // The catalog categories that survive the current search, in a stable reading order: the
+  // first-party pathways first, then the imported groups alphabetically.
+  const categories = Array.from(new Set(CREW_SKILLS.filter(s => s.kind !== 'live' && matches(s.name, s.blurb)).map(s => categoryOf(s.id, s.kind))))
+    .sort((a, b) => (a === FIRST_PARTY ? -1 : b === FIRST_PARTY ? 1 : categoryLabel(a).localeCompare(categoryLabel(b))));
+  const inCategory = (id: string, kind: string) => category === 'All' || categoryOf(id, kind) === category;
+  const visible = CREW_SKILLS.filter(s => s.kind === 'instructions' && matches(s.name, s.blurb) && inCategory(s.id, s.kind));
 
   function writeSkills(next: SkillState[]) {
     saveSkillState(next);
@@ -50,11 +76,6 @@ export default function AgentSkills(p: AgentSkillsProps) {
   }
   function patchSkill(id: string, patch: Partial<SkillState>) {
     writeSkills(skills.map(row => row.id === id ? { ...row, ...patch, config: patch.config ?? row.config } : row));
-  }
-  function exportStack() {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(exportSkillStack(skills, yours), null, 2)], { type: 'application/json' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'signal-forge-skills.json'; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   function writeYours(next: YourSkill[]) {
     try { saveYourSkills(next); } catch (e) { p.notify(e instanceof Error ? e.message : 'Could not save skills.'); return false; }
@@ -102,11 +123,15 @@ export default function AgentSkills(p: AgentSkillsProps) {
   }
 
   return <section className="panel">
-        <div className="panel-head"><h2>Skill library · {CREW_SKILLS.filter(s => s.kind === 'instructions').length} complete packages</h2><span className="row gap">{p.adminMode && <><button type="button" className="button small" onClick={() => { setEditing(null); setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(v => !v); }}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,.json,text/markdown,text/plain,application/json" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label></>}<button type="button" className="button small" onClick={exportStack}><Download size={13} />Export Skills</button><select aria-label="Agent export format" value={exportFormat} onChange={e => setExportFormat(e.target.value as AgentExportFormat)}><option value="json">JSON</option><option value="yaml">YAML</option></select><button type="button" className="button primary small" disabled={exportingAgent} onClick={() => void exportAgent()}><Download size={13} />Export Agent</button></span></div>
+        <div className="panel-head"><h2>Skill library · {CREW_SKILLS.filter(s => s.kind === 'instructions').length} complete packages</h2><span className="row gap">{p.adminMode && <><button type="button" className="button small" onClick={() => { setEditing(null); setDraftName(''); setDraftUse(''); setDraftBody(''); setAdding(v => !v); }}><Plus size={13} />Add</button><label className="button small">Import<input type="file" className="sr-only" accept=".md,.txt,.markdown,.json,text/markdown,text/plain,application/json" onChange={e => { void importSkill(e.target.files?.[0]); e.target.value = ''; }} /></label></>}</span></div>
         <p className="help">Select the complete skills your agent should follow. Repository imports and system-wide catalog management belong in the protected Admin dashboard. Enabled choices stay in this browser. Supporting scripts are reference files and run only through an explicitly connected tool.</p>
         <p className={activationError ? 'msg-error' : 'help'}>{activationError || `Selected instructions: ${activation.length.toLocaleString()} / ${SKILL_CAP.toLocaleString()} characters. Each selected skill is loaded completely. Turn on only the skills needed for this task.`}</p>
-        <label className="check"><input type="checkbox" checked={includeMemory} onChange={e => setIncludeMemory(e.target.checked)} />Include browser-injected memory in agent exports</label>
+        <p className="help">Export a single configured agent from its card in the roster above — that export carries the agent's persona, its system prompt, and only the skills you have switched on. There is no whole-library export.</p>
         <label>Search skills<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Name or purpose" /></label>
+        <div className="tool-category-tabs" role="group" aria-label="Skill categories">
+          <button type="button" className={category === 'All' ? 'output-tab active' : 'output-tab'} aria-pressed={category === 'All'} onClick={() => setCategory('All')}>All</button>
+          {categories.map(key => <button key={key} type="button" className={category === key ? 'output-tab active' : 'output-tab'} aria-pressed={category === key} onClick={() => setCategory(key)}>{categoryLabel(key)}</button>)}
+        </div>
         {p.adminMode && adding && <div className="stack">
           <label>Name<input value={draftName} maxLength={80} onChange={e => setDraftName(e.target.value)} placeholder="Review a pull request" /></label>
           <label>When to use it<input value={draftUse} maxLength={240} onChange={e => setDraftUse(e.target.value)} placeholder="Use when someone asks for a review before a merge." /></label>
@@ -128,8 +153,9 @@ export default function AgentSkills(p: AgentSkillsProps) {
         </div>)}
         {!yours.length && <p className="help">None yet. Add one, or import a SKILL.md.</p>}
         {query.trim() && !yours.some(skill => matches(skill.name, skill.description)) && !CREW_SKILLS.some(skill => matches(skill.name, skill.blurb)) && <p className="help">No skills match this search.</p>}
-        <h3 className="group-label">Engineering &amp; published instructions</h3>
-        {CREW_SKILLS.filter(skill => skill.kind === 'instructions' && matches(skill.name, skill.blurb)).map(skill => {
+        <h3 className="group-label">{category === 'All' ? 'Engineering &' : categoryLabel(category)} <small>{category === 'All' ? 'published instructions' : 'instructions'}</small></h3>
+        {!visible.length && <p className="help">No skills match this category{query.trim() ? ' and search' : ''}.</p>}
+        {visible.map(skill => {
           const row = skills.find(item => item.id === skill.id) ?? { id: skill.id, enabled: false, config: {} };
           return <div key={skill.id} className="doc-row">
             <button type="button" className="text-button" aria-label={`Read ${skill.name}`} aria-expanded={openSkill === skill.id} onClick={() => setOpenSkill(openSkill === skill.id ? null : skill.id)}><FileText size={13} /></button>
