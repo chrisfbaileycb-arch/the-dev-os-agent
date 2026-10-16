@@ -44,6 +44,18 @@ test('repository ingestion preserves complete markdown, support resources and a 
   // The source repository is tagged so the browser can build an "Imported: <repo>" category.
   assert.equal(result.skills[0].repository, 'fixture/repo');
 });
+test('ingestion is read-only: every GitHub call is a GET and none writes to any account', async () => {
+  const calls = [];
+  const spy = async (url, init = {}) => { calls.push({ method: init.method ?? 'GET', url: String(url) }); return github()(url); };
+  await importRepositorySkills({ url: 'https://github.com/fixture/repo', directory: 'skills', token: 'operator-token' }, spy);
+  assert.ok(calls.length > 0);
+  for (const call of calls) {
+    assert.equal(call.method, 'GET');
+    assert.equal(new URL(call.url).hostname, 'api.github.com');
+  }
+  // Nothing resembling a fork, push, create, or mutation endpoint is ever touched.
+  for (const call of calls) assert.doesNotMatch(call.url, /\/forks|\/merges|\/contents\//);
+});
 test('incomplete trees and non-GitHub sources fail without partial indexing', async () => {
   await assert.rejects(() => importRepositorySkills({ url: 'https://github.com/fixture/repo' }, github({ truncated: true })), /incomplete tree/);
   for (const url of ['http://github.com/a/b', 'https://github.com.evil.test/a/b', 'https://user:secret@github.com/a/b', 'https://github.com/a/b/tree/main']) assert.throws(() => parseRepository(url));
