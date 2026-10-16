@@ -31,6 +31,9 @@ it('unifies managed US models under one source selector while retaining their pr
   mount(<ModelPicker {...props} />); open();
   expect(host.querySelectorAll('.model-trigger')).toHaveLength(1);
   expect(host.textContent).toContain('OpenAI fixture'); expect(host.textContent).toContain('Groq fixture');
+  // Server-funded models carry the [MANAGED] source badge, distinct from a visitor's own [BYOK] key.
+  expect(host.textContent).toContain('[MANAGED]');
+  expect(host.querySelector('.model-badge.source-managed')).not.toBeNull();
   const option = [...host.querySelectorAll('[role=option]')].find(b => b.textContent?.includes('Groq fixture')) as HTMLButtonElement;
   act(() => option.click());
   expect(props.onPick).toHaveBeenCalledWith('groq-model', 'free', 'groq');

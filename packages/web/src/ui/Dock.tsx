@@ -85,43 +85,10 @@ export default function Dock(p: DockProps) {
 
   return <div className="dock-shell">
     <div className={dragging ? 'dock dragging' : 'dock'} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}>
-      {attached > 0 && <div className="dock-attachments">
-        {p.photos.map(ph => <span key={ph.name} className="chip photo-chip"><img src={ph.thumb} alt="" width={22} height={22} />{ph.name}<small>{ph.width}×{ph.height}</small><button aria-label={`Remove ${ph.name}`} onClick={() => p.removePhoto(ph.name)}><X size={11} /></button></span>)}
-        {p.attachments.map(a => <span key={a.name} className="chip"><Paperclip size={11} />{a.name}<small>{Math.ceil(a.content.length / 4).toLocaleString()} tok</small><button aria-label={`Remove ${a.name}`} onClick={() => p.removeAttachment(a.name)}><X size={11} /></button></span>)}
-      </div>}
-      {p.truncated && !p.busy && <div className="dock-continuation" role="status">
-        <span>This reply is incomplete. Continue from the saved output.</span>
-        <button type="button" className="button small primary continuation-btn" onClick={p.onContinue}>
-          Continue from where you left off
-        </button>
-      </div>}
-
-      {/* The input row: attach on the left, the draft in the middle, voice and send on the right —
-          the three things a message needs, one reach from where you type. */}
-      <div className="dock-input">
-        <button className="icon-button dock-attach" title="Attach a file or photo" aria-label="Attach a file or photo" disabled={p.busy} onClick={() => fileInput.current?.click()}><FolderOpen size={16} strokeWidth={1.75} /></button>
-        <button className="icon-button dock-attach" title="Pull a file from GitHub" aria-label="Pull a file from GitHub" disabled={p.busy} onClick={p.openGithubPull}><GithubMark size={16} strokeWidth={1.75} /></button>
-        <input ref={fileInput} type="file" className="sr-only" tabIndex={-1} accept=".txt,.md,.csv,.json,.html,image/*" multiple onChange={e => { p.addFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
-        <label className="sr-only" htmlFor="draft">Message</label>
-        <textarea
-          id="draft" ref={area} rows={1} value={p.draft} maxLength={12000} disabled={p.busy}
-          placeholder={placeholder}
-          onChange={e => p.setDraft(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (p.draft.trim() && !p.busy && p.ready) p.send(); } }}
-          onPaste={e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); p.addFiles(files); } }}
-        />
-        <span className="dock-send">
-          <button className={p.listening ? 'icon-button mic recording' : 'icon-button mic'} title={p.voiceSupported ? (p.listening ? 'Stop recording' : 'Talk to speak') : 'Voice input needs Chrome, Edge, or Safari'} aria-label={p.listening ? 'Stop recording' : 'Talk to speak'} aria-pressed={p.listening} disabled={!p.voiceSupported || p.busy} onClick={p.toggleVoice}>{p.listening ? <MicOff size={16} strokeWidth={1.75} /> : <Mic size={16} strokeWidth={1.75} />}</button>
-          {p.busy
-            ? <button className="button danger small send" onClick={p.stop}><Square size={13} />Stop</button>
-            : <button className="button primary small send" disabled={!p.draft.trim() || !p.ready} onClick={p.send} title={WORK_MODES[p.workMode].description}><Send size={14} /><span>{SEND_LABEL[p.workMode]}</span></button>}
-        </span>
-      </div>
-      {p.listening && <p className="dock-recording" role="status"><span className="rec-dot" />Recording — click the mic again to stop</p>}
-
-      {/* One control row, laid out as a single horizontal line so nothing floats on its own:
-          work mode, agent, then the model and its key source. On a phone the labels collapse
-          to icons and the row wraps. */}
+      {/* The toolbar sits above the typing surface, on its own line: how you are working, the
+          agent, the model and its source, then the connectors. Keeping it out of the input box is
+          what lets the textarea stay square and lets every popover open upward without covering
+          what you are typing. On a phone the labels collapse to icons and the row wraps. */}
       <div className="dock-bar">
         <label className="dock-control">
           <span className="dock-control-label"><MessageSquare size={13} strokeWidth={1.75} />Mode</span>
@@ -141,6 +108,11 @@ export default function Dock(p: DockProps) {
           <ChevronDown size={12} />
         </button>}
         <ModelPicker label="Model" backends={p.backends} developer={p.workMode !== 'chat'} provider={p.provider} onOpenSettings={p.openSettings} onOpenConnectors={p.openConnectors} connectorCount={p.connectorCount} model={p.model} inference={p.inference} free={p.free} paid={p.paid} labels={p.labels} reach={p.reach} keyed={p.keyed} discovered={p.discovered} discovering={p.discovering} pipes={p.pipes} disabled={p.busy} onPick={p.pickModel} onNeedsKey={p.modelNeedsKey} onNeedsPlan={p.modelNeedsPlan} onDiscover={p.discover} />
+        <button type="button" className="dock-control dock-control-button" onClick={p.openConnectors} title="Servers and tools an agent can reach" disabled={p.busy}>
+          <span className="dock-control-label"><Plug size={13} strokeWidth={1.75} />Connectors</span>
+          {p.connectorCount > 0 && <span className="dock-control-value">{p.connectorCount}</span>}
+          <ChevronDown size={12} />
+        </button>
         {p.showEngine && <label className="dock-control dock-control-toggle engine-toggle" title="Run this task in Google's hosted Linux sandbox. Not a chat model. Off until its own key is saved.">
           <input type="checkbox" checked={Boolean(p.engineOn)} disabled={p.busy} onChange={e => p.setEngineOn?.(e.target.checked)} />
           <Cpu size={13} strokeWidth={1.75} />
@@ -148,6 +120,41 @@ export default function Dock(p: DockProps) {
         </label>}
         <span className="dock-counters" title="Estimated tokens in your message and in the attached context"><em>{p.tokens.draft.toLocaleString()}</em> draft · <em>{p.tokens.context.toLocaleString()}</em> context</span>
       </div>
+
+      {attached > 0 && <div className="dock-attachments">
+        {p.photos.map(ph => <span key={ph.name} className="chip photo-chip"><img src={ph.thumb} alt="" width={22} height={22} />{ph.name}<small>{ph.width}×{ph.height}</small><button aria-label={`Remove ${ph.name}`} onClick={() => p.removePhoto(ph.name)}><X size={11} /></button></span>)}
+        {p.attachments.map(a => <span key={a.name} className="chip"><Paperclip size={11} />{a.name}<small>{Math.ceil(a.content.length / 4).toLocaleString()} tok</small><button aria-label={`Remove ${a.name}`} onClick={() => p.removeAttachment(a.name)}><X size={11} /></button></span>)}
+      </div>}
+      {p.truncated && !p.busy && <div className="dock-continuation" role="status">
+        <span>This reply is incomplete. Continue from the saved output.</span>
+        <button type="button" className="button small primary continuation-btn" onClick={p.onContinue}>
+          Continue from where you left off
+        </button>
+      </div>}
+
+      {/* The input row: attach on the left, the draft filling the middle, voice and send parked in
+          the lower-right corner. The draft keeps its own generous height, so a short note still
+          looks like a place to write rather than a single cramped line. */}
+      <div className="dock-input">
+        <button className="icon-button dock-attach" title="Attach a file or photo" aria-label="Attach a file or photo" disabled={p.busy} onClick={() => fileInput.current?.click()}><FolderOpen size={16} strokeWidth={1.75} /></button>
+        <button className="icon-button dock-attach" title="Pull a file from GitHub" aria-label="Pull a file from GitHub" disabled={p.busy} onClick={p.openGithubPull}><GithubMark size={16} strokeWidth={1.75} /></button>
+        <input ref={fileInput} type="file" className="sr-only" tabIndex={-1} accept=".txt,.md,.csv,.json,.html,image/*" multiple onChange={e => { p.addFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
+        <label className="sr-only" htmlFor="draft">Message</label>
+        <textarea
+          id="draft" ref={area} rows={3} value={p.draft} maxLength={12000} disabled={p.busy}
+          placeholder={placeholder}
+          onChange={e => p.setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (p.draft.trim() && !p.busy && p.ready) p.send(); } }}
+          onPaste={e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); p.addFiles(files); } }}
+        />
+        <span className="dock-send">
+          <button className={p.listening ? 'icon-button mic recording' : 'icon-button mic'} title={p.voiceSupported ? (p.listening ? 'Stop recording' : 'Talk to speak') : 'Voice input needs Chrome, Edge, or Safari'} aria-label={p.listening ? 'Stop recording' : 'Talk to speak'} aria-pressed={p.listening} disabled={!p.voiceSupported || p.busy} onClick={p.toggleVoice}>{p.listening ? <MicOff size={16} strokeWidth={1.75} /> : <Mic size={16} strokeWidth={1.75} />}</button>
+          {p.busy
+            ? <button className="button danger small send" onClick={p.stop}><Square size={13} />Stop</button>
+            : <button className="button primary small send" disabled={!p.draft.trim() || !p.ready} onClick={p.send} title={WORK_MODES[p.workMode].description}><Send size={14} /><span>{SEND_LABEL[p.workMode]}</span></button>}
+        </span>
+      </div>
+      {p.listening && <p className="dock-recording" role="status"><span className="rec-dot" />Recording — click the mic again to stop</p>}
     </div>
     <p className="dock-hint">{p.online === false ? <><strong>Offline.</strong> Hosted models need the network. A local model works only if Ollama is up.</> : <><strong>{WORK_MODES[p.workMode].label}</strong> — {WORK_MODES[p.workMode].description} Enter to send · Shift+Enter for a new line.</>}</p>
   </div>;

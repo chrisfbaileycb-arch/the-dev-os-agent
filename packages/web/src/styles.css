@@ -237,11 +237,14 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
    transcript. The shell is opaque, bordered and stacked above the transcript, so nothing scrolling
    behind it can show through into the input — no transparent gradient for text to bleed under. */
 .dock-shell { position: relative; z-index: 5; flex: 0 0 auto; padding: 10px 14px calc(8px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
-.dock { border: 1px solid var(--line-strong); background: var(--panel); border-radius: 14px; box-shadow: var(--shadow); padding: 8px 8px 6px; display: flex; flex-direction: column; gap: 6px; transition: border-color 120ms ease; }
+.dock { border: 1px solid var(--line-strong); background: var(--panel); border-radius: 14px; box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; gap: 8px; transition: border-color 120ms ease; }
 .dock:focus-within { border-color: var(--line-strong); box-shadow: var(--shadow), 0 0 0 3px var(--accent-soft); }
 .dock.dragging { border-color: var(--accent); background: var(--accent-soft); }
-.dock-input { display: flex; align-items: flex-end; gap: 4px; }
-.dock textarea { flex: 1; min-width: 0; width: 100%; border: 0; background: var(--panel); resize: none; outline: none; padding: 5px 6px; line-height: 1.5; max-height: 200px; }
+.dock-input { display: flex; align-items: flex-end; gap: 6px; }
+/* The prompt surface: square and generous, so a short note still reads as a place to write. It
+   grows with the draft up to the ceiling set in Dock.tsx and then scrolls, never pushing the send
+   button away. */
+.dock textarea { flex: 1; min-width: 0; width: 100%; min-height: 96px; border: 0; background: var(--panel); resize: none; outline: none; padding: 12px 12px 8px; line-height: 1.55; max-height: 200px; }
 .dock-attach { flex: 0 0 auto; width: 30px; height: 30px; }
 .dock-send { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
 .dock .mic { width: 30px; height: 30px; border-radius: 999px; }
@@ -250,7 +253,9 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .dock-recording { display: flex; align-items: center; gap: 6px; padding: 0 6px; color: var(--danger); font-size: 11.5px; }
 .rec-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
 .button.send { border-radius: 999px; padding: 5px 12px; }
-.dock-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 2px 0; }
+/* The toolbar line above the typing surface, separated from it by one quiet hairline so the
+   controls read as their own row rather than floating over the draft. */
+.dock-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 2px 8px; border-bottom: 1px solid var(--line); }
 /* One horizontal line of controls. Each is a flat outlined control — no circular wrapper — so the
    mode, agent and model read as peers and a menu opening upward cannot distort a rounded parent. */
 .dock-control { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 3px 8px; font-size: 12px; background: var(--panel); position: relative; max-width: 100%; }
@@ -304,6 +309,11 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
    funds it, or the visitor's own key does. */
 .model-badge { font-style: normal; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--muted); white-space: nowrap; }
 .model-badge.included { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+/* Source badges: MANAGED is the server-funded hosted route, BYOK the visitor's own key, LOCAL the
+   model on this machine. They share one shape; only the colour distinguishes them. */
+.pay-badge.source-managed, .model-badge.source-managed { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.pay-badge.source-byok, .model-badge.source-byok { border-color: var(--line-strong); color: var(--ink); }
+.pay-badge.source-local, .model-badge.source-local { border-color: var(--line); color: var(--muted); }
 .model-option.preview { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 8px; }
 .model-tabs { display: flex; gap: 4px; padding: 4px 6px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .model-tab { font-size: 11px; font-weight: 550; padding: 3px 8px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
