@@ -34,4 +34,29 @@ Repository notes for agents working in Signal Forge OS.
 - A route that has no `US_BACKEND_*` membership is not funded; keep BYOK-only routes that
   way, and reject requests without a personal key rather than falling back to an operator key.
 - `packages/web/src/lib/curatedSkills.json` feeds the Skills tab and the engine. A markdown
-  file under `public/skills/` alone does not surface.
+  file under `public/skills/` alone does not surface — but see below before adding to the
+  catalog.
+
+## Skill catalog invariants
+
+- `packages/web/src/lib/curatedSkills.json` is the imported-skills catalog. Every entry
+  must carry a real `provenance` with a matching `sha256`, because
+  `packages/web/tests/skills-import.test.mjs` asserts `BUILTIN_SKILLS.length === 65` and
+  re-hashes every `markdown`. Never hand-add or hand-edit an entry here.
+- First-party pathways (The Drill, The Ledger, Scribe, Researcher, Jev System-1 Router)
+  live inline in `packages/web/src/lib/skillRegistry.ts` with `kind: 'instructions'`,
+  `url: ''`, and `fields: []`. A readable copy may still ship under `packages/web/public/skills/`.
+
+## Visitor keys vs admin keys
+
+- The visitor Settings page (`packages/web/src/ui/Settings.tsx`) shows ONE universal BYOK
+  card: a provider `<select>` over `BYOK_CHOICES`, one key field, and Save / Use & discover /
+  Clear. Keys stay in page session memory only.
+- The multi-provider key matrix is an admin-only concern. Do not reintroduce per-provider
+  key rows on the visitor page.
+
+## Verifying both suites
+
+- Frontend: `cd packages/web && npx vitest run`.
+- Server: `cd packages/web && node --test tests/*.test.mjs`. Run BOTH — the server suite is
+  separate from vitest and catches catalog/registry regressions vitest will not.
