@@ -31,8 +31,9 @@ export default function AgentHub(p: Props) {
     <section className="panel">
       <div className="panel-head"><h2>Agent Skills &amp; Tool Hub Manager</h2><button className="button small" disabled={busy} onClick={() => void run(reload)}><RefreshCw size={12} />Refresh</button></div>
       <p className="help">{catalog.builtIn.length} built-in engineering packages · {catalog.imported.length} repository packages. Users toggle published skills in their workspace. Imports preserve complete instructions, tool schemas, and supporting text resources; no repository scripts execute during indexing.</p>
-      <h3>GitHub Repository Skill Importer</h3>
-      <label>Repository URL<input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/owner/agent-skills" /></label>
+      <h3>Import Agent Repository</h3>
+      <p className="help">Reads a public repository through GitHub's API, indexes its SKILL.md files and agent definitions into this deployment's own catalog, and keeps no clone and no fork on anyone's account.</p>
+      <label>Repository URL<input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/agency-enterprise/agency-agents" /></label>
       <div className="form-grid"><label>Directory (optional)<input value={directory} onChange={e => setDirectory(e.target.value)} placeholder="skills or engineering" /></label><label>Branch or commit (optional)<input value={ref} onChange={e => setRef(e.target.value)} placeholder="Repository default branch" /></label></div>
       <label>GitHub token (optional, session only)<input type="password" autoComplete="off" spellCheck={false} value={token} onChange={e => setToken(e.target.value)} placeholder="For private repositories or higher rate limits" /></label>
       <button className="button primary small" disabled={busy || !url.trim()} onClick={() => void run(async () => {
@@ -42,7 +43,7 @@ export default function AgentHub(p: Props) {
       {note && <p className="help" role="status">{note}</p>}
       <label>Search published skills<input type="search" value={query} onChange={e => setQuery(e.target.value)} /></label>
       {[...catalog.builtIn, ...catalog.imported].filter(s => `${s.name} ${s.blurb}`.toLowerCase().includes(query.toLowerCase())).map(skill => <details className="hub-skill" key={skill.id}>
-        <summary>{skill.name} <small>{skill.markdown?.length.toLocaleString()} characters · {skill.id.startsWith('repo-') ? 'Imported' : 'Built-in'}</small></summary>
+        <summary>{skill.name} <small>{skill.markdown?.length.toLocaleString()} characters · {skill.repository ? `Imported: ${skill.repository}` : 'Built-in'}</small></summary>
         <p className="help">{skill.blurb}</p>{skill.provenance && <p className="help"><a href={skill.provenance.source} target="_blank" rel="noreferrer">Repository source</a> · {skill.provenance.license} · {skill.provenance.commit}</p>}
         <pre className="skill-body">{skill.markdown}</pre>
         {Object.entries(skill.resources ?? {}).map(([path, content]) => <details key={path}><summary>{path}</summary><pre className="skill-body">{content}</pre></details>)}

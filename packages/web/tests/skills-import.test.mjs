@@ -41,6 +41,8 @@ test('repository ingestion preserves complete markdown, support resources and a 
   assert.equal(result.skills[0].kind, 'instructions');
   assert.deepEqual(result.skills[0].fields, []);
   assert.equal(result.skills[0].url, '');
+  // The source repository is tagged so the browser can build an "Imported: <repo>" category.
+  assert.equal(result.skills[0].repository, 'fixture/repo');
 });
 test('incomplete trees and non-GitHub sources fail without partial indexing', async () => {
   await assert.rejects(() => importRepositorySkills({ url: 'https://github.com/fixture/repo' }, github({ truncated: true })), /incomplete tree/);

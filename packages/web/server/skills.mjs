@@ -85,7 +85,9 @@ export async function importRepositorySkills({ url, ref = '', directory = '', to
     }
     if (/\.json$/i.test(file.path)) resources[file.path.split('/').at(-1)] = original;
     const sha256 = createHash('sha256').update(parsed.markdown).digest('hex');
-    skills.push({ id: `repo-${createHash('sha256').update(`${owner}/${repo}:${file.path}`).digest('hex').slice(0, 24)}`, ...parsed, kind: 'instructions', url: '', fields: [], resources, provenance: { file: file.path, source: `https://github.com/${owner}/${repo}/blob/${commit.sha}/${file.path}`, commit: commit.sha, sha256, author: owner, license: meta.license?.spdx_id ?? 'Unspecified' } });
+    // The source repository travels with the skill so the browser can tag and group it. It is the
+    // only thing the frontend needs to build an "Imported: <repo>" category out of the import.
+    skills.push({ id: `repo-${createHash('sha256').update(`${owner}/${repo}:${file.path}`).digest('hex').slice(0, 24)}`, ...parsed, repository: `${owner}/${repo}`, kind: 'instructions', url: '', fields: [], resources, provenance: { file: file.path, source: `https://github.com/${owner}/${repo}/blob/${commit.sha}/${file.path}`, commit: commit.sha, sha256, author: owner, license: meta.license?.spdx_id ?? 'Unspecified' } });
   }
   if (!skills.length) throw new HttpError(400, 'No Markdown skills or tool specifications were found in this directory.');
   return { skills, repository: `${owner}/${repo}`, commit: commit.sha, bytes: total };

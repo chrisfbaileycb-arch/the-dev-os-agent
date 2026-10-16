@@ -85,6 +85,22 @@ describe('Agent Skills', () => {
     expect(host.querySelectorAll('.doc-row').length).toBeLessThan(allCount);
     expect(host.textContent).toContain('Jev System-1 Router');
   });
+  it('surfaces an imported repository as its own "Imported:" category tab', async () => {
+    const imported = {
+      id: `repo-${'a'.repeat(24)}`, name: 'Release Engineer', blurb: 'Release a verified build', markdown: '# Release',
+      repository: 'agency-enterprise/agency-agents', kind: 'instructions', url: '', fields: [],
+    };
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(new Response(JSON.stringify({ skills: [imported], systemPrompts: { general: '', build: '' } })));
+    mount(<AgentSkills mcp={[]} setMcp={vi.fn()} notify={vi.fn()} />);
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const tab = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('.tool-category-tabs button')].find(t => t.textContent === label);
+    expect(tab('Imported: agency-agents')).toBeDefined();
+    // It must not be mis-filed as a first-party pathway.
+    act(() => tab('First-party pathways')!.click());
+    expect(host.textContent).not.toContain('Release Engineer');
+    act(() => tab('Imported: agency-agents')!.click());
+    expect([...host.querySelectorAll('.doc-row')].filter(n => n.textContent?.includes('Release Engineer'))).toHaveLength(1);
+  });
   it('exports skills and connector addresses without remembered credentials', () => {
     const exported = exportSkillStack([{ id: 'github', enabled: true, config: { token: 'ghp-private-token', unknown: 'private-value' } }]);
     expect(JSON.stringify(exported)).not.toContain('ghp-private-token');

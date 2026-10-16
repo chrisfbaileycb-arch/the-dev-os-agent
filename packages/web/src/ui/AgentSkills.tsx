@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check, FileText, Pencil, Plug, Plus, Trash2 } from 'lucide-react';
-import { CREW_SKILLS, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, parseSkillStack, saveSkillState, saveYourSkills, instructionText, SKILL_CAP, SKILL_FILE_CAP, refreshSystemSkills, type SkillState, type YourSkill } from '../lib/skillRegistry';
+import { CREW_SKILLS, liveMcpConnections, loadSkillState, loadYourSkills, parseSkillFile, parseSkillStack, saveSkillState, saveYourSkills, instructionText, SKILL_CAP, SKILL_FILE_CAP, refreshSystemSkills, type SkillDef, type SkillState, type YourSkill } from '../lib/skillRegistry';
 import { type Persona } from '../lib/roster';
 import type { MediaConfig } from '../lib/mediaTools';
 import type { McpConnection } from '../lib/mcp';
@@ -23,12 +23,22 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: 'Other',
 };
 const FIRST_PARTY = 'first-party';
-function categoryOf(id: string, kind: string): string {
-  if (kind !== 'instructions') return FIRST_PARTY;
-  const match = /^agency-([a-z0-9]+)-/.exec(id);
+const IMPORTED = 'imported:';
+/** Which tab a skill belongs under. Imported skills carry their source repository, so they group
+ *  as "Imported: <repo>" the moment an admin imports a repository — no per-repo wiring needed. */
+function categoryOf(skill: Pick<SkillDef, 'id' | 'kind' | 'repository'>): string {
+  if (skill.repository) return `${IMPORTED}${skill.repository}`;
+  if (skill.kind !== 'instructions') return FIRST_PARTY;
+  const match = /^agency-([a-z0-9]+)-/.exec(skill.id);
   return match ? match[1] : FIRST_PARTY;
 }
-const categoryLabel = (key: string) => (key === FIRST_PARTY ? 'First-party pathways' : CATEGORY_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1));
+const categoryLabel = (key: string): string => {
+  if (key === FIRST_PARTY) return 'First-party pathways';
+  if (key.startsWith(IMPORTED)) return `Imported: ${key.slice(IMPORTED.length).split('/').pop()}`;
+  return CATEGORY_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
+};
+/** First-party pathways first, then built-in groups, then imported repositories — each alphabetical. */
+const categoryRank = (key: string) => (key === FIRST_PARTY ? 0 : key.startsWith(IMPORTED) ? 2 : 1);
 
 export interface AgentSkillsProps {
   persona?: Persona; secrets?: string[]; media?: MediaConfig[];
@@ -56,11 +66,10 @@ export default function AgentSkills(p: AgentSkillsProps) {
   try { activation = instructionText(skills, yours); } catch (e) { activationError = e instanceof Error ? e.message : 'Could not activate skills.'; }
   const matches = (name: string, description: string) => `${name} ${description}`.toLowerCase().includes(query.trim().toLowerCase());
   // The catalog categories that survive the current search, in a stable reading order: the
-  // first-party pathways first, then the imported groups alphabetically.
-  const categories = Array.from(new Set(CREW_SKILLS.filter(s => s.kind !== 'live' && matches(s.name, s.blurb)).map(s => categoryOf(s.id, s.kind))))
-    .sort((a, b) => (a === FIRST_PARTY ? -1 : b === FIRST_PARTY ? 1 : categoryLabel(a).localeCompare(categoryLabel(b))));
-  const inCategory = (id: string, kind: string) => category === 'All' || categoryOf(id, kind) === category;
-  const visible = CREW_SKILLS.filter(s => s.kind === 'instructions' && matches(s.name, s.blurb) && inCategory(s.id, s.kind));
+  // first-party pathways first, then built-in groups, then imported repositories alphabetically.
+  const categories = Array.from(new Set(CREW_SKILLS.filter(s => s.kind !== 'live' && matches(s.name, s.blurb)).map(s => categoryOf(s))))
+    .sort((a, b) => categoryRank(a) - categoryRank(b) || categoryLabel(a).localeCompare(categoryLabel(b)));
+  const visible = CREW_SKILLS.filter(s => s.kind === 'instructions' && matches(s.name, s.blurb) && (category === 'All' || categoryOf(s) === category));
 
   function writeSkills(next: SkillState[]) {
     saveSkillState(next);

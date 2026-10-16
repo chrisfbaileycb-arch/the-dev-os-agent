@@ -25,6 +25,9 @@ export interface SkillDef {
   fields: SkillField[];
   provenance?: YourSkill['provenance'];
   resources?: Record<string, string>;
+  /** Set only on imported skills: the source repository as `owner/repo`, the basis for the
+   *  "Imported: <repo>" category tab. Absent on built-in and first-party skills. */
+  repository?: string;
 }
 
 export interface SkillState {
