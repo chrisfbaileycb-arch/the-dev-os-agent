@@ -88,6 +88,28 @@ Repository notes for agents working in Signal Forge OS.
   dedicated media accordion in `Connectors.tsx`, so the "N integrations" count is not padded.
   `mcp-presets.test.ts` and `sandbox-ui.test.tsx` pin the count at 23.
 
+## Spending lanes (who pays for a request)
+
+There are two independent lanes, decided entirely on the server in `proxy.mjs` `fundingFor`:
+
+- **BYOK — the visitor's own key.** When the request carries a personal `apiKey`, the proxy uses
+  it, does **not** reserve from the operator's daily USD budget (`funding.mode !== 'byok'`), and
+  does **not** write a server ledger row. Their inference time and their provider bill; the
+  operator neither pays for nor meters it. The `OPERATOR_FUNDING_DISABLED` switch and the
+  free/plan credit pools never apply to it — the switch only fires when no personal key is
+  present. This is deliberate: BYOK is out of the operator's control, and it should stay that way.
+- **Operator-funded — the deployment's own keys.** A keyless request (the free tier) or one
+  carrying a plan access token (the paid tier) runs on the deployment's keys, and **only** then
+  does the proxy reserve from `DAILY_SERVER_BUDGET_USD` and record usage server-side. What the
+  operator funds is exactly what the admin dashboard lists as free or paid, bounded by the
+  free-tier knobs (`FREE_CREDIT_MONTHLY_POOL`, `FREE_MAX_PER_HOUR`, `FREE_MAX_OUTPUT_TOKENS`) and
+  the USD budget.
+
+The operator's levers all live in the admin dashboard: `PUT /api/admin/keys` (which provider keys
+the deployment holds), `PUT /api/admin/tiers` (which models are free vs paid), and
+`PUT /api/admin/tunables` (the credit/output/rate limits). A visitor's personal key is never
+stored on the server — it stays in page memory — and is never counted against an operator budget.
+
 ## Verifying both suites
 
 - Frontend: `cd packages/web && npx vitest run`.
