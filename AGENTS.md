@@ -46,6 +46,9 @@ Repository notes for agents working in Signal Forge OS.
 - First-party pathways (The Drill, The Ledger, Scribe, Researcher, Jev System-1 Router)
   live inline in `packages/web/src/lib/skillRegistry.ts` with `kind: 'instructions'`,
   `url: ''`, and `fields: []`. A readable copy may still ship under `packages/web/public/skills/`.
+- The Jev System-1 Router is a toggle, not a key. It is pure operational understanding of the
+  router pattern; it must never name a key field or a server route. The old
+  `/api/typesafe/systemone` BYOK route was removed — do not reintroduce a keyed path for it.
 
 ## Visitor keys vs admin keys
 

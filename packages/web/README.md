@@ -100,10 +100,10 @@ xKiro is an unknown relay and does not become an approved operator route through
   `BROWSE_ALLOWED_HOSTS`; it blocks downloads and credentials.
 - `POST /api/mcp` forwards bounded remote MCP calls to public HTTPS hosts. Imported skills
   and connector descriptions do not grant execution or spending permissions.
-- `POST /api/typesafe/systemone` is an optional System-1 router (the Jev classifier). It is
-  off unless `TYPESAFE_ENABLED=true`, is BYOK only, and is never funded from a plan or an
-  operator key. The call is made server-side, so the key never reaches the page and the app's
-  `connect-src` stays `self`.
+- The Jev System-1 Router is a first-party **skill**, not a route: it carries the operational
+  understanding of the router pattern (typed Choice/Score/Noul decision graphs) as instructions
+  a model reasons with. There is no key, no server call, and no third-party egress. Turning the
+  skill on or off is the whole control surface.
 - `/api/jobs` supports an optional worker protocol. No worker is deployed. Jobs refuse
   requests carrying personal API keys or access tokens.
 

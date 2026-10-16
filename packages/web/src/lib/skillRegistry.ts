@@ -72,28 +72,27 @@ const RESEARCHER = `Use when the answer has to come from notes the person suppli
 // A first-party pathway, so it lives here with DRILL and friends rather than in the imported
 // catalog (curatedSkills.json), whose entries carry a pinned source hash. The full text is also
 // shipped as a readable file at public/skills/router/skill-jev-router.md.
+//
+// This pathway carries no key and calls no server. It is the operational understanding of the
+// TypeSafe/Jev classifier — the three primitives and how to build a decision graph — that a model
+// applies while reasoning. Turning it on or off is the whole control surface.
 const JEV_ROUTER = `Use when a step needs a decision, not a reply — routing, ranking, extraction, or a yes/no check.
 
-Build a small decision graph on the TypeSafe Jev classifier. It returns typed answers and
-confidences; your code branches on them.
+Apply the System-1 router pattern: shape a small decision graph of typed questions and let the
+surrounding code branch on the answers. This is the operational understanding — how to build the
+graph — not a call to make. No key and no server are involved.
 
-Call the app's own route (never the provider directly — the personal key stays in one request):
-
-  POST /api/typesafe/systemone
-  { "apiKey": "<the visitor's Jev key>", "state": <the data to judge>,
-    "questions": { "team": { "type": "choice", "instructions": "...", "criteria": { "billing": "...", "technical": "..." } },
-                   "urgent": { "type": "noul", "instructions": "..." },
-                   "severity": { "type": "score", "instructions": "...", "criteria": ["Cosmetic", "Blocked"] } } }
-
-Three primitives: Noul (yes/no probability, 0.5 means "the state does not say"), Choice (one of a
-rubric), Score (a position on ordered levels).
+Three primitives:
+- Noul  — a yes/no probability. 0.5 means "the state does not say", not "medium".
+- Choice — one option from a rubric of descriptions.
+- Score  — a position on ordered levels.
 
 1. Give the state, not a prompt — the real data, referenced by name in backticks.
-2. One focused question per decision; batch independent questions in one call.
+2. One focused question per decision; keep independent questions separate.
 3. Branch in code. Keep thresholds and fallbacks in the caller, not the question text.
 4. Treat low confidence as a fork: escalate or ask, never guess.`;
 
-const JEV_ROUTER_USE = 'Turns a state into a small, deterministic decision graph on the TypeSafe Jev classifier.';
+const JEV_ROUTER_USE = 'Operational understanding of the System-1 router pattern — typed decision graphs a model reasons with, no key and no server call.';
 
 export const CREW_SKILLS: SkillDef[] = [
   ...curatedSkills as SkillDef[],
