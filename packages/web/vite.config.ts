@@ -39,6 +39,8 @@ import { createJobs, openJobs } from './server/jobs.mjs';
 import { createEngine } from './server/antigravity.mjs';
 // @ts-expect-error Server modules are JavaScript.
 import { classifyStorage } from './server/durability.mjs';
+// @ts-expect-error Server modules are JavaScript.
+import { createSpendingController } from './server/controller.mjs';
 const api: Plugin = { name: 'signal-forge-api', async configureServer(server) {
   const env = { ...process.env, SESSION_SECRET: process.env.SESSION_SECRET || randomBytes(32).toString('hex') };
   const dataFile = 'data/dev.sqlite';
@@ -49,7 +51,8 @@ const api: Plugin = { name: 'signal-forge-api', async configureServer(server) {
   // ledger is durable. A DATABASE_URL, when the operator set one, still wins.
   const databaseUrl = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.DATABASE_URL;
   const storage = classifyStorage({ databaseUrl, dataFile });
-  const handlers = [auth, createWorkspaceSession({ env }), createAdmin({ db, settings, storage }), createSkills({ settings, env }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, env, settings, storage }), createBrowse(), createMcp(), createCustomConnectors(), createFetcher(), createGithub(), createJobs({ env, jobs: openJobs(db.raw()) })];
+  const controller = createSpendingController({ db, env });
+  const handlers = [auth, createWorkspaceSession({ env }), createAdmin({ db, settings, storage }), createSkills({ settings, env }), createEngine({ settings }), createProxy({ db, settings, storage, controller }), createState({ db, env, settings, storage }), createBrowse(), createMcp(), createCustomConnectors(), createFetcher(), createGithub(), createJobs({ env, jobs: openJobs(db.raw()) })];
   server.middlewares.use((req: { url?: string }, res, next) => { if (new URL(req.url ?? '/', 'http://dev').pathname === '/admin') req.url = '/'; void (async () => { for (const handle of handlers) if (await handle(req, res)) return; next(); })().catch(next); });
 } };
 // Emits dist/sw.js with the precache list taken from the real bundle, so the offline shell always matches the build.

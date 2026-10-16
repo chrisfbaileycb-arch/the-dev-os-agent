@@ -15,6 +15,7 @@ import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog, ensureOpenRout
 import { billingStatus } from './billing.mjs';
 import { createMeter } from './meter.mjs';
 import { BudgetError, createDailyBudget } from './budget.mjs';
+import { SpendingError } from './controller.mjs';
 import { backendEnabled, backendStatus } from './backends.mjs';
 
 export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
@@ -429,7 +430,7 @@ const windows = new Map();
  * `discover` is injectable so tests stay hermetic: the real one reaches the gateway over the
  * network, and a unit test asserting how a Groq request is funded has no business doing that.
  */
-export function createProxy({ env: baseEnv = process.env, settings = null, storage = null, transport = upstream, resolve = lookup, db = null, log = console.error, discover = ensureCatalog, discoverOpenRouter = ensureOpenRouterCatalog } = {}) {
+export function createProxy({ env: baseEnv = process.env, settings = null, storage = null, transport = upstream, resolve = lookup, db = null, spending = null, log = console.error, discover = ensureCatalog, discoverOpenRouter = ensureOpenRouterCatalog } = {}) {
   // The environment as this request should read it: the admin dashboard's stored keys and knobs
   // laid over the process environment (see server/settings.mjs). Resolved per request, so a key
   // entered in the dashboard funds the very next message with no restart.
@@ -447,6 +448,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
     const deadline = path === '/api/chat' ? setTimeout(() => controller.abort(), 1_800_000) : null;
     const refreshTimeout = () => { clearTimeout(timeout); timeout = setTimeout(() => controller.abort(), 120_000); };
     let lockedPlan = null;
+    // Account-side reservation id for the operator-funded lane; settled on success or failure.
+    let controllerReservation = null;
+    let controllerUserId = null;
     res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
       // Read before the browser sends anything, so the model dropdown knows which entries are
@@ -649,12 +653,23 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       let reservation = null;
       let response;
       let status = 502;
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        // Reserve separately for every attempt, including credential retries. Uncertain
-        // failures retain their reservation; another external call cannot reuse it.
-        if (path === '/api/chat' && funding.mode !== 'byok' && apiKey) reservation = await dailyBudget.reserve(provider, budgetModel, budgetMessages, budgetMax);
-        try {
-          response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
+      // Operator-funded requests with a real user account also pass the account-side guard
+      // (allowance + global daily ceiling + concurrency). BYOK is untouched, and an anonymous
+      // free-tier request has no account to meter. A controller that is off, or a storage adapter
+      // without the methods, gates nothing so the funded lane keeps working.
+      const gateAccounts = spending?.enabled && session?.userId && path === '/api/chat' && (funding.mode === 'free' || planWorkspace);
+      let releaseConcurrency = () => {};
+      try {
+        if (gateAccounts) {
+          try { releaseConcurrency = spending.acquire(session.userId); controllerUserId = session.userId; controllerReservation = await spending.reserve({ userId: session.userId, cents: 5 }); }
+          catch (e) { throw e instanceof SpendingError ? new HttpError(e.status, e.message, e.code) : e; }
+        }
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          // Reserve separately for every attempt, including credential retries. Uncertain
+          // failures retain their reservation; another external call cannot reuse it.
+          if (path === '/api/chat' && funding.mode !== 'byok' && apiKey) reservation = await dailyBudget.reserve(provider, budgetModel, budgetMessages, budgetMax);
+          try {
+            response = await transport(upstreamUrl, { method: path === '/api/models' ? 'GET' : 'POST', headers, body: payload, signal: controller.signal, address: target.address });
         } catch (error) {
           // Nothing answered: DNS, TCP or TLS failed, so there is no status code to report and
           // nothing the visitor can do. This used to fall through to the generic 502 "Could not
@@ -680,6 +695,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
           continue;
         }
         break;
+      }
+      } finally {
+        releaseConcurrency();
       }
       if (status < 200 || status >= 300) {
         // Read what it said before discarding it. A bare status is not a diagnosis: 403 from an
@@ -753,11 +771,25 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       await new Promise((resolve, reject) => { pipedStream.on('end', () => { streamFinished = true; resolve(); }); response.on('error', reject); res.on('close', resolve); });
       // Bill even when the visitor navigated away mid-stream: the tokens were still spent.
       if (meter && db) { try { const tokens = meter.total(); const plan = Boolean(planWorkspace); await db.recordUsage(plan ? planWorkspace : workspace, { model: body.model, tier: plan ? 'pro' : 'free', mode: plan ? 'credits' : 'free', tokens, credits: plan ? planCredits(body.model, meter.usage()) : creditsForTokens(tokens) }); } catch { log('[proxy] Could not persist managed usage.'); } }
+      // Settle the account-side reservation against the tokens actually produced. The row is already
+      // reserved, so a failed or truncated stream still lands as a real (small) charge, not a free one.
+      if (controllerReservation) {
+        try { await spending.settle({ userId: controllerUserId, reservationId: controllerReservation, reservationCents: 5, promptTokens: meter?.usage()?.input ?? 0, completionTokens: meter?.usage()?.output ?? 0, model: budgetModel }); }
+        catch { log('[proxy] Could not settle account spending; reservation retained.'); }
+        controllerReservation = null;
+      }
       if (reservation && meter && streamFinished && !controller.signal.aborted) { try { await dailyBudget.settle(reservation, meter.finalUsage()); } catch { log('[proxy] Could not reconcile USD usage; reservation retained.'); } }
       if (!res.destroyed) res.end();
       return true;
     } catch (error) {
       if (error instanceof BudgetError) error = new HttpError(error.code === 'free_tier_exhausted' ? 402 : 503, error.message, error.code);
+      // A reserved account row is settled (as reserved) on any failure path so it is never lost;
+      // the charge stands because the upstream work may already have happened.
+      if (controllerReservation) {
+        try { await spending.settle({ userId: controllerUserId, reservationId: controllerReservation, reservationCents: 5, model: budgetModel }); }
+        catch { log('[proxy] Could not settle account spending; reservation retained.'); }
+        controllerReservation = null;
+      }
       // An unexpected throw (not one of ours) is worth a log line with its cause, so a 502 is
       // diagnosable; the message is a bounded summary, never a request body.
       if (!(error instanceof HttpError)) log(`[proxy] unexpected ${error?.constructor?.name || 'error'}: ${error?.message || 'no message'}`);
