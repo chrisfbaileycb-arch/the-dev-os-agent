@@ -27,8 +27,10 @@ test('records are well formed and retention is never claimed without a source an
 
 test('Shield allows US companies and hosts, and refuses relays, other countries, unknowns and custom endpoints', () => {
   for (const id of ['anthropic', 'openai', 'google', 'xai', 'groq', 'cerebras', 'github', 'azure', 'bedrock', 'meta', 'nvidia']) assert.equal(allowedUnderShield(id), true, id);
-  // OpenRouter and Hugging Face are US companies but relays: the upstream host is not guaranteed to be US.
-  for (const id of ['openrouter', 'huggingface', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'custom', 'ollama']) assert.equal(allowedUnderShield(id), false, id);
+  // OpenRouter is a US company but a relay: the upstream host is not guaranteed to be US.
+  for (const id of ['openrouter', 'cohere', 'venice', 'xkiro', 'aihubmix', 'cheaper-inference', 'omniroute', 'custom', 'ollama']) assert.equal(allowedUnderShield(id), false, id);
+  // Hugging Face was removed from the app, so an unknown id like it is refused, never assumed.
+  assert.equal(allowedUnderShield('huggingface'), false);
   assert.equal(allowedUnderShield('not-a-provider'), false, 'an unknown id is refused, never assumed');
   assert.equal(allowedUnderShield(undefined), false);
 });

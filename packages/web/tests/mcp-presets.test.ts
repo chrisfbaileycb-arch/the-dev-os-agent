@@ -6,7 +6,7 @@ const REMOVED = ['thinking', 'database', 'fs', 'jira', 'huggingface', 'context7'
 describe('MCP presets', () => {
   it('lists unique ids and https URLs the server guard will accept', () => {
     expect(new Set(MCP_PRESETS.map(p => p.id)).size).toBe(MCP_PRESETS.length);
-    expect(MCP_PRESETS).toHaveLength(25);
+    expect(MCP_PRESETS).toHaveLength(23);
     for (const p of MCP_PRESETS.filter(p => p.kind === 'remote')) {
       const url = new URL(p.url);
       expect(url.protocol).toBe('https:');
@@ -14,10 +14,12 @@ describe('MCP presets', () => {
       expect(url.hostname.endsWith('.internal')).toBe(false);
     }
   });
-  it('never invents remote URLs for local bridges or media APIs', () => {
+  it('never invents remote URLs for local bridges', () => {
     for (const preset of MCP_PRESETS.filter(p => p.kind !== 'remote')) { expect(preset.url).toBe(''); expect(preset.docs.startsWith('https://')).toBe(true); }
     for (const id of ['filesystem', 'sqlite', 'docker', 'brave', 'puppeteer']) expect(MCP_PRESETS.find(p => p.id === id)?.kind).toBe('bridge');
-    for (const id of ['heygen', 'nano-banana']) expect(MCP_PRESETS.find(p => p.id === id)?.kind).toBe('media');
+    // The two optional media tools live in their own accordion in the drawer, not in this grid,
+    // so the real MCP tool count is not padded by cards that are not MCP servers at all.
+    for (const id of ['heygen', 'nano-banana']) expect(MCP_PRESETS.find(p => p.id === id)).toBeUndefined();
   });
   it('puts every preset in a known group', () => {
     for (const p of MCP_PRESETS) expect(MCP_PRESET_GROUPS).toContain(p.group);

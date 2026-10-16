@@ -465,6 +465,8 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .page.admin { max-width: 1240px; }
 .admin-keys td { vertical-align: middle; } .admin-keys input { min-width: 180px; }
 .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); } .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+/* Compact provenance badge for a skill indexed from an external repository. */
+.skill-attribution { display: inline-flex; align-items: center; align-self: flex-start; gap: 4px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; font-size: 10.5px; color: var(--muted); letter-spacing: .01em; }
 .tier-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
 .tier-summary h3 { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; }

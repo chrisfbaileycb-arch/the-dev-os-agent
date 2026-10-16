@@ -188,8 +188,8 @@ export function ownerKeyName(env = process.env) {
  * The entry's own provider key always wins, so configuring OPENROUTER_API_KEY still overrides the
  * owner key rather than being shadowed by it. The owner key then stands in for the OpenRouter
  * pool only, and deliberately not for the others: it is one credential for one endpoint, and
- * sending an OpenRouter-shaped key to Groq's host or the Hugging Face router would trade a funded
- * free tier for a guaranteed 401. Those pools keep needing their own provider key.
+ * sending an OpenRouter-shaped key to Groq's host would trade a funded free tier for a guaranteed
+ * 401. Those pools keep needing their own provider key.
  */
 export function freeKey(entry, env = process.env) {
   const own = entry ? cleanCredential(env[entry.envKey]) : '';
@@ -254,7 +254,6 @@ export const PROVIDER_KEY_VARS = {
   venice: 'VENICE_API_KEY',
   xkiro: 'XKIRO_API_KEY',
   aihubmix: 'AIHUBMIX_API_KEY',
-  huggingface: 'HF_TOKEN',
   nvidia: 'NVIDIA_API_KEY',
   'cheaper-inference': 'CHEAPER_INFERENCE_API_KEY',
   omniroute: 'OMNIROUTE_API_KEY',
@@ -363,9 +362,6 @@ function allFreeModels(env, discovered, tiers) {
   const builtin = isBackendLaneEnforced() ? [] : STATIC_FREE;
   const guarded = (env.FREE_TIER_ALLOW_FRONTIER === 'true' ? builtin : builtin.filter(m => !isFrontier(m.id)))
     .map(m => m.pool ? { ...m, pool: liveOpenRouter } : m);
-  // HF serverless joins only when the deployment holds a token: without one these ids would
-  // advertise as free and answer 503, which is the exact "warming up" lie the status message
-  // exists to avoid.
   const automatic = [
     ...guarded,
     // Every zero-cost id OpenRouter itself reports, plus the three-id static pool as a floor for a
@@ -494,10 +490,6 @@ export const creditsForTokens = tokens => Math.ceil((Math.max(0, tokens) * FREE_
  */
 export function routeFreeRequest(entry) {
   if (entry.provider === 'groq') return { model: entry.id.replace(/^groq\//, '') };
-  // HF router ids are passed through exactly as documented — `Qwen/Qwen2.5-7B-Instruct` is the
-  // org/model form the router's OpenAI surface expects, and its routing policies (:fastest,
-  // :cheapest) are legal suffixes a deployment may name deliberately.
-  if (entry.provider === 'huggingface') return { model: entry.id };
   if (entry.provider === 'cheaper-inference') return { model: entry.id };
   // OmniRoute names its own ids — `auto`, `auto/coding`, concrete `oc/…` entries — and the
   // gateway is the authority on what any of them resolves to. Nothing is stripped or rewritten.

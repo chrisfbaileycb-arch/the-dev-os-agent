@@ -99,7 +99,10 @@ describe('Agent Skills', () => {
     act(() => tab('First-party pathways')!.click());
     expect(host.textContent).not.toContain('Release Engineer');
     act(() => tab('Imported: agency-agents')!.click());
-    expect([...host.querySelectorAll('.doc-row')].filter(n => n.textContent?.includes('Release Engineer'))).toHaveLength(1);
+    const row = [...host.querySelectorAll('.doc-row')].find(n => n.textContent?.includes('Release Engineer'));
+    expect(row).toBeDefined();
+    // The row carries a compact attribution badge with the source repository.
+    expect(row!.querySelector('.skill-attribution')?.textContent).toBe('Imported from agency-enterprise/agency-agents');
   });
   it('exports skills and connector addresses without remembered credentials', () => {
     const exported = exportSkillStack([{ id: 'github', enabled: true, config: { token: 'ghp-private-token', unknown: 'private-value' } }]);

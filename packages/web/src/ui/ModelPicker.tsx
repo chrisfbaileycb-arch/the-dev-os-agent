@@ -43,7 +43,7 @@ export function payLabel(inference: InferenceMode): string { return inference ==
 //   BYOK     the visitor's own provider key
 //   MANAGED  tiered/hosted inference the server funds through its proxy (free pool or a plan)
 type Group = { id: string; name: string; source: 'BYOK' | 'LOCAL' | 'MANAGED'; mode: InferenceMode; provider?: Provider; choices: ModelChoice[]; error?: string };
-const ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'groq', 'xai', 'huggingface', 'openrouter', 'cerebras', 'github', 'nvidia', 'cohere', 'venice', 'vercel', 'aihubmix', 'xkiro', 'custom'];
+const ORDER: Provider[] = ['ollama', 'openai', 'anthropic', 'google', 'groq', 'xai', 'openrouter', 'cerebras', 'github', 'nvidia', 'cohere', 'venice', 'vercel', 'aihubmix', 'xkiro', 'custom'];
 export default function ModelPicker(p: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');

@@ -1,7 +1,7 @@
 import { sessionSecret, setSessionSecret } from './sessionSecrets';
 import type { InferenceMode } from './catalog';
 import type { Connection } from './types';
-export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'huggingface' | 'nvidia' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
+export type Provider = 'openrouter' | 'groq' | 'openai' | 'anthropic' | 'google' | 'cohere' | 'xai' | 'venice' | 'ollama' | 'xkiro' | 'aihubmix' | 'nvidia' | 'cheaper-inference' | 'omniroute' | 'github' | 'cerebras' | 'meta' | 'vercel' | 'custom';
 
 // Every provider the proxy will forward to, with a seed of model ids for the dropdown.
 //
@@ -25,14 +25,8 @@ export const providers: Record<Provider, ProviderInfo> = {
   // AIHubMix account key, frontier ones included. Seeds from their published free list; Discover
   // reads the live catalogue and the model field accepts anything typed, as everywhere else.
   aihubmix: { name: 'AIHubMix', tier: 'Free gateway', endpoint: 'https://aihubmix.com/v1', flagship: 'gpt-5.5-free', models: ['gpt-5.5-free', 'gpt-4.1-free', 'gemini-3-flash-preview-free', 'coding-glm-5.1-free', 'kimi-for-coding-free', 'k2.6-code-preview-free', 'xiaomi-mimo-v2.5-free', 'coding-minimax-m2.7-free'] },
-  // Hugging Face's Inference Providers router: hundreds of open models behind one OpenAI-compatible
-  // chat surface at a fixed home. One HF token pays every underlying provider, accounts carry a
-  // small monthly inference credit, and a `:fastest` / `:cheapest` suffix on the model id chooses
-  // how the router routes. Seeds from their documented open-weights roster; Discover reads the
-  // live list from /v1/models and the model field accepts anything typed, as everywhere else.
-  // No flagship on purpose: HF's free credit is small, so a new token starts on the first,
-  // low-compute seed rather than on the strongest model it could reach.
-  huggingface: { name: 'Hugging Face', tier: 'Open models', endpoint: 'https://router.huggingface.co/v1', models: [] },
+  // Hugging Face was removed from the app entirely: no provider card, no key slot, no model in the
+  // picker. Its models were experiment-lane BYOK routes the deployment never funded.
   nvidia: { name: 'NVIDIA NIM', tier: 'Hosted', endpoint: 'https://integrate.api.nvidia.com/v1', models: [] },
   // Managed hosted route. The endpoint is intentionally empty in the browser: the server pins
   // CHEAPER_INFERENCE_BASE_URL and attaches CHEAPER_INFERENCE_API_KEY.

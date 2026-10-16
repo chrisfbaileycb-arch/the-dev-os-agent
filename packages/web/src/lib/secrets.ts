@@ -19,7 +19,6 @@ const PATTERNS: { kind: string; re: RegExp }[] = [
   { kind: 'OpenAI key', re: /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}/g },
   { kind: 'xAI key', re: /\bxai-[A-Za-z0-9]{32,}/g },
   { kind: 'Groq key', re: /\bgsk_[A-Za-z0-9]{32,}/g },
-  { kind: 'Hugging Face token', re: /\bhf_[A-Za-z0-9]{30,}/g },
   { kind: 'Google API key', re: /\bAIza[0-9A-Za-z_-]{35}/g },
   { kind: 'GitHub token', re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}/g },
   { kind: 'GitHub token', re: /\bgithub_pat_[A-Za-z0-9_]{50,}/g },

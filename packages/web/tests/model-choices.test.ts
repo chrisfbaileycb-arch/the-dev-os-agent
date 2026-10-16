@@ -98,7 +98,7 @@ describe('model verification and section grouping', () => {
 
     // OpenRouter / gateways without verified flagship status
     expect(isVerifiedOperational('openrouter', 'community/custom-model')).toBe(false);
-    expect(isVerifiedOperational('huggingface', 'meta-llama/Llama-3.1-8B-Instruct')).toBe(false);
+    expect(isVerifiedOperational('huggingface' as never, 'meta-llama/Llama-3.1-8B-Instruct' as never)).toBe(false);
     expect(isVerifiedOperational('google', 'text-embedding-004')).toBe(false);
   });
 

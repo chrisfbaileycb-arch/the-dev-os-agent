@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react';
+import { CircleAlert, Download, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react';
 import { refreshSystemSkills, type SkillDef, type SystemPrompts } from '../lib/skillRegistry';
 import { saveBlob } from '../lib/download';
 interface Catalog { builtIn: SkillDef[]; imported: SkillDef[]; }
@@ -33,6 +33,7 @@ export default function AgentHub(p: Props) {
       <p className="help">{catalog.builtIn.length} built-in engineering packages · {catalog.imported.length} repository packages. Users toggle published skills in their workspace. Imports preserve complete instructions, tool schemas, and supporting text resources; no repository scripts execute during indexing.</p>
       <h3>Import Agent Repository</h3>
       <p className="help">Reads a public repository through GitHub's API, indexes its SKILL.md files and agent definitions into this deployment's own catalog, and keeps no clone and no fork on anyone's account.</p>
+      <p className="help"><CircleAlert size={12} /> Ensure imported skills are from trusted sources before enabling in production swarms. An imported pathway is written by someone else and is handed to the model verbatim when a visitor switches it on.</p>
       <label>Repository URL<input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/agency-enterprise/agency-agents" /></label>
       <div className="form-grid"><label>Directory (optional)<input value={directory} onChange={e => setDirectory(e.target.value)} placeholder="skills or engineering" /></label><label>Branch or commit (optional)<input value={ref} onChange={e => setRef(e.target.value)} placeholder="Repository default branch" /></label></div>
       <label>GitHub token (optional, session only)<input type="password" autoComplete="off" spellCheck={false} value={token} onChange={e => setToken(e.target.value)} placeholder="For private repositories or higher rate limits" /></label>

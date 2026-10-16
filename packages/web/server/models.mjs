@@ -1,7 +1,7 @@
 // One shape for every provider's model list.
 //
-// GET /models means something slightly different at every vendor: OpenAI, Groq, Hugging Face and
-// the gateways return `data: [{ id }]` with different extras, Cohere returns `models: [{ name }]`,
+// GET /models means something slightly different at every vendor: OpenAI and Groq return
+// `data: [{ id }]` with different extras, Cohere returns `models: [{ name }]`,
 // Google prefixes every id with `models/`, and only some of them say what a model costs. The
 // browser wants one thing from all of them — an id to send, a label to show, and whether the
 // provider itself calls the model free — so that is what this module reduces each payload to.

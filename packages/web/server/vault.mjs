@@ -10,7 +10,6 @@ const DEFAULT_CONFIG = {
   keys: {
     OPENROUTER_API_KEY: '',
     OMNIROUTE_API_KEY: '',
-    HUGGINGFACE_API_KEY: '',
     VLLM_API_KEY: '',
     OPENAI_API_KEY: '',
     ANTHROPIC_API_KEY: '',

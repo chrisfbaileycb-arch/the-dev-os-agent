@@ -19,8 +19,8 @@ import type { Provider } from './providers';
  *
  *   'free'  the deployment funds it from its own keys. Reported live by /api/providers and
  *           never compiled here — a compiled list claiming this tier was the original bug.
- *   'byok'  free on the visitor's own key (a subsidized gateway tier or a small HF serverless
- *           model), but requiring that key: zero-cost is not zero-config.
+ *   'byok'  free on the visitor's own key (a subsidized gateway tier, say), but requiring that
+ *           key: zero-cost is not zero-config.
  *   'pro'   billed by the token somewhere — platform credits on this deployment, or the
  *           visitor's key at the vendor.
  */
@@ -54,18 +54,6 @@ export const catalog: CatalogModel[] = [
   { id: 'coding-minimax-m2.7-free', provider: 'aihubmix', label: 'MiniMax M2.7 (free)', tier: 'byok', weight: CREDIT_WEIGHTS.fast, note: 'Latest MiniMax coding release.' },
   { id: 'xiaomi-mimo-v2.5-free', provider: 'aihubmix', label: 'MiMo v2.5 (free)', tier: 'byok', weight: CREDIT_WEIGHTS.fast, note: '1M context, agent-grade tool use.' },
   { id: 'xiaomi-mimo-v2-pro-free', provider: 'aihubmix', label: 'MiMo v2 Pro (free)', tier: 'byok', weight: CREDIT_WEIGHTS.fast, note: 'Advanced reasoning, function calling.' },
-  // Hugging Face Inference Providers: one token pays every underlying host (Groq, Together,
-  // Replicate, …) for hundreds of open-weights models, with a small monthly credit on every
-  // HF account. Small instruct models are 'byok' — free credits, but still a token — while
-  // reasoning-class ids stay 'pro': the deployment never funds a chain-of-thought by default
-  // (see FRONTIER in server/freetier.mjs), and 'auto' must not smuggle one into the free pool.
-  { id: 'Qwen/Qwen2.5-7B-Instruct', provider: 'huggingface', label: 'Qwen 2.5 7B Instruct', tier: 'byok', weight: CREDIT_WEIGHTS.fast, note: 'Low-compute workhorse; free monthly HF credits.' },
-  { id: 'meta-llama/Llama-3.1-8B-Instruct', provider: 'huggingface', label: 'Llama 3.1 8B Instruct', tier: 'byok', weight: CREDIT_WEIGHTS.fast, note: 'Fast, ubiquitous open model.' },
-  { id: 'deepseek-ai/DeepSeek-R1:auto', provider: 'huggingface', label: 'DeepSeek R1 (auto)', tier: 'pro', weight: CREDIT_WEIGHTS.reasoning, note: 'Reasoning; needs your own HF token.' },
-  { id: 'openai/gpt-oss-120b', provider: 'huggingface', label: 'GPT-OSS 120B', tier: 'byok', weight: CREDIT_WEIGHTS.standard, note: 'Open-weights flagship on the HF router.' },
-  { id: 'Qwen/Qwen2.5-Coder-32B-Instruct', provider: 'huggingface', label: 'Qwen 2.5 Coder 32B', tier: 'byok', weight: CREDIT_WEIGHTS.standard, note: 'Code-dense open model for building.' },
-  { id: 'zai-org/GLM-4.5', provider: 'huggingface', label: 'GLM-4.5', tier: 'byok', weight: CREDIT_WEIGHTS.standard, note: 'Agentic open model on the HF router.' },
-  { id: 'moonshotai/Kimi-K2-Instruct', provider: 'huggingface', label: 'Kimi K2 Instruct', tier: 'byok', weight: CREDIT_WEIGHTS.standard, note: 'Long-context open MoE.' },
   // OmniRoute, self-hosted. Its `auto` channel is the router itself: one request, and the
   // gateway picks among every provider the operator connected — free tiers first, by design.
   // No entry can honestly claim a tier on the visitor's side: whether a run costs anything

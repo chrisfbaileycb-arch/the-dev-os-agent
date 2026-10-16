@@ -24,9 +24,10 @@ describe('model lanes', () => {
       expect(own).toContain(id);
     }
     expect(isExperimentProvider('openrouter')).toBe(true);
-    expect(isExperimentProvider('huggingface')).toBe(true);
     expect(own).not.toContain('openrouter');
-    expect(own).not.toContain('huggingface');
+    // Hugging Face was removed from the app: it is not in any lane, because it is not a provider.
+    expect(all).not.toContain('huggingface' as Provider);
+    expect(providers).not.toHaveProperty('huggingface');
   });
 
   it('a server-funded run is always US; a key run follows its provider', () => {
@@ -34,7 +35,6 @@ describe('model lanes', () => {
     expect(laneOf('groq', 'credits')).toBe('us');
     expect(laneOf('anthropic', 'byok')).toBe('us');
     expect(laneOf('openrouter', 'byok')).toBe('experiment');
-    expect(laneOf('huggingface', 'byok')).toBe('experiment');
     expect(laneOf('ollama', 'byok')).toBe('own');
     expect(laneOf(undefined, 'byok')).toBe('own');
   });

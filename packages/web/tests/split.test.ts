@@ -53,8 +53,8 @@ describe('payment badge', () => {
   });
 
   it('matches funded ids without caring how they were typed', () => {
-    const model = findModel('meta-llama/Llama-3.1-8B-Instruct');
+    const model = findModel('gpt-4o');
     expect(model).toBeDefined();
-    expect(badgeFor(model!, reach(['meta-llama/llama-3.1-8b-instruct']))).toBe('included');
+    expect(badgeFor(model!, reach(['GPT-4O']))).toBe('included');
   });
 });

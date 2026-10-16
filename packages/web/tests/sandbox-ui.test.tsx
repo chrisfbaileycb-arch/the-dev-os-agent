@@ -18,9 +18,9 @@ it('streams complete argument/response details, shows trapped errors and runtime
   expect([...host.querySelectorAll('button')].map(b => b.textContent)).toContain('Export Agent'); expect([...host.querySelectorAll('button')].map(b => b.textContent)).toContain('Download Execution Bundle');
   expect(sandboxStatus({ busy: true, runs: [] })).toBe('Running'); expect(sandboxStatus({ busy: false, runs: [] })).toBe('Idle');
 });
-it('keeps the custom MCP form visible and distinguishes all 25 tools and the two optional media providers', () => {
+it('keeps the custom MCP form visible, lists the MCP tools, and the two optional media providers stay out of the grid', () => {
   mount(<Connectors open close={vi.fn()} tab="mcp" setTab={vi.fn()} settings={defaultSettings()} setSettings={vi.fn()} mcp={[]} setMcp={vi.fn()} knowledge={[]} addDocuments={vi.fn()} removeDocument={vi.fn()} notify={vi.fn()} />);
-  expect(host.querySelectorAll('.preset')).toHaveLength(25); expect(host.querySelector('#mcp-config-form')).not.toBeNull();
+  expect(host.querySelectorAll('.preset')).toHaveLength(23); expect(host.querySelector('#mcp-config-form')).not.toBeNull();
   expect(host.textContent).toContain('Add or Configure a Model Context Protocol server'); expect(host.textContent).toContain('HeyGen'); expect(host.textContent).toContain('Nano Banana'); expect(host.textContent).not.toContain('Hugging Face'); expect(host.textContent).not.toContain('Context7');
   expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Connect listed servers')).toBe(false);
   // The drawer is for external connections only. Skills moved to the Agents & Skills page.

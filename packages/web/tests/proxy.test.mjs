@@ -125,30 +125,17 @@ test('AIHubMix routes as an ordinary OpenAI-compatible vendor on the visitor key
   assert.equal(usageReportable('aihubmix', { nativeCohere: false, nativeAnthropic: false }), true, 'usage is requested so BYOK runs still count tokens');
 });
 
-test('Hugging Face routes through its OpenAI-compatible router on the visitor token', async () => {
-  // One HF token pays every underlying provider; the deployment funds no HF ids, so funding
-  // answers 'byok' with a key in hand and 'none' without — a server-side HF_TOKEN exists only
-  // for a hypothetical allowlist entry, exactly like AIHubMix's.
-  const env = { HF_TOKEN: 'server-hf-token' };
-  assert.deepEqual(fundingFor({ provider: 'huggingface', model: 'openai/gpt-oss-120b', apiKey: 'visitor-hf-token' }, env), { mode: 'byok', apiKey: 'visitor-hf-token' });
-  assert.equal(fundingFor({ provider: 'huggingface', model: 'deepseek-ai/DeepSeek-R1' }, env).mode, 'none', 'no allowlist entry exists, so the deployment cannot fund it');
-  let captured;
-  await withProxy({ env: {}, transport: async (url, options) => { captured = { url, ...options }; return stream('data: [DONE]\n\n'); } }, async url => {
-    assert.equal((await post(url, { ...base, provider: 'huggingface', model: 'meta-llama/Llama-3.1-8B-Instruct', baseUrl: 'https://attacker.example/v1' })).status, 200);
-  });
-  assert.equal(captured.url, 'https://router.huggingface.co/v1/chat/completions', 'a supplied base URL is ignored, not honoured');
-  assert.equal(captured.headers.Authorization, 'Bearer test-key-not-real');
-  assert.equal(JSON.parse(captured.body).model, 'meta-llama/Llama-3.1-8B-Instruct', 'routing suffixes like :fastest are legal ids and pass through untouched');
-  assert.equal(usageReportable('huggingface', { nativeCohere: false, nativeAnthropic: false }), true, 'usage is requested so BYOK runs still count tokens');
-});
-
-test('Hugging Face is not on the free tier even when the deployment holds HF_TOKEN', async () => {
+test('Hugging Face is removed: its provider is unknown, so it is never routed or funded', async () => {
+  // HF is gone from the registry and the frontend. A request that still names it is refused like
+  // any unknown provider, its base URL is never reached, and the deployment can never fund it.
   const env = { HF_TOKEN: 'server-hf-token', FREE_CREDIT_MONTHLY_POOL: '400' };
+  // No key and no allowlist entry: the deployment cannot fund it, even with a server token set.
   assert.equal(fundingFor({ provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct' }, env).mode, 'none');
-  assert.equal(fundingFor({ provider: 'huggingface', model: 'meta-llama/Llama-3.1-8B-Instruct' }, env).mode, 'none');
+  assert.equal(fundingFor({ provider: 'huggingface', model: 'openai/gpt-oss-120b' }, env).mode, 'none');
   await withProxy({ env, transport: async () => { throw Error('must not call'); } }, async url => {
-    const response = await post(url, { provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct', messages: base.messages });
-    assert.notEqual(response.status, 200);
+    const response = await post(url, { ...base, provider: 'huggingface', model: 'Qwen/Qwen2.5-7B-Instruct' });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /Unsupported provider/);
   });
 });
 

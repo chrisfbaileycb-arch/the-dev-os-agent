@@ -8,7 +8,7 @@ export { planHolder } from './plans.mjs';
 import { isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeModels, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
 import { isChatModelId, isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
-import { accountProbe } from './keyProbe.mjs';
+
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
 import { USER_AGENT, catalogModels, catalogStatus, ensureCatalog, ensureOpenRouterCatalog, openRouterCatalogStatus } from './discovery.mjs';
@@ -45,9 +45,6 @@ export async function resolveTarget(provider, baseUrl, env = process.env, resolv
     // AIHubMix speaks the standard OpenAI surface, so it needs no translation — only a fixed
     // home, like every other named provider, so a request body cannot steer the destination.
     aihubmix: 'https://aihubmix.com/v1',
-    // Hugging Face's Inference Providers router is likewise OpenAI-compatible for chat and
-    // lists its live roster at /v1/models, so it too needs only a fixed home.
-    huggingface: 'https://router.huggingface.co/v1',
     nvidia: 'https://integrate.api.nvidia.com/v1',
     // xAI (Grok) and Venice both speak the OpenAI chat surface at a fixed home.
     xai: 'https://api.x.ai/v1',
@@ -323,7 +320,7 @@ export function outputLimit(provider, model, max = DEFAULT_OUTPUT_TOKENS) {
  * token count into a failed run. Requested only where it is known to be supported.
  */
 export const usageReportable = (provider, target) =>
-  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xai', 'cerebras', 'aihubmix', 'huggingface', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
+  !target.nativeCohere && !target.nativeAnthropic && ['openrouter', 'groq', 'openai', 'xai', 'cerebras', 'aihubmix', 'cheaper-inference', 'omniroute', 'xkiro'].includes(provider);
 
 /**
  * Sentinel SSE chunk appended when an upstream stream is cut short by token output limits.
@@ -597,13 +594,6 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       if (path === '/api/models' && provider === 'google' && apiKey) {
         delete headers.Authorization;
         headers['x-goog-api-key'] = apiKey;
-      }
-      if (path === '/api/models' && provider === 'huggingface' && apiKey) {
-        const probe = accountProbe('huggingface');
-        let who;
-        try { who = await fetch(probe.url, { headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}`, 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(15_000) }); }
-        catch (error) { throw new HttpError(502, `Could not reach Hugging Face: ${error?.message || 'connection failed'}`); }
-        if (!who.ok) throw new HttpError(who.status === 401 || who.status === 403 ? 401 : 502, who.status === 401 || who.status === 403 ? 'The provider rejected this key.' : `The provider answered HTTP ${who.status}.`);
       }
       let payload; let suffix; let budgetModel; let budgetMax; let budgetMessages;
       if (path === '/api/chat') {

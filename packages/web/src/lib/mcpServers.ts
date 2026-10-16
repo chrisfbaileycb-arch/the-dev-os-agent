@@ -1,6 +1,6 @@
 import { guessTransport, type McpTransport, type McpAuthHeader } from './mcp';
 
-export type McpPresetGroup = 'Developer' | 'Data and infrastructure' | 'Web and research' | 'Business' | 'File and runtime' | 'Creative media';
+export type McpPresetGroup = 'Developer' | 'Data and infrastructure' | 'Web and research' | 'Business' | 'File and runtime';
 export type ServerKind = 'remote' | 'bridge' | 'media';
 export interface McpPreset {
   id: string; name: string; url: string; group: McpPresetGroup; blurb: string;
@@ -34,11 +34,9 @@ export const MCP_SERVERS: readonly McpPreset[] = [
   bridge('playwright', 'Playwright', 'Developer', 'Browser interactions, accessibility snapshots, and end-to-end checks.', 'https://github.com/microsoft/playwright-mcp', 'Run @playwright/mcp on an isolated browser profile behind your authenticated HTTPS MCP bridge. Enter the bridge URL below.'),
   bridge('tavily', 'Tavily', 'Web and research', 'Agent research, extraction, and grounded search.', 'https://github.com/tavily-ai/tavily-mcp', 'Use the official Tavily MCP setup with TAVILY_API_KEY on your authenticated bridge, then paste its HTTPS MCP endpoint below.'),
   bridge('resend', 'Resend', 'Business', 'Transactional email tools with explicit approval before sending.', 'https://github.com/resend/mcp-send-email', 'Run the official Resend MCP server with your restricted Resend key behind an authenticated HTTPS bridge. Review recipients and payload before each send.'),
-  { id: 'heygen', name: 'HeyGen / Video Avatar Generator', kind: 'media', url: '', group: 'Creative media', blurb: 'Optional avatar videos. Uses your HeyGen key only when requested and approved.', token: 'HeyGen API key', docs: 'https://developers.heygen.com/reference/create-video' },
-  { id: 'nano-banana', name: 'Nano Banana / Image Generation', kind: 'media', url: '', group: 'Creative media', blurb: 'Optional marketing images and multimodal assets. Separate from coding inference.', token: 'Google Gemini image-generation API key', docs: 'https://ai.google.dev/gemini-api/docs/image-generation' },
 ];
 export const MCP_PRESETS = MCP_SERVERS;
-export const MCP_PRESET_GROUPS: McpPresetGroup[] = ['Developer', 'File and runtime', 'Data and infrastructure', 'Web and research', 'Business', 'Creative media'];
+export const MCP_PRESET_GROUPS: McpPresetGroup[] = ['Developer', 'File and runtime', 'Data and infrastructure', 'Web and research', 'Business'];
 export function presetForm(preset: Pick<McpPreset, 'name' | 'url' | 'transport' | 'authHeader'>): { name: string; url: string; transport: McpTransport; authHeader: McpAuthHeader } {
   return { name: preset.name, url: preset.url, transport: preset.transport ?? guessTransport(preset.url), authHeader: preset.authHeader ?? 'Authorization' };
 }

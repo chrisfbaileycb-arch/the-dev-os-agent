@@ -9,7 +9,7 @@ import { PROVIDER_META, TUNABLES } from './settings.mjs';
 import { loadVault, saveVault, getClientConfig } from './vault.mjs';
 import { REGISTRY, isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 
-import { accountProbe, keyShapeError } from './keyProbe.mjs';
+import { keyShapeError } from './keyProbe.mjs';
 import { BUILTIN_SKILLS, importRepositorySkills } from './skills.mjs';
 
 // The operator's dashboard: /api/admin/*.
@@ -73,13 +73,6 @@ export async function discoverForProvider(provider, env, fetchImpl = fetch) {
   if (!key) throw new HttpError(400, `Add a ${PROVIDER_META[provider]?.name ?? provider} key first.`);
   const shape = keyShapeError(provider, key);
   if (shape) throw new HttpError(400, shape);
-  const probe = accountProbe(provider);
-  if (probe?.url) {
-    let who;
-    try { who = await fetchImpl(probe.url, { headers: { Accept: 'application/json', Authorization: `Bearer ${key}`, 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(15_000) }); }
-    catch (error) { throw new HttpError(502, `Could not reach the provider: ${error?.message || 'connection failed'}`); }
-    if (!who.ok) throw new HttpError(who.status === 401 || who.status === 403 ? 401 : 502, who.status === 401 || who.status === 403 ? 'The provider rejected this key.' : `The provider answered HTTP ${who.status}.`);
-  }
   const target = await resolveTarget(provider, '', env);
   const headers = { Accept: 'application/json', 'User-Agent': USER_AGENT };
   if (target.nativeAnthropic) { headers['x-api-key'] = key; headers['anthropic-version'] = ANTHROPIC_VERSION; }

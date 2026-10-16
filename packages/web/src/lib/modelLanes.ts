@@ -4,18 +4,19 @@ import type { Provider } from './providers';
 // Three groups in the model menu.
 //
 //   us          Shield chat providers the operator connects, and that a visitor may bring a key for.
-//   experiment  OpenRouter and Hugging Face. Your key. Not the free tier. Not Shield.
+//   experiment  OpenRouter. Your key. Not the free tier. Not Shield.
 //   own         A model running on this machine, plus any other bring-your-own-key provider.
 //
 // The US list mirrors backendProviders() in server/providerRegistry.mjs. The optional,
-// owner-configured Hugging Face backend group was removed with its server route.
+// owner-configured Hugging Face backend group was removed with its server route, and Hugging
+// Face is gone from the app entirely.
 
 export type Lane = 'us' | 'own' | 'experiment';
 export interface BackendAvailability { us: boolean; }
 export const defaultBackends: BackendAvailability = { us: true };
 
 export const US_LANE_PROVIDERS: readonly Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
-export const EXPERIMENT_LANE_PROVIDERS: readonly Provider[] = ['openrouter', 'huggingface'];
+export const EXPERIMENT_LANE_PROVIDERS: readonly Provider[] = ['openrouter'];
 export const EXPERIMENT_SUBTITLE = 'Your key. May route outside the US. Not the free tier.';
 
 export const isUsProvider = (provider: Provider | string | undefined): boolean =>
@@ -33,7 +34,7 @@ export const providersInLane = (all: readonly Provider[], lane: Lane): Provider[
 
 /**
  * The lane the current connection belongs to. A server-funded run is always in the US lane.
- * A key run follows its provider. OpenRouter and Hugging Face are the experiment group.
+ * A key run follows its provider. OpenRouter is the experiment group.
  */
 export function laneOf(provider: Provider | undefined, inference: InferenceMode): Lane {
   if (inference === 'free' || inference === 'credits') return 'us';

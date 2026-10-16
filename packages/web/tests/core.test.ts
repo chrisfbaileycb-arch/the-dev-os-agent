@@ -61,38 +61,13 @@ describe('AIHubMix provider', () => {
   });
 });
 
-describe('Hugging Face provider', () => {
-  // HF's Inference Providers router: one token pays every underlying host for hundreds of
-  // open-weights models, with a small monthly credit on every HF account. Same BYOK shape
-  // as AIHubMix — free on the visitor's key, never the deployment's allowance.
-  it('is registered with the router endpoint and no compiled model list', () => {
-    expect(providers.huggingface).toBeDefined();
-    expect(providers.huggingface.endpoint).toBe('https://router.huggingface.co/v1');
-    expect(providers.huggingface.models).toEqual([]);
-  });
-
-  it('builds a default connection like any named provider', () => {
-    const c = defaultConnection('huggingface');
-    expect(c.provider).toBe('huggingface');
-    expect(c.endpoint).toBe('https://router.huggingface.co/v1');
-    expect(c.model).toBe('');
-  });
-
-  it('carries catalog entries that resolve by id and classify sensibly', () => {
-    expect(findModel('openai/gpt-oss-120b')?.provider).toBe('huggingface');
-    // Small serverless models are 'byok' — free on the token's monthly credit, still a token.
-    expect(findModel('Qwen/Qwen2.5-7B-Instruct')?.tier).toBe('byok');
-    expect(findModel('meta-llama/Llama-3.1-8B-Instruct')?.tier).toBe('byok');
-    // Reasoning stays 'pro': the deployment never funds a chain-of-thought by default.
-    expect(findModel('deepseek-ai/DeepSeek-R1:auto')?.tier).toBe('pro');
-    expect(weightFor('meta-llama/Llama-3.1-8B-Instruct')).toBe(0.5); // small open model reads as fast
-    expect(weightFor('deepseek-ai/DeepSeek-R1:auto')).toBe(15); // reasoning weights ride the model name, not the vendor
-    expect(catalog.filter(m => m.provider === 'huggingface').length).toBeGreaterThanOrEqual(6);
-  });
-
-  it('is never treated as deployment-funded free tier', () => {
-    expect(inferenceFor('openai/gpt-oss-120b', undefined, ['some-gateway-id'])).toBe('byok');
-    expect(inferenceFor('deepseek-ai/DeepSeek-R1:fastest', 'byok', [])).toBe('byok');
+describe('Hugging Face is gone', () => {
+  // HF was removed from the app entirely: no provider card, no key slot, no picker entry.
+  it('has no provider, no connection, and no catalog model that resolves', () => {
+    expect((providers as Record<string, unknown>).huggingface).toBeUndefined();
+    expect(catalog.some(m => (m.provider as string) === 'huggingface')).toBe(false);
+    expect(findModel('openai/gpt-oss-120b')).toBeUndefined();
+    expect(findModel('Qwen/Qwen2.5-7B-Instruct')).toBeUndefined();
   });
 });
 

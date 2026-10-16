@@ -58,6 +58,21 @@ Repository notes for agents working in Signal Forge OS.
 - The multi-provider key matrix is an admin-only concern. Do not reintroduce per-provider
   key rows on the visitor page.
 
+## Hugging Face is removed
+
+- Hugging Face was purged from the app: no registry entry, provider union, provider card, key
+  slot, catalog model, MCP preset, or server route (`providerRegistry.mjs`, `proxy.mjs`,
+  `freetier.mjs`, `settings.mjs`, `vault.mjs`, `keyProbe.mjs`). Do not reintroduce it; tests in
+  `core.test.ts`, `model-lanes.test.ts`, `provider-registry.test.mjs`, `proxy.test.mjs`, and
+  `backend-lane.test.mjs` assert an unknown id like `huggingface` is refused, never assumed.
+
+## MCP tool grid vs optional media tools
+
+- `packages/web/src/lib/mcpServers.ts` lists only real MCP servers (remote + bridge). The two
+  optional media tools (HeyGen, Nano Banana) are NOT presets — they are configured in the
+  dedicated media accordion in `Connectors.tsx`, so the "N integrations" count is not padded.
+  `mcp-presets.test.ts` and `sandbox-ui.test.tsx` pin the count at 23.
+
 ## Verifying both suites
 
 - Frontend: `cd packages/web && npx vitest run`.

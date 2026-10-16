@@ -163,12 +163,11 @@ export default function Connectors(p: ConnectorsProps) {
           <input aria-label="Search tool directory" type="search" autoComplete="off" placeholder="Search tools" value={presetQuery} onChange={e => setPresetQuery(e.target.value)} />
           <div className="tool-category-tabs" role="group" aria-label="Tool categories">{(['All', ...MCP_PRESET_GROUPS] as (McpPresetGroup | 'All')[]).map(group => <button key={group} className={activeGroup === group ? 'output-tab active' : 'output-tab'} aria-pressed={activeGroup === group} onClick={() => setActiveGroup(group)}>{group}</button>)}</div>
           <div className="preset-grid">{MCP_PRESETS.filter(server => (activeGroup === 'All' || server.group === activeGroup) && `${server.name} ${server.blurb}`.toLowerCase().includes(presetQuery.trim().toLowerCase())).map(server => {
-            const config = media.find(c => c.provider === server.id);
-            const configured = server.kind === 'media' ? !!config?.enabled && !!config.key : presetConnected(server, p.mcp);
+            const configured = presetConnected(server, p.mcp);
             return <article key={server.id} className={preset?.id === server.id ? 'preset active' : 'preset'}>
               <div className="panel-head"><strong>{server.name}</strong>{configured && <span className="pill"><Check size={12} />Configured</span>}</div>
-              <p className="help">{server.blurb}</p><small className="pill">{server.kind === 'media' ? 'Optional media tool' : server.kind === 'bridge' ? 'Local / HTTPS bridge' : 'Remote MCP'}</small>
-              <div className="row gap"><button className="button small" onClick={() => { if (server.kind !== 'media') { configure(server); return; } const row = document.getElementById(`media-${server.id}`) as HTMLDetailsElement | null; if (row) { row.open = true; row.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }}>Configure</button><a className="text-button" href={server.docs} target="_blank" rel="noopener noreferrer">Setup guide</a></div>
+              <p className="help">{server.blurb}</p><small className="pill">{server.kind === 'bridge' ? 'Local / HTTPS bridge' : 'Remote MCP'}</small>
+              <div className="row gap"><button className="button small" onClick={() => configure(server)}>Configure</button><a className="text-button" href={server.docs} target="_blank" rel="noopener noreferrer">Setup guide</a></div>
             </article>;
           })}</div>
         </section>

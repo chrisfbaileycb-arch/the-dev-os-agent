@@ -170,6 +170,7 @@ export default function AgentSkills(p: AgentSkillsProps) {
             <button type="button" className="text-button" aria-label={`Read ${skill.name}`} aria-expanded={openSkill === skill.id} onClick={() => setOpenSkill(openSkill === skill.id ? null : skill.id)}><FileText size={13} /></button>
             <span>
               <strong>{skill.name}</strong>
+              {skill.repository && <span className="skill-attribution" title="This skill was indexed from an external repository.">Imported from {skill.repository}{skill.provenance?.license ? ` • ${skill.provenance.license}` : ''}</span>}
               <small>Instructions · {skill.blurb}</small>{skill.provenance && <small><a href={skill.provenance.source} target="_blank" rel="noreferrer">Source {skill.provenance.commit?.slice(0, 8)}</a> · {skill.provenance.license} · {skill.provenance.author} · SHA-256 {skill.provenance.sha256.slice(0, 12)}</small>}
             </span>
             <label className="switch"><input type="checkbox" aria-label={`Enable ${skill.name}`} checked={row.enabled} onChange={e => patchSkill(skill.id, { enabled: e.target.checked })} />{row.enabled ? 'On' : 'Off'}</label>

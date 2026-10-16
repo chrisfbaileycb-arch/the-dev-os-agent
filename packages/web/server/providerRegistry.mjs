@@ -60,8 +60,6 @@ export const REGISTRY = [
   // --- Never Shield: relays, non-US companies, or unknowable destinations ---
   { id: 'openrouter', name: 'OpenRouter', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
     note: 'US company, but it routes to many upstream hosts, including non-US ones. Experiment lane. Not Shield and not the free tier.' },
-  { id: 'huggingface', name: 'Hugging Face', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
-    note: 'Inference Providers router at router.huggingface.co. Experiment lane. Your key. Not Shield and not the free tier.' },
   { id: 'cohere', name: 'Cohere', hq: 'CA', kind: 'direct', integrated: true, ...unchecked },
   { id: 'venice', name: 'Venice', hq: 'unknown', kind: 'direct', integrated: true, ...unchecked },
   { id: 'vercel', name: 'Vercel AI Gateway', hq: 'US', kind: 'relay', integrated: true, ...unchecked,
@@ -90,12 +88,12 @@ export function shieldProviders({ onlyIntegrated = true } = {}) {
 export const allowedUnderShield = id => isShieldEligible(providerRecord(id));
 
 // Keys the operator connects on the backend, and the same keys a visitor may bring.
-// OpenAI, Anthropic, Google, Groq, and xAI. Hugging Face and NVIDIA stay in the registry
-// so a key stored earlier can be removed; they are not slots.
+// OpenAI, Anthropic, Google, Groq, and xAI. NVIDIA stays in the registry so a key stored
+// earlier can be removed; it is not a slot.
 export const KEY_LANE_IDS = ['openai', 'anthropic', 'google', 'groq', 'xai'];
 
 /** Experiment lane. Own keys. Never Shield, never the funded free tier. */
-export const EXPERIMENT_IDS = ['openrouter', 'huggingface'];
+export const EXPERIMENT_IDS = ['openrouter'];
 
 const BACKEND_IDS = [...KEY_LANE_IDS];
 

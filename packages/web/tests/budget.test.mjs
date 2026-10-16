@@ -84,7 +84,9 @@ test('proxy refuses parallel and retry spending before dispatch, while BYOK wins
 test('Experiment header, metadata and provider require a personal key before any discovery', async () => {
   let calls = 0; const forbidden = async () => { calls++; throw Error('must not call'); };
   await serve({ discover: forbidden, discoverOpenRouter: forbidden, transport: forbidden, env: { ...env, SERVER_CREDIT_ACCESS_TOKEN: 'fixture-plan-token' } }, async post => {
-    for (const [b, headers] of [[body, { 'X-Forge-Is-Experimental': 'true' }], [{ ...body, experimental: true }, {}], [{ ...body, provider: 'openrouter' }, {}], [{ ...body, provider: 'huggingface', serverAccessToken: 'fixture-plan-token' }, {}]]) {
+    // OpenRouter is the only experiment provider; Hugging Face was removed; every case requires a
+    // personal key before discovery, even with a plan token in hand.
+    for (const [b, headers] of [[body, { 'X-Forge-Is-Experimental': 'true' }], [{ ...body, experimental: true }, {}], [{ ...body, provider: 'openrouter' }, {}], [{ ...body, provider: 'openrouter', serverAccessToken: 'fixture-plan-token' }, {}]]) {
       for (const route of ['/api/chat', '/api/models']) { const r = await post(b, headers, route); assert.equal(r.status, 401); assert.equal((await r.json()).error.code, 'key_required'); }
     }
     assert.equal(calls, 0);

@@ -39,7 +39,6 @@ export const PROVIDER_META = {
   venice: { name: 'Venice', console: 'https://venice.ai/settings/api' },
   xkiro: { name: 'xKiro', console: 'https://xkiro.com' },
   aihubmix: { name: 'AIHubMix', console: 'https://aihubmix.com' },
-  huggingface: { name: 'Hugging Face', console: 'https://huggingface.co/settings/tokens' },
   nvidia: { name: 'NVIDIA NIM', console: 'https://build.nvidia.com/' },
   'cheaper-inference': { name: 'Managed inference', console: 'https://cheaperinference.com' },
   // OmniRoute is self-hosted, so there is no vendor console page to link to; the operator's own
@@ -315,9 +314,9 @@ export async function openSettings({ db, env = process.env, log = console.error 
       await write(KEY_PREFIX + provider, keys.join('\n'), true);
     },
     /**
-     * OpenRouter, Hugging Face, and the Antigravity engine key.
+     * OpenRouter and the Antigravity engine key.
      * Refused when this process cannot keep the row. Never a free-tier key.
-     * `provider` is `openrouter`, `huggingface`, or `antigravity`.
+     * `provider` is `openrouter` or `antigravity`.
      */
     async setExperimentKey(provider, value, { durable }) {
       const id = String(provider ?? '').toLowerCase();
@@ -395,12 +394,11 @@ export async function openSettings({ db, env = process.env, log = console.error 
         return { provider, name: PROVIDER_META[provider]?.name ?? provider, env: name, console: PROVIDER_META[provider]?.console ?? null, source, hint: shape, count, unreadable: unreadable.has(name), backend: isBackendProvider(provider), enabled: backendEnabled(provider, effective) };
       });
     },
-    /** OpenRouter, Hugging Face, and the execution engine. Hints only. Never the free tier. */
+    /** OpenRouter and the execution engine. Hints only. Never the free tier. */
     experimentStatus(base = env) {
       const effective = { ...base, ...overlayCache };
       const slots = [
         { provider: 'openrouter', name: 'OpenRouter', env: 'OPENROUTER_API_KEY' },
-        { provider: 'huggingface', name: 'Hugging Face', env: 'HF_TOKEN' },
         { provider: 'antigravity', name: 'Execution engine', env: 'ANTIGRAVITY_API_KEY' },
       ];
       return slots.map(slot => {

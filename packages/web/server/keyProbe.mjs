@@ -1,5 +1,6 @@
 // What "this key is real" means, per provider. Format checks are local. The live check is the
-// provider's own account endpoint, called by discover — never a compiled model list.
+// provider's own model list, called by discover — never a compiled model list. No provider gets
+// a separate account-probe endpoint, so there is none here.
 
 const SHAPES = {
   openai: { test: value => value.startsWith('sk-'), error: 'OpenAI keys start with sk-.' },
@@ -12,10 +13,4 @@ export function keyShapeError(provider, key) {
   if (!rule) return '';
   const value = String(key ?? '').trim();
   return rule.test(value) ? '' : rule.error;
-}
-
-/** Where a saved key is proven, before any model list is trusted. */
-export function accountProbe(provider) {
-  if (provider === 'huggingface') return { url: 'https://huggingface.co/api/whoami', auth: 'bearer' };
-  return null;
 }

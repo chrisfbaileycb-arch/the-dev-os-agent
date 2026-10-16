@@ -437,11 +437,10 @@ test('an owner key does not put OpenRouter on the free tier', () => {
   assert.equal(ownerKeyName({ SETTINGS_OWNER_API_KEY: 'a', OPENROUTER_OWNER_KEY: 'b' }), 'SETTINGS_OWNER_API_KEY');
 });
 
-test('Hugging Face is not on the free tier even when a token is set', () => {
+test('Hugging Face is gone: it is never a funded model even when a token is set', () => {
   const env = { OPENROUTER_OWNER_KEY: 'owner-key', FREE_CREDIT_MONTHLY_POOL: '400' };
   assert.equal(freeKey({ id: 'groq/llama-3.1-8b-instant', provider: 'groq', envKey: 'GROQ_API_KEY' }, env).key, '');
   assert.equal(fundedModels(env).some(m => m.provider === 'groq'), false);
-  assert.equal(fundedModels(env).some(m => m.provider === 'huggingface'), false);
   const withHf = { ...env, HF_TOKEN: 'hf-token' };
   assert.equal(fundedModels(withHf).some(m => m.provider === 'huggingface'), false);
   assert.equal(freeModel('Qwen/Qwen2.5-7B-Instruct', withHf), undefined);
