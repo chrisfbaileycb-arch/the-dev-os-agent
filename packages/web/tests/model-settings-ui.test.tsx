@@ -36,12 +36,16 @@ it('unifies managed US models under one source selector while retaining their pr
   expect(props.onPick).toHaveBeenCalledWith('groq-model', 'free', 'groq');
 });
 
-it('Settings offers a unified provider list and honors the US backend switch', () => {
-  const props: SettingsProps = { backends: { us: false }, connection: defaultConnection('groq'), setConnection: vi.fn(), keys: emptyKeyring(), setKeys: vi.fn(), keyed: new Set(), discovered: {}, discovering: new Set(), discover: vi.fn(), save: vi.fn(), forget: vi.fn(), balance: serverBalance(0, 0), freeBalance: serverBalance(0, 0), free: offlineDeployment.free, paid: offlineDeployment.paid, adminConfigured: true, openAdmin: vi.fn(), ledger: [], busy: false, canInstall: false, serverReachable: true, requestClear: vi.fn(), theme: 'light', setTheme: vi.fn(), pipes: defaultPipes(), setPipes: vi.fn() };
+it('Settings offers one universal BYOK slot and no per-provider matrix', () => {
+  const props: SettingsProps = { connection: defaultConnection('groq'), setConnection: vi.fn(), keys: emptyKeyring(), setKeys: vi.fn(), keyed: new Set(), discovered: {}, discovering: new Set(), discover: vi.fn(), save: vi.fn(), forget: vi.fn(), balance: serverBalance(0, 0), freeBalance: serverBalance(0, 0), free: offlineDeployment.free, paid: offlineDeployment.paid, adminConfigured: true, openAdmin: vi.fn(), ledger: [], busy: false, canInstall: false, serverReachable: true, requestClear: vi.fn(), theme: 'light', setTheme: vi.fn(), pipes: defaultPipes(), setPipes: vi.fn() };
   mount(<Settings {...props} />);
-  expect(host.textContent).toContain('Active Provider Keys');
-  expect(host.textContent).not.toContain('OpenAI API key');
-  expect(host.textContent).toContain('OpenRouter API key');
+  expect(host.querySelectorAll('.byok-card')).toHaveLength(1);
+  expect(host.textContent).toContain('Provider key');
+  const slot = host.querySelector('input[aria-label="Groq API key"]');
+  expect(slot).not.toBeNull();
+  expect(slot?.getAttribute('type')).toBe('password');
+  expect([...host.querySelectorAll('select[aria-label=Provider] option')].map(o => o.textContent)).toEqual(['OpenAI', 'Anthropic', 'Google Gemini', 'Groq', 'xAI Grok', 'OpenRouter']);
+  expect(host.textContent).not.toContain('Hugging Face');
   expect([...host.querySelectorAll('button')].some(b => b.textContent?.includes('Free Tier'))).toBe(false);
 });
 

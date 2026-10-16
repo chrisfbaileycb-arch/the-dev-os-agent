@@ -27,6 +27,8 @@ it('keeps the custom MCP form visible and distinguishes all 25 tools and the two
 it('switches the right pane between the exact requested tabs and supports keyboard navigation', () => {
   mount(<OutputPanel execution={execution} content="" close={vi.fn()} github={defaultSettings().github} openConnectors={vi.fn()} onPreviewFocus={vi.fn()} updateGithub={vi.fn()} secrets={[]} />);
   const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role=tab]')]; expect(tabs.map(t => t.textContent)).toEqual(['App Live Preview', 'Agent Sandbox / DevOps Console']);
+  // With no project on the canvas the live tab is idle, so its status LED is the greyscale one.
+  const led = tabs[0].querySelector('.status-led'); expect(led).not.toBeNull(); expect(led?.classList.contains('online')).toBe(false);
   act(() => tabs[1].click()); expect(host.querySelector('[role=tabpanel]')?.id).toBe('agent-sandbox-panel'); expect(host.querySelector('.agent-sandbox-console')).not.toBeNull();
   act(() => tabs[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
   expect(host.querySelector('[role=tabpanel]')?.id).toBe('app-preview-panel'); expect(tabs[0].getAttribute('aria-selected')).toBe('true');

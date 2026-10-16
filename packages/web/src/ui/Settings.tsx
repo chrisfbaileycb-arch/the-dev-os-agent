@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Check, Coins, CreditCard, ExternalLink, HardDrive, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { Check, ClipboardCopy, Coins, CreditCard, ExternalLink, Eye, EyeOff, HardDrive, KeyRound, LoaderCircle, MonitorDown, Palette, Search, ShieldCheck, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { findModel } from '../lib/catalog';
 import type { Discovered } from '../lib/discovered';
 import type { PaidTier } from '../lib/deployment';
@@ -10,7 +10,6 @@ import { FREE_KEY_OPTIONS } from '../lib/freeKeys';
 import type { Balance, FreeTier, LedgerEntry, PlanReading } from '../lib/store';
 import type { Connection } from '../lib/types';
 import { isInstalled, promptInstall } from '../pwa';
-import { defaultBackends, EXPERIMENT_SUBTITLE, type BackendAvailability } from '../lib/modelLanes';
 import { testLocalEndpoint } from '../lib/localNetwork';
 import type { HostStorage } from '../lib/deployment';
 import ThemePicker from './ThemePicker';
@@ -18,7 +17,6 @@ import { loadWorkingMemory, saveWorkingMemory } from '../lib/workingMemory';
 import type { ThemeChoice } from '../lib/theme';
 
 export interface SettingsProps {
-  backends?: BackendAvailability;
   connection: Connection; setConnection: (c: Connection) => void;
   keys: Keyring; setKeys: (next: Keyring) => void; keyed: Set<Provider>;
   /** What each connected key reaches, read live from its provider; the same lists the dock shows. */
@@ -38,23 +36,36 @@ export interface SettingsProps {
   setEngineKey?: (value: string) => void;
 }
 
-/** Customer-configurable BYOK providers. Managed and future self-hosted routes stay out of this list. */
+// The visitor's BYOK card offers one universal slot, not a row per provider. The full
+// multi-provider matrix (every key, every route) lives in the admin dashboard; what a visitor
+// needs here is the one provider they intend to use. These are the US backend providers plus the
+// OpenRouter experiment route. Hugging Face, Cerebras, Cohere, Venice and the rest are gone from
+// this page — and Hugging Face is gone from the app entirely.
 const US_BYOK_PROVIDERS: Provider[] = ['openai', 'anthropic', 'google', 'groq', 'xai'];
+const BYOK_CHOICES: Provider[] = [...US_BYOK_PROVIDERS, 'openrouter'];
 const KEY_HINTS: Partial<Record<Provider, string>> = {
   openai: 'sk-…',
   anthropic: 'sk-ant-…',
   google: 'Your Google AI Studio key',
   groq: 'Your Groq key',
   xai: 'Your xAI key',
+  openrouter: 'sk-or-…',
 };
 
 export default function Settings(p: SettingsProps) {
-  const backends = p.backends ?? defaultBackends;
-  const BYOK_PROVIDERS: Provider[] = [...(backends.us ? US_BYOK_PROVIDERS : []), 'huggingface', 'openrouter', 'cerebras', 'github', 'nvidia', 'cohere', 'venice', 'vercel'];
   const [workingMemory, setWorkingMemory] = useState(loadWorkingMemory);
   const [memoryNote, setMemoryNote] = useState('');
+  const [keyShown, setKeyShown] = useState(false);
+  const [keyDraft, setKeyDraft] = useState('');
+  const [keyNote, setKeyNote] = useState('');
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [pickedProvider, setPickedProvider] = useState<Provider | null>(null);
   const c = p.connection;
-  const provider: Provider = BYOK_PROVIDERS.includes(c.provider as Provider) ? c.provider as Provider : BYOK_PROVIDERS[0] ?? 'openai';
+  const provider: Provider = BYOK_CHOICES.includes(c.provider as Provider) ? c.provider as Provider : US_BYOK_PROVIDERS[0];
+  // The single-slot card follows the connection's provider unless the visitor has explicitly
+  // picked one in the dropdown; the pick then wins so the key field does not jump on re-render.
+  const chosen = pickedProvider ?? (BYOK_CHOICES.includes(provider) ? provider : US_BYOK_PROVIDERS[0]);
+  const slotKey = (id: Provider) => (id === c.provider ? c.token || p.keys[id] : p.keys[id]) || '';
   const inference = c.inference === 'free' ? 'free' : c.inference === 'credits' ? 'credits' : 'byok';
   const hasToken = Boolean(c.serverAccessToken?.trim());
   const set = (patch: Partial<Connection>) => p.setConnection({ ...c, ...patch, mode: 'remote' });
@@ -70,6 +81,23 @@ export default function Settings(p: SettingsProps) {
   }
   function pickModel(id: string) {
     if (id) set({ model: id, inference: 'byok' });
+  }
+  // The dropdown chooses which provider the single key slot belongs to. Switching provider
+  // clears the draft so a key typed for one provider is never shown — or saved — under another.
+  function chooseSlotProvider(id: Provider) {
+    setPickedProvider(id);
+    setKeyDraft(''); setKeyNote(''); setKeyShown(false);
+  }
+  function saveSlotKey() {
+    const value = keyDraft.trim();
+    if (!value) return;
+    pickProvider(chosen);
+    setKey(chosen, value);
+    setKeyDraft(''); setKeyNote('Key saved for this page session. It clears on reload or tab close.');
+  }
+  function clearSlotKey() {
+    setKey(chosen, '');
+    setKeyDraft(''); setKeyNote('Key cleared for this page session.');
   }
   function pickInference(next: 'free' | 'byok' | 'credits') {
     if (next === 'free' && p.free.models.length && !p.free.models.includes(c.model)) {
@@ -141,31 +169,41 @@ export default function Settings(p: SettingsProps) {
               <summary>No key yet? Get a free one in a few minutes</summary>
               <p className="help">Each of these is free from a US company. Your own free key comes with its own limits, so it keeps working when the shared free tier is busy.</p>
               <ul className="free-key-list">
-                {FREE_KEY_OPTIONS.filter(o => BYOK_PROVIDERS.includes(o.provider)).map(o => <li key={o.provider}>
+                {FREE_KEY_OPTIONS.filter(o => BYOK_CHOICES.includes(o.provider)).map(o => <li key={o.provider}>
                   <h3>{o.name}</h3>
                   <ol>{o.steps.map(step => <li key={step}>{step}</li>)}</ol>
                   {o.note && <p className="help">{o.note}</p>}
                   <span className="row gap">
                     <a className="button small" href={o.getKeyUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden="true" />Get a {providers[o.provider].name} key<span className="sr-only"> (opens in a new tab)</span></a>
-                    <button className="button primary small" disabled={p.busy} onClick={() => pickProvider(o.provider)}>Use {providers[o.provider].name}</button>
+                    <button className="button primary small" disabled={p.busy} onClick={() => chooseSlotProvider(o.provider)}>Use {providers[o.provider].name}</button>
                   </span>
                 </li>)}
               </ul>
             </details>
-            <h3>Active Provider Keys</h3>
-            <p className="help">Start with the one provider you intend to use — its key is all you need to get going. Each connected provider discovers its models automatically and updates Model &amp; Source. Keys stay in this page session.</p>
-            <div className="provider-registry">
-              {BYOK_PROVIDERS.map(id => {
-                const token = c.provider === id ? c.token || p.keys[id] || '' : p.keys[id] || '';
-                const live = p.discovered[id];
-                return <div className="provider-key-row" key={id}>
-                  <div className="panel-head"><strong>{providers[id].name}</strong><span className={token.trim() ? 'pill ok' : 'pill'}>{token.trim() ? live?.error ? 'Key entered · discovery failed' : p.discovering.has(id) ? 'Discovering…' : `${live?.models.length ?? 0} models · Active` : 'Unset'}</span></div>
-                  <label>{providers[id].name} API key<input type="password" autoComplete="off" spellCheck={false} disabled={p.busy} value={token} placeholder={KEY_HINTS[id] ?? 'Paste your provider key'} onChange={e => setKey(id, e.target.value)} /></label>
-                  <div className="row gap"><button className="button small" disabled={p.busy || !token.trim() || p.discovering.has(id)} onClick={() => p.discover(id)}>{p.discovering.has(id) ? <LoaderCircle size={12} className="spin" /> : <Search size={12} />}Refresh models</button><button className="button small" disabled={p.busy || !token.trim()} onClick={() => { pickProvider(id); }}>Use provider</button>{token && <button className="button small" disabled={p.busy} aria-label={`Clear ${providers[id].name} key`} onClick={() => setKey(id, '')}><Trash2 size={12} />Clear</button>}</div>
-                  {live?.error && <p className="msg-error" role="alert">{live.error}</p>}
-                </div>;
-              })}
-            </div>
+            <h3>Provider key</h3>
+            <p className="help">One card, one key. Choose the provider you intend to use — that single key is all you need to get going, and it stays in this page session. Managing keys for every provider on the server happens in the admin dashboard.</p>
+            {(() => {
+              const token = slotKey(chosen);
+              const live = p.discovered[chosen];
+              const status = token.trim() ? (live?.error ? 'Key entered · discovery failed' : p.discovering.has(chosen) ? 'Discovering…' : `${live?.models.length ?? 0} models · Active`) : 'Unset';
+              return <div className="byok-card">
+                <label>Provider<select aria-label="Provider" disabled={p.busy} value={chosen} onChange={e => chooseSlotProvider(e.target.value as Provider)}>
+                  {BYOK_CHOICES.map(id => <option key={id} value={id}>{providers[id].name}</option>)}
+                </select></label>
+                <label>{providers[chosen].name} API key<span className="slot-key">
+                  <input type={keyShown ? 'text' : 'password'} autoComplete="off" spellCheck={false} disabled={p.busy} aria-label={`${providers[chosen].name} API key`} value={keyDraft} placeholder={KEY_HINTS[chosen] ?? 'Paste your provider key'} onChange={e => setKeyDraft(e.target.value)} />
+                  <button type="button" className="icon-button" aria-label={keyShown ? 'Hide key' : 'Show key'} title={keyShown ? 'Hide key' : 'Show key'} onClick={() => setKeyShown(v => !v)}>{keyShown ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                  <button type="button" className="icon-button" aria-label="Copy key" title="Copy key" disabled={!keyDraft} onClick={() => { void navigator.clipboard?.writeText(keyDraft).then(() => { setCopiedKey(true); setTimeout(() => setCopiedKey(false), 1400); }).catch(() => setCopiedKey(false)); }}>{copiedKey ? <Check size={14} /> : <ClipboardCopy size={14} />}</button>
+                </span></label>
+                <div className="row gap">
+                  <button className="button primary small" disabled={p.busy || !keyDraft.trim()} onClick={saveSlotKey}><Check size={13} />Save key</button>
+                  <button className="button small" disabled={p.busy || !token.trim()} onClick={() => { pickProvider(chosen); p.discover(chosen); }}><Search size={13} />Use &amp; discover models</button>
+                  <button className="button small" disabled={p.busy || !token.trim()} onClick={clearSlotKey}><Trash2 size={13} />Clear</button>
+                </div>
+                <p className="help" role="status"><span className={token.trim() ? 'pill ok' : 'pill'}>{status}</span>{keyNote && <> {keyNote}</>}</p>
+                {live?.error && <p className="msg-error" role="alert">{live.error}</p>}
+              </div>;
+            })()}
           </>}
             <p className="help">Security notice: personal keys and plan tokens stay in page memory and clear on reload or tab close. Hosted requests pass through this server to the selected provider. Never paste keys into chat or skills. Clearing a key here does not revoke it or stop a request already running; set spending limits at the provider.</p>
           <label>Longest reply<select aria-describedby="reply-length-help" value={effectiveOutputLimit(c, outputCap)} disabled={p.busy} onChange={e => set({ maxTokens: Number(e.target.value), customOutputLimit: true })}>

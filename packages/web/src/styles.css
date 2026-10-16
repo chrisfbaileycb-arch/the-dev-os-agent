@@ -394,14 +394,6 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .plan-disclosure { display: block; margin-top: 6px; color: var(--muted); font-size: 10.5px; line-height: 1.4; text-align: center; }
 .referral-note { display: flex; align-items: flex-start; gap: 6px; } .referral-note svg { margin-top: 3px; } .referral-note a { color: var(--accent-ink); }
 
-/* One key field per provider. Two columns on a wide panel, one on a narrow one. */
-.key-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.key-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.key-field > span { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
-.key-field.active > span { color: var(--ink); }
-.key-field em { font-style: normal; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; background: var(--accent-soft); color: var(--accent-ink); border-radius: 9px; padding: 1px 6px; }
-@media (max-width: 640px) { .key-grid { grid-template-columns: minmax(0, 1fr); } }
-
 /* Connectors hub */
 .connector-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .connector-tab { display: flex; align-items: center; gap: 8px; text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 10px; color: var(--ink); min-width: 0; }
@@ -592,8 +584,10 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 .unified-model-picker .model-trigger { max-width: min(560px, 100%); }
 .unified-model-picker .model-menu { width: min(540px, calc(100vw - 28px)); max-height: min(620px, 75vh); overflow-y: auto; }
 .model-menu-actions { padding: 10px; position: sticky; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); }
-.provider-registry { display: grid; gap: 12px; }
-.provider-key-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+/* The visitor's single BYOK slot: one provider select, one key field, save and clear. */
+.byok-card { display: grid; gap: 10px; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.slot-key { display: flex; align-items: center; gap: 6px; }
+.slot-key > input { flex: 1; min-width: 0; }
 .hub-skill { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .hub-skill summary { cursor: pointer; font-weight: 600; }
 .hub-skill summary small { display: block; font-weight: 400; color: var(--muted); }
@@ -613,9 +607,14 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
 }
 
 /* Developer conversation and the two execution aspects share the existing responsive split. */
+/* The selected aspect is neutral: a quiet underline, no accent fill. The only colour is the live
+   status LED, so the header stops competing with the work in the pane below it. */
 .execution-aspect-tabs { display: flex; align-items: stretch; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .execution-aspect-tabs .output-tab { flex: 1; padding: 9px 8px; white-space: normal; text-align: center; line-height: 1.35; }
-.execution-aspect-tabs [aria-selected="true"] { box-shadow: inset 0 -2px var(--accent); }
+.execution-aspect-tabs .output-tab.active { background: var(--panel); color: var(--ink); }
+.execution-aspect-tabs [aria-selected="true"] { box-shadow: inset 0 -2px var(--line-strong); }
+.status-led { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.status-led.online { background: #10b981; }
 .sandbox-status { display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 10px; font-size: 11px; white-space: nowrap; }
 .sandbox-status.running { color: var(--accent); background: var(--accent-soft); }
 .sandbox-status.success { color: var(--ok); }

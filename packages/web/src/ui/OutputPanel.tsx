@@ -302,6 +302,9 @@ export default function OutputPanel(p: OutputPanelProps) {
     : build.kind === 'ready' ? (runtime.state === 'ready' ? 'live' : runtime.state === 'blank' ? 'blank' : runtime.state === 'error' ? 'crashed' : 'starting')
       : build.kind === 'error' ? 'failed' : 'idle';
   const devStatus = statusLabel(previewStatus);
+  // The live tab's LED is green only while the app is compiled and running, grey otherwise. It is
+  // the quiet replacement for a bright red header: a neutral title, one small indicator.
+  const previewLive = devStatus.running;
   const codeMarkup = highlightCode(activeCode);
   /** Every route back to the running app: re-mount the frame and restore the canonical split. */
   const showPreview = () => { setView('preview'); setEditing(false); p.onPreviewFocus(); setRefresh(n => n + 1); };
@@ -346,7 +349,7 @@ export default function OutputPanel(p: OutputPanelProps) {
         setView(execution ? 'execution' : 'preview'); document.getElementById(execution ? 'agent-sandbox-tab' : 'app-preview-tab')?.focus();
       }
     }}>
-      <button id="app-preview-tab" role="tab" tabIndex={view === 'execution' ? -1 : 0} aria-selected={view !== 'execution'} aria-controls="app-preview-panel" className={view !== 'execution' ? 'output-tab active' : 'output-tab'} onClick={() => setView('preview')}>App Live Preview</button>
+      <button id="app-preview-tab" role="tab" tabIndex={view === 'execution' ? -1 : 0} aria-selected={view !== 'execution'} aria-controls="app-preview-panel" className={view !== 'execution' ? 'output-tab active' : 'output-tab'} onClick={() => setView('preview')}><span className={`status-led${previewLive ? ' online' : ''}`} aria-hidden="true" />App Live Preview</button>
       {p.execution && <button id="agent-sandbox-tab" role="tab" tabIndex={view === 'execution' ? 0 : -1} aria-selected={view === 'execution'} aria-controls="agent-sandbox-panel" className={view === 'execution' ? 'output-tab active' : 'output-tab'} onClick={() => setView('execution')}>Agent Sandbox / DevOps Console</button>}
     </div>
     {view !== 'execution' && <header className="preview-head developer-toolbar">

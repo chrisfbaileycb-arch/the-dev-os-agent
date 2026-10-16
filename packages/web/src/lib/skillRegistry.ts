@@ -69,12 +69,39 @@ const RESEARCHER = `Use when the answer has to come from notes the person suppli
 2. Say what those notes support, and what they do not.
 3. Do not invent a source. If the notes are silent, say so.`;
 
+// A first-party pathway, so it lives here with DRILL and friends rather than in the imported
+// catalog (curatedSkills.json), whose entries carry a pinned source hash. The full text is also
+// shipped as a readable file at public/skills/router/skill-jev-router.md.
+const JEV_ROUTER = `Use when a step needs a decision, not a reply — routing, ranking, extraction, or a yes/no check.
+
+Build a small decision graph on the TypeSafe Jev classifier. It returns typed answers and
+confidences; your code branches on them.
+
+Call the app's own route (never the provider directly — the personal key stays in one request):
+
+  POST /api/typesafe/systemone
+  { "apiKey": "<the visitor's Jev key>", "state": <the data to judge>,
+    "questions": { "team": { "type": "choice", "instructions": "...", "criteria": { "billing": "...", "technical": "..." } },
+                   "urgent": { "type": "noul", "instructions": "..." },
+                   "severity": { "type": "score", "instructions": "...", "criteria": ["Cosmetic", "Blocked"] } } }
+
+Three primitives: Noul (yes/no probability, 0.5 means "the state does not say"), Choice (one of a
+rubric), Score (a position on ordered levels).
+
+1. Give the state, not a prompt — the real data, referenced by name in backticks.
+2. One focused question per decision; batch independent questions in one call.
+3. Branch in code. Keep thresholds and fallbacks in the caller, not the question text.
+4. Treat low confidence as a fork: escalate or ask, never guess.`;
+
+const JEV_ROUTER_USE = 'Turns a state into a small, deterministic decision graph on the TypeSafe Jev classifier.';
+
 export const CREW_SKILLS: SkillDef[] = [
   ...curatedSkills as SkillDef[],
   { id: 'drill', name: 'The Drill', kind: 'instructions', url: '', blurb: 'Turns a vague goal into dated checkpoints.', markdown: DRILL, fields: [] },
   { id: 'ledger', name: 'The Ledger', kind: 'instructions', url: '', blurb: 'Keeps the commitments you state, without punishment.', markdown: LEDGER, fields: [] },
   { id: 'scribe', name: 'Scribe', kind: 'instructions', url: '', blurb: 'Turns a thread into a clean note.', markdown: SCRIBE, fields: [] },
   { id: 'researcher', name: 'Researcher', kind: 'instructions', url: '', blurb: 'Reads the notes you supply and does not invent a source.', markdown: RESEARCHER, fields: [] },
+  { id: 'jev-router', name: 'Jev System-1 Router', kind: 'instructions', url: '', blurb: JEV_ROUTER_USE, markdown: JEV_ROUTER, fields: [] },
   { id: 'github', name: 'GitHub', kind: 'live', url: 'https://api.githubcopilot.com/mcp/', blurb: 'Repos, pull requests, and issues on your own token. A connector, not a pathway.', fields: [{ key: 'token', label: 'Personal access token', secret: true }] },
 ];
 
