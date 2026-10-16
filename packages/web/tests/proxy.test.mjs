@@ -4,9 +4,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
+import { createHmac } from 'node:crypto';
 import { FREE_TIER_UNAVAILABLE, freeOutputCapFor, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
 import { setXkiroCatalog } from '../server/freetier.mjs';
 import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
+import { createSpendingController } from '../server/controller.mjs';
 // These tests exercise funding mechanics with whichever provider is a convenient fixture; the lane itself is covered in backend-lane.test.mjs.
 setBackendLaneEnforcedForTests(false);
 const NL = String.fromCharCode(10);
@@ -18,6 +20,8 @@ const FREE_GATEWAY_MODEL = 'deepseek/deepseek-v4-flash';
 // catalogue is exercised in tests/discovery.test.mjs, which is the only place that should be.
 setXkiroCatalog([FREE_GATEWAY_MODEL]);
 async function withProxy(options, fn) { const env = { ...fixtureBudgetEnv, FREE_CREDIT_MONTHLY_POOL: '400', ...(options.env ?? {}) }; const ownedDb = options.db === undefined ? openDatabase(':memory:') : null; const handler = createProxy({ db: ownedDb, storage: { durable: true }, discover: async () => {}, discoverOpenRouter: async () => {}, ...options, env }); const server = createServer((req,res) => { handler(req,res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }); }); await new Promise(r => server.listen(0,'127.0.0.1',r)); try { await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(r => server.close(r)); ownedDb?.close(); } }
+// A signed session cookie as auth.mjs issues it, so a request reads as a real signed-in account.
+function sessionCookie(userId, workspaceId, secret) { const payload = `${userId}|${workspaceId}`; const sig = createHmac('sha256', secret).update(payload).digest('hex'); return `hb_session=${encodeURIComponent(`${payload}|${sig}`)}`; }
 function stream(text, status = 200, type = 'text/event-stream') { const s = Readable.from([Buffer.from(text)]); s.statusCode = status; s.headers = { 'content-type': type }; return s; }
 const post = (url, body, route = '/api/chat', headers = {}) => fetch(url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
 // A keyless request, so the server funds it from its own key and the free-tier paths apply.
@@ -595,4 +599,56 @@ test('the free-reply cap is the operator\'s number up to the ceiling, with a 16,
 test('a photo sent to a text-only model is explained, not reported as a schema error', () => {
   assert.match(clientMessage(400, 'messages[1].content must be a string'), /can only read text.*photo/i);
   assert.doesNotMatch(clientMessage(400, 'messages[1].content must be a string'), /must be a string/);
+});
+
+// controller wiring
+
+// A session-authenticated, operator-funded request passes the account-side guard; a BYOK request
+// never touches it (BYOK is the visitor's own spend). A fixture adapter over the sqlite db keeps
+// this test self-contained.
+const controllerAdapter = (db) => ({
+  controllerGlobalSpent: (day) => db.controllerGlobalSpent(day),
+  controllerTryReserve: (a) => db.controllerTryReserve(a),
+  controllerSettle: (...a) => db.controllerSettle(...a),
+  controllerCustomer: (u) => db.controllerCustomer(u),
+  controllerUpsertCustomer: (a) => db.controllerUpsertCustomer(a),
+  controllerAddCustomerSpend: (...a) => db.controllerAddCustomerSpend(...a),
+  controllerSuspendIfOver: (u) => db.controllerSuspendIfOver(u),
+});
+const SECRET = 'proxy-controller-test-secret-32-characters';
+const fundedBase = { ...base, apiKey: '' };
+
+test('an account-funded request is gated by the spending controller', async () => {
+  const db = openDatabase(':memory:');
+  const controller = createSpendingController({ db: controllerAdapter(db), env: { CONTROLLER_GLOBAL_DAILY_CAP_CENTS: '100000', SESSION_SECRET: SECRET } });
+  await controller.upsertBudget({ userId: 'u1', allowanceCents: 100, concurrencyLimit: 2 });
+  const cookie = sessionCookie('u1', 'ws-1', SECRET);
+  let upstreamCalls = 0;
+  try {
+    await withProxy({ db, controller, env: { SESSION_SECRET: SECRET, GROQ_API_KEY: 'server-key' }, spending: controller, transport: async () => { upstreamCalls++; return stream('n\n'); } }, async url => {
+      const ok = await post(url, fundedBase, '/api/chat', { Cookie: cookie });
+      assert.equal(ok.status, 200, 'a funded account request is allowed');
+      assert.equal(upstreamCalls, 1);
+    });
+    // Out of allowance: refused before any upstream call.
+    await controller.upsertBudget({ userId: 'u1', allowanceCents: 0, concurrencyLimit: 2 });
+    await withProxy({ db, controller, env: { SESSION_SECRET: SECRET, GROQ_API_KEY: 'server-key' }, spending: controller, transport: async () => { throw Error('must not call upstream'); } }, async url => {
+      const blocked = await post(url, fundedBase, '/api/chat', { Cookie: cookie });
+      assert.notEqual(blocked.status, 200);
+    });
+  } finally { db.close(); }
+});
+
+test('a BYOK request is never charged to the account controller', async () => {
+  const db = openDatabase(':memory:');
+  const controller = createSpendingController({ db: controllerAdapter(db), env: { CONTROLLER_GLOBAL_DAILY_CAP_CENTS: '100000', SESSION_SECRET: SECRET } });
+  // Zero allowance, yet a personal key must still run: BYOK is out of the operator's spend.
+  await controller.upsertBudget({ userId: 'u2', allowanceCents: 0, concurrencyLimit: 2 });
+  const cookie = sessionCookie('u2', 'ws-2', SECRET);
+  try {
+    await withProxy({ db, controller, env: { SESSION_SECRET: SECRET }, spending: controller, transport: async (url, options) => { assert.equal(options.headers.Authorization, 'Bearer visitor-own-key'); return stream('n\n'); } }, async url => {
+      const r = await post(url, { ...base, apiKey: 'visitor-own-key' }, '/api/chat', { Cookie: cookie });
+      assert.equal(r.status, 200);
+    });
+  } finally { db.close(); }
 });

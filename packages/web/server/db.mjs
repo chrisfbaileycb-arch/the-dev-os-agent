@@ -15,6 +15,12 @@ CREATE INDEX IF NOT EXISTS sessions_workspace_updated ON sessions (workspace_id,
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS daily_server_budget (day TEXT PRIMARY KEY, charged_nanos INTEGER NOT NULL DEFAULT 0 CHECK(charged_nanos >= 0), blocked INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS server_budget_attempts (id TEXT PRIMARY KEY, day TEXT NOT NULL, charged_nanos INTEGER NOT NULL, settled INTEGER NOT NULL DEFAULT 0);
+-- Customer spending controller (server/controller.mjs). Cents, kept separate from the nanos
+-- USD meter above. Global spend is keyed by UTC day so it resets; account spend carries its
+-- billing cycle so a new month starts the allowance over.
+CREATE TABLE IF NOT EXISTS controller_global (day TEXT PRIMARY KEY, charged_cents INTEGER NOT NULL DEFAULT 0 CHECK(charged_cents >= 0), blocked INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS controller_attempts (id TEXT PRIMARY KEY, day TEXT NOT NULL, charged_cents INTEGER NOT NULL, settled INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS controller_customers (user_id TEXT PRIMARY KEY, cycle TEXT NOT NULL, allowance_cents INTEGER NOT NULL DEFAULT 500 CHECK(allowance_cents >= 0), spent_cents INTEGER NOT NULL DEFAULT 0 CHECK(spent_cents >= 0), is_suspended INTEGER NOT NULL DEFAULT 0, concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK(concurrency_limit >= 1));
 `;
 
 export function openDatabase(file = ':memory:') {
@@ -66,6 +72,42 @@ export function openDatabase(file = ':memory:') {
         db.exec('COMMIT');
       } catch (e) { db.exec('ROLLBACK'); throw e; }
     },
+    // Customer spending controller (server/controller.mjs). Cents, per UTC day for the global
+    // ceiling and per billing cycle for an account. Atomic conditional updates mirror
+    // reserveDailyBudget so concurrent requests cannot both pass the last cent.
+    controllerGlobalSpent(day) { return Number(db.prepare('SELECT charged_cents FROM controller_global WHERE day=?').get(day)?.charged_cents ?? 0); },
+    controllerTryReserve({ id, day, cents, limit }) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('INSERT OR IGNORE INTO controller_global (day) VALUES (?)').run(day);
+        const accepted = db.prepare('UPDATE controller_global SET charged_cents=charged_cents+? WHERE day=? AND blocked=0 AND charged_cents<=?').run(cents, day, limit - cents).changes === 1;
+        if (accepted) db.prepare('INSERT INTO controller_attempts (id,day,charged_cents) VALUES (?,?,?)').run(id, day, cents);
+        db.exec('COMMIT'); return accepted;
+      } catch (e) { db.exec('ROLLBACK'); throw e; }
+    },
+    controllerSettle(id, actual, blocked = false) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const row = db.prepare('SELECT day,charged_cents FROM controller_attempts WHERE id=? AND settled=0').get(id);
+        if (row) {
+          db.prepare('UPDATE controller_global SET charged_cents=charged_cents+?,blocked=MAX(blocked,?) WHERE day=?').run(actual - row.charged_cents, blocked ? 1 : 0, row.day);
+          db.prepare('UPDATE controller_attempts SET charged_cents=?,settled=1 WHERE id=?').run(actual, id);
+        }
+        db.exec('COMMIT');
+      } catch (e) { db.exec('ROLLBACK'); throw e; }
+    },
+    controllerCustomer(userId) { return db.prepare('SELECT * FROM controller_customers WHERE user_id=?').get(userId) ?? null; },
+    controllerUpsertCustomer({ userId, cycle, allowanceCents, concurrencyLimit }) {
+      db.prepare(`INSERT INTO controller_customers (user_id, cycle, allowance_cents, concurrency_limit) VALUES (?,?,?,?)
+        ON CONFLICT (user_id) DO UPDATE SET
+          spent_cents = CASE WHEN controller_customers.cycle <> excluded.cycle THEN 0 ELSE controller_customers.spent_cents END,
+          is_suspended = CASE WHEN controller_customers.cycle <> excluded.cycle THEN 0 ELSE controller_customers.is_suspended END,
+          cycle = excluded.cycle, allowance_cents = excluded.allowance_cents, concurrency_limit = excluded.concurrency_limit`).run(userId, cycle, allowanceCents, concurrencyLimit);
+      return db.prepare('SELECT * FROM controller_customers WHERE user_id=?').get(userId);
+    },
+    controllerAddCustomerSpend(userId, cents) { db.prepare('UPDATE controller_customers SET spent_cents=spent_cents+? WHERE user_id=?').run(cents, userId); },
+    controllerSuspendIfOver(userId) { db.prepare('UPDATE controller_customers SET is_suspended=1 WHERE user_id=? AND spent_cents>=allowance_cents').run(userId); },
+    controllerSetGlobalCap(day, cents) { db.prepare('INSERT INTO controller_global (day, charged_cents) VALUES (?,0) ON CONFLICT (day) DO NOTHING').run(day); db.prepare('UPDATE controller_global SET charged_cents=? WHERE day=?').run(cents, day); },
     upsertSessions(workspace, list) { const tx = db.prepare('BEGIN'); tx.run(); try { for (const s of list) statements.session.run(workspace, s.id, s.updatedAt, JSON.stringify(s)); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },
     /** Forget specific sessions for one workspace. The pull would otherwise hand them straight back. */
     removeSessions(workspace, ids) { db.exec('BEGIN'); try { for (const id of ids) statements.removeSession.run(workspace, id); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } },

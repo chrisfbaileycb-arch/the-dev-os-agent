@@ -20,6 +20,11 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS daily_server_budget (day TEXT PRIMARY KEY, charged_nanos BIGINT NOT NULL DEFAULT 0 CHECK(charged_nanos >= 0), blocked BOOLEAN NOT NULL DEFAULT FALSE)`,
   `CREATE TABLE IF NOT EXISTS server_budget_attempts (id TEXT PRIMARY KEY, day TEXT NOT NULL, charged_nanos BIGINT NOT NULL, settled BOOLEAN NOT NULL DEFAULT FALSE)`,
+  // Customer spending controller (server/controller.mjs): global ceiling per UTC day, account
+  // spend per billing cycle. Cents, separate from the nanos meter above.
+  `CREATE TABLE IF NOT EXISTS controller_global (day TEXT PRIMARY KEY, charged_cents BIGINT NOT NULL DEFAULT 0 CHECK(charged_cents >= 0), blocked BOOLEAN NOT NULL DEFAULT FALSE)`,
+  `CREATE TABLE IF NOT EXISTS controller_attempts (id TEXT PRIMARY KEY, day TEXT NOT NULL, charged_cents BIGINT NOT NULL, settled BOOLEAN NOT NULL DEFAULT FALSE)`,
+  `CREATE TABLE IF NOT EXISTS controller_customers (user_id TEXT PRIMARY KEY, cycle TEXT NOT NULL, allowance_cents BIGINT NOT NULL DEFAULT 500 CHECK(allowance_cents >= 0), spent_cents BIGINT NOT NULL DEFAULT 0 CHECK(spent_cents >= 0), is_suspended BOOLEAN NOT NULL DEFAULT FALSE, concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK(concurrency_limit >= 1))`,
 ];
 
 export async function openPostgresDb(connectionString) {
@@ -63,6 +68,56 @@ export async function openPostgresDb(connectionString) {
         await c.query('COMMIT');
       } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
     },
+    // Customer spending controller (server/controller.mjs). Mirrors reserveDailyBudget's locking
+    // pattern: the conditional UPDATE on the shared day row serialises concurrent spenders, and
+    // the attempt and charge commit together. Account spend carries its own billing cycle.
+    async controllerGlobalSpent(day) {
+      const { rows } = await pool.query('SELECT charged_cents FROM controller_global WHERE day=$1', [day]);
+      return Number(rows[0]?.charged_cents ?? 0);
+    },
+    async controllerTryReserve({ id, day, cents, limit }) {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('INSERT INTO controller_global (day) VALUES ($1) ON CONFLICT (day) DO NOTHING', [day]);
+        const result = await c.query('UPDATE controller_global SET charged_cents=charged_cents+$1 WHERE day=$2 AND blocked=FALSE AND charged_cents<=$3 RETURNING day', [cents, day, limit - cents]);
+        const accepted = result.rowCount === 1;
+        if (accepted) await c.query('INSERT INTO controller_attempts (id,day,charged_cents) VALUES ($1,$2,$3)', [id, day, cents]);
+        await c.query('COMMIT'); return accepted;
+      } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+    },
+    async controllerSettle(id, actual, blocked = false) {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        const { rows } = await c.query('SELECT day,charged_cents FROM controller_attempts WHERE id=$1 AND settled=FALSE FOR UPDATE', [id]);
+        const row = rows[0];
+        if (row) {
+          await c.query('UPDATE controller_global SET charged_cents=charged_cents+$1,blocked=blocked OR $2 WHERE day=$3', [actual - Number(row.charged_cents), blocked, row.day]);
+          await c.query('UPDATE controller_attempts SET charged_cents=$1,settled=TRUE WHERE id=$2', [actual, id]);
+        }
+        await c.query('COMMIT');
+      } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+    },
+    async controllerCustomer(userId) {
+      const { rows } = await pool.query('SELECT * FROM controller_customers WHERE user_id=$1', [userId]);
+      return rows[0] ?? null;
+    },
+    async controllerUpsertCustomer({ userId, cycle, allowanceCents, concurrencyLimit }) {
+      const { rows } = await pool.query(
+        `INSERT INTO controller_customers (user_id, cycle, allowance_cents, concurrency_limit) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (user_id) DO UPDATE SET
+           spent_cents = CASE WHEN controller_customers.cycle <> EXCLUDED.cycle THEN 0 ELSE controller_customers.spent_cents END,
+           is_suspended = CASE WHEN controller_customers.cycle <> EXCLUDED.cycle THEN FALSE ELSE controller_customers.is_suspended END,
+           cycle = EXCLUDED.cycle, allowance_cents = EXCLUDED.allowance_cents, concurrency_limit = EXCLUDED.concurrency_limit
+         RETURNING *`,
+        [userId, cycle, allowanceCents, concurrencyLimit]
+      );
+      return rows[0];
+    },
+    async controllerAddCustomerSpend(userId, cents) { await pool.query('UPDATE controller_customers SET spent_cents=spent_cents+$1 WHERE user_id=$2', [cents, userId]); },
+    async controllerSuspendIfOver(userId) { await pool.query('UPDATE controller_customers SET is_suspended=TRUE WHERE user_id=$1 AND spent_cents>=allowance_cents', [userId]); },
+    async controllerSetGlobalCap(day, cents) { await pool.query('INSERT INTO controller_global (day, charged_cents) VALUES ($1,0) ON CONFLICT (day) DO NOTHING', [day]); await pool.query('UPDATE controller_global SET charged_cents=$1 WHERE day=$2', [cents, day]); },
     async upsertSessions(workspace, list) {
       if (!list.length) return;
       const c = await pool.connect();

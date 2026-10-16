@@ -22,6 +22,7 @@ import { createEngine } from './antigravity.mjs';
 import { cspFor } from './csp.mjs';
 import { createWorkspaceSession } from './workspace.mjs';
 import { dailyBudgetNanos, NANOS_PER_USD } from './budget.mjs';
+import { createSpendingController } from './controller.mjs';
 import { createCustomConnectors } from './customConnectors.mjs';
 import { createMedia } from './media.mjs';
 import { createSkills } from './skills.mjs';
@@ -46,9 +47,13 @@ const jobs = openJobs(jobsSqlite);
 // Dashboard-managed keys, knobs and model tiers, laid over the process environment for every
 // handler that funds or describes a request. Loaded once here; the admin routes refresh it.
 const settings = await openSettings({ db, env: process.env });
+// Account-side spend guard for the operator-funded lane. Enabled only when the storage adapter can
+// persist its state; a diskless SQLite host gets a no-op so it cannot block the funded lane.
+const controller = createSpendingController({ db, env: process.env });
+if (process.env.ADMIN_TOKEN) console.log(`Spending controller: ${controller.enabled ? 'on' : 'off (storage adapter has no controller methods)'}.`);
 if (!process.env.ADMIN_TOKEN) console.log('Admin dashboard: off (set ADMIN_TOKEN to open /admin).');
 const auth = createAuth({ db, env: process.env });
-const handlers = [auth, createWorkspaceSession(), createAdmin({ db, settings, storage }), createSkills({ settings }), createEngine({ settings }), createProxy({ db, settings, storage }), createState({ db, settings, storage }), createBrowse(), createMcp(), createCustomConnectors(), createMedia(), createFetcher(), createGithub(), createJobs({ jobs })];
+const handlers = [auth, createWorkspaceSession(), createAdmin({ db, settings, storage }), createSkills({ settings }), createEngine({ settings }), createProxy({ db, settings, storage, controller }), createState({ db, settings, storage }), createBrowse(), createMcp(), createCustomConnectors(), createMedia(), createFetcher(), createGithub(), createJobs({ jobs })];
 // Finished jobs are a transient hand-off, not a record; the run itself lands in the workspace store.
 setInterval(() => jobs.prune(new Date(Date.now() - 24 * 3_600_000).toISOString()), 3_600_000).unref();
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png' };
