@@ -5,6 +5,8 @@
 //
 // The key on the wire is a Gemini API key (header x-goog-api-key). In this product it is a
 // different slot from Gemini chat. This module never reads GOOGLE_API_KEY.
+import { HttpError } from './proxy.mjs';
+import { checkOrigin } from './state.mjs';
 
 export const ANTIGRAVITY_AGENT = 'antigravity-preview-09-2026';
 export const ANTIGRAVITY_MODEL = 'gemini-3.8-flash';
@@ -150,11 +152,31 @@ export function writeSse(res, events) {
   res.end();
 }
 
-export function createEngine({ fetchImpl = fetch } = {}) {
+export function createEngine({ fetchImpl = fetch, env = process.env } = {}) {
+  // The one POST route that carries a visitor-supplied provider key, so it gets the same Origin
+  // check and per-IP budget as every other connector. Without a limit here the deployment is an
+  // unthrottled relay for anyone holding an engine key.
+  const windows = new Map();
+  const budget = Math.max(1, Number(env.ENGINE_MAX_PER_HOUR) || 60);
   return async function handler(req, res) {
     const path = new URL(req.url, 'http://engine').pathname;
     if (path !== '/api/engine') return false;
     if (req.method !== 'POST') { res.writeHead(405); res.end(); return true; }
+    try { checkOrigin(req, env); }
+    catch (error) {
+      const status = error instanceof HttpError ? error.status : 403;
+      res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ error: { message: error instanceof Error ? error.message : 'Cross-origin requests are not allowed.' } }));
+      return true;
+    }
+    const ip = req.socket?.remoteAddress || 'unknown'; const now = Date.now();
+    for (const [key, value] of windows) if (now - value.start > 3_600_000) windows.delete(key);
+    const window = windows.get(ip) || { start: now, count: 0 }; window.count++; windows.set(ip, window);
+    if (window.count > budget) {
+      res.writeHead(429, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ error: { message: `Execution engine limit reached (${budget} runs an hour). Try again later.` } }));
+      return true;
+    }
     const chunks = [];
     let size = 0;
     for await (const chunk of req) {

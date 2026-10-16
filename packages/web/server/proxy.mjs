@@ -758,7 +758,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
       return true;
     } catch (error) {
       if (error instanceof BudgetError) error = new HttpError(error.code === 'free_tier_exhausted' ? 402 : 503, error.message, error.code);
-      if (!(error instanceof HttpError)) console.error('[DEBUG-NONHTTP]', error && error.constructor.name, error && error.message);
+      // An unexpected throw (not one of ours) is worth a log line with its cause, so a 502 is
+      // diagnosable; the message is a bounded summary, never a request body.
+      if (!(error instanceof HttpError)) log(`[proxy] unexpected ${error?.constructor?.name || 'error'}: ${error?.message || 'no message'}`);
       if (!res.headersSent) json(res, error instanceof HttpError ? error.status : 502, { error: { message: error instanceof HttpError ? error.message : controller.signal.aborted ? 'Provider request timed out.' : 'Could not connect to provider.', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) } });
       else if (!res.destroyed) { res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'Provider stream interrupted. Please retry.' } })}\n\n`); res.end(); }
       return true;

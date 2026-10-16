@@ -11,7 +11,12 @@ Repository notes for agents working in Signal Forge OS.
   - `npm run test:server --workspace=packages/web` = `node --test tests/*.test.mjs`.
     This is where the server-module tests live. Run it before claiming a server change is
     verified; a green `npm test` says nothing about it.
-- Both must be green. Baseline: 355 vitest tests; ~241 node server tests (2 skipped).
+- Both must be green. Baseline: 358 vitest tests; ~241 node server tests (2 skipped).
+- Every POST route that acts on the server (`/api/fetch`, `/api/browse`, `/api/mcp`,
+  `/api/connectors/call`, `/api/media/call`, `/api/engine`, `/api/github`) calls `checkOrigin`
+  and carries a per-IP hourly budget. `/api/engine` is the one route that sends a
+  visitor-supplied provider key on the header, so it is rate-limited like the connectors
+  (`ENGINE_MAX_PER_HOUR`, default 60). Keep new act-on-server routes on the same pattern.
 - Some `.mjs` files are test fixtures, not suites (e.g. `budget-fixture.mjs`).
 - `tests/*.test.mjs` assert against real Node http servers and real modules; they are not
   run by CI's `npm test`. Do not let them bit-rot.

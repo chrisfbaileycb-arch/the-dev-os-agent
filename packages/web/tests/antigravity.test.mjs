@@ -65,3 +65,37 @@ test('missing personal key never uses an operator environment key', async () => 
   assert.equal(status, 403);
   assert.match(response, /Gemini chat key is not used/);
 });
+
+/** Drive one request through the handler and collect the status and body it wrote. */
+async function call(req, engine) {
+  let status = 0; const chunks = [];
+  const res = { writeHead(value) { status = value; }, write(value) { chunks.push(String(value)); }, end(value) { if (value) chunks.push(String(value)); } };
+  const handled = await engine(req, res);
+  return { handled, status, body: chunks.join('') || undefined };
+}
+
+test('a cross-origin engine request is refused before any upstream call', async () => {
+  let calls = 0;
+  const engine = createEngine({ env: { APP_ORIGIN: 'https://app.example' }, fetchImpl: async () => { calls++; } });
+  const req = Readable.from([Buffer.from('{"input":"go"}')]);
+  Object.assign(req, { url: '/api/engine', method: 'POST', headers: { origin: 'https://evil.example', host: 'app.example', 'x-engine-key': 'engine-key' } });
+  const { handled, status, body } = await call(req, engine);
+  assert.equal(handled, true);
+  assert.equal(calls, 0);
+  assert.equal(status, 403);
+  assert.match(body, /Cross-origin/);
+});
+
+test('the same-origin request still runs, and the hourly budget then refuses the next one', async () => {
+  const engine = createEngine({ env: { APP_ORIGIN: 'https://app.example', ENGINE_MAX_PER_HOUR: '1' }, fetchImpl: async () => new Response(JSON.stringify({ output_text: 'ok' }), { headers: { 'Content-Type': 'application/json' } }) });
+  const sameOrigin = () => {
+    const req = Readable.from([Buffer.from('{"input":"go"}')]);
+    Object.assign(req, { url: '/api/engine', method: 'POST', socket: { remoteAddress: '203.0.113.7' }, headers: { origin: 'https://app.example', host: 'app.example', 'x-engine-key': 'engine-key' } });
+    return req;
+  };
+  const first = await call(sameOrigin(), engine);
+  assert.equal(first.status, 200);
+  const second = await call(sameOrigin(), engine);
+  assert.equal(second.status, 429);
+  assert.match(second.body, /limit reached/);
+});
