@@ -147,9 +147,23 @@ function parsePackageJson(text: string): Record<string, string> {
 
 const REACT_ENTRY_PRIORITY = ['src/main.tsx', 'src/main.jsx', 'src/index.tsx', 'src/index.jsx', 'main.tsx', 'main.jsx', 'index.tsx', 'index.jsx', 'src/App.tsx', 'src/App.jsx', 'App.tsx', 'App.jsx'];
 
+/**
+ * Does this script use ES module syntax (a top-level import or export)? Such a script cannot be
+ * wrapped in a function or run as a classic script: it throws "Cannot use import statement outside
+ * a module". public/sandbox.html applies the same test to inline scripts; keep the two in step.
+ */
+export function hasModuleSyntax(script: string): boolean {
+  return /^[ \t]*import\s*(?:[\w$*{][^;\n]*?\s*from\s*)?['"]|^[ \t]*export\s+(?:default\b|const\b|let\b|var\b|function\b|class\b|async\b|\{|\*)/m.test(script);
+}
+
 /** Turn a raw browser script into the single-file document the preview can execute. */
 export function wrapScriptDocument(script: string, css = ''): string {
-  const wrapped = `(function() {\n  function __runScript() {\n${script}\n  }\n  if (document.readyState !== 'loading') {\n    __runScript();\n  } else {\n    window.addEventListener('DOMContentLoaded', __runScript);\n  }\n})();`;
+  if (hasModuleSyntax(script)) {
+    // A module is deferred, so it needs no DOM-ready wrapper; the sandbox shell supplies an import
+    // map for bare names such as "three".
+    return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script type="module">\n${script.replace(/<\/script/gi, '<\\/script')}\n</script></body></html>`;
+  }
+  const wrapped =`(function() {\n  function __runScript() {\n${script}\n  }\n  if (document.readyState !== 'loading') {\n    __runScript();\n  } else {\n    window.addEventListener('DOMContentLoaded', __runScript);\n  }\n})();`;
   return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script>\n${wrapped}\n</script></body></html>`;
 }
 

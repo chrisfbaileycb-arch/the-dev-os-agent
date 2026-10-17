@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inlineLocalAssets, missingLocalImports, isSafeProjectPath, latestPreviewReply, missingReactImports, parseProject, placeholderImage, preparePreviewProject, resolveLocalRef, stitchFragments, withReactHookImports, wrapScriptDocument, type Project } from '../src/lib/project';
+import { inlineLocalAssets, missingLocalImports, isSafeProjectPath, latestPreviewReply, missingReactImports, parseProject, placeholderImage, preparePreviewProject, resolveLocalRef, stitchFragments, withReactHookImports, wrapScriptDocument, hasModuleSyntax, type Project } from '../src/lib/project';
 import { highlightCode } from '../src/lib/highlight';
 
 const fence = (info: string, body: string) => `\`\`\`${info}\n${body}\n\`\`\``;
@@ -176,6 +176,24 @@ describe('parseProject', () => {
       const result = wrapScriptDocument('document.getElementById("btn").addEventListener("click", () => {});');
       expect(result).toContain("document.readyState !== 'loading'");
       expect(result).toContain("window.addEventListener('DOMContentLoaded'");
+    });
+
+    it('runs a script that imports as an unwrapped module, never inside a function', () => {
+      const script = "import * as THREE from 'three';\nconst scene = new THREE.Scene();";
+      const result = wrapScriptDocument(script);
+      expect(result).toContain('<script type="module">');
+      expect(result).toContain(script);
+      expect(result).not.toContain('__runScript');
+      expect(parseProject(fence('javascript', script))?.files[0]?.content).toContain('<script type="module">');
+    });
+
+    it('detects module syntax only at the start of a line', () => {
+      expect(hasModuleSyntax("import { a } from './a.js';")).toBe(true);
+      expect(hasModuleSyntax("import './side-effect.js';")).toBe(true);
+      expect(hasModuleSyntax('export default function game() {}')).toBe(true);
+      expect(hasModuleSyntax('const x = import("./lazy.js");')).toBe(false);
+      expect(hasModuleSyntax('const msg = "import x from y";')).toBe(false);
+      expect(hasModuleSyntax('const exported = 1; // export later')).toBe(false);
     });
   });
 

@@ -41,18 +41,34 @@ var SHIM = '<script>(function(){' +
   'var shown=false;window.addEventListener("error",function(e){failed=true;tell("error",e.message);if(shown)return;shown=true;var b=document.createElement("pre");b.setAttribute("data-preview-error","");b.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;margin:0;padding:8px 10px;background:#fff3f2;color:#b8362b;border:1px solid #f0b8b2;border-radius:6px;font:12px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.15)";b.textContent="Runtime error: "+(e.message||"unknown")+(e.filename?"\\n"+e.filename.replace(/^.*\\//,"")+":"+e.lineno:"");(document.body||document.documentElement).appendChild(b)});' +
   '})()<\/script>';
 
+// Generated pages routinely write `import * as THREE from 'three'` inside a plain <script>, or in a
+// module script with no way to resolve the bare name "three". Wrapping such a script in a function
+// (below) is a guaranteed "Cannot use import statement outside a module", and a module with a bare
+// specifier fails with "Failed to resolve module specifier". So a script that uses ES module syntax
+// is promoted to a real, unwrapped module, and an import map is supplied for the bare names it uses.
+// Modules are deferred, so they never need the DOMContentLoaded wrapper either.
+// (src/lib/project.ts has the same test for raw script replies; keep the two in step.)
+var MODULE_SYNTAX = /^[ \t]*import\s*(?:[\w$*{][^;\n]*?\s*from\s*)?['"]|^[ \t]*export\s+(?:default\b|const\b|let\b|var\b|function\b|class\b|async\b|\{|\*)/m;
+var THREE_VERSION = '0.170.0';
+var THREE_CDN = 'https://cdn.jsdelivr.net/npm/three@' + THREE_VERSION + '/';
+
+function isJsType(attrs) {
+  var typeMatch = attrs.match(/\btype\s*=\s*["']?([^"'\s>]+)/i);
+  if (!typeMatch) return 'classic';
+  var t = typeMatch[1].toLowerCase();
+  if (t === 'module') return 'module';
+  if (t === 'text/javascript' || t === 'application/javascript' || t === 'javascript') return 'classic';
+  return null;
+}
+
 function wrapClientScripts(html) {
   return html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, function (match, attrs, code) {
     if (/\bsrc\s*=/i.test(attrs)) return match;
-    var typeMatch = attrs.match(/\btype\s*=\s*["']?([^"'\s>]+)/i);
-    if (typeMatch) {
-      var t = typeMatch[1].toLowerCase();
-      if (t !== 'text/javascript' && t !== 'application/javascript' && t !== 'javascript' && t !== 'module') {
-        return match;
-      }
-      if (t === 'module' && /\bimport\s+[\s\S]*?\s+from\s+['"]|\bimport\s*['"]/.test(code)) {
-        return match;
-      }
+    var kind = isJsType(attrs);
+    if (!kind) return match;
+    if (kind === 'module') return match;
+    if (MODULE_SYNTAX.test(code)) {
+      return '<script' + attrs.replace(/\btype\s*=\s*["']?[^"'\s>]+["']?/i, '') + ' type="module">' + code + '<\/script>';
     }
     var trimmed = code.trim();
     if (!trimmed) return match;
@@ -73,11 +89,41 @@ function wrapClientScripts(html) {
   });
 }
 
+// An import map for every bare specifier the page's inline modules use. A page that brings its own
+// import map is left alone. three is pinned to one version, with its addons, so `three/addons/...`
+// helpers and the page share a single copy; any other package is served by esm.sh.
+function importMapFor(html) {
+  if (/<script\b[^>]*type\s*=\s*["']?importmap/i.test(html)) return '';
+  var imports = {};
+  var found = false;
+  html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, function (m, attrs, code) {
+    if (/\bsrc\s*=/i.test(attrs) || isJsType(attrs) !== 'module') return m;
+    code.replace(/(?:\bfrom\s*|\bimport\s*\(?\s*)['"]([^'"]+)['"]/g, function (_, spec) {
+      if (/^(?:\.{0,2}\/|[a-z][a-z0-9+.-]*:)/i.test(spec)) return _;
+      found = true;
+      if (spec === 'three' || spec.indexOf('three/') === 0) {
+        imports['three'] = THREE_CDN + 'build/three.module.js';
+        imports['three/addons/'] = THREE_CDN + 'examples/jsm/';
+        imports['three/examples/jsm/'] = THREE_CDN + 'examples/jsm/';
+      } else {
+        var parts = spec.split('/');
+        var pkg = spec.charAt(0) === '@' ? parts.slice(0, 2).join('/') : parts[0];
+        if (!imports[pkg]) { imports[pkg] = 'https://esm.sh/' + pkg; imports[pkg + '/'] = 'https://esm.sh/' + pkg + '/'; }
+      }
+      return _;
+    });
+    return m;
+  });
+  if (!found) return '';
+  return '<script type="importmap">' + JSON.stringify({ imports: imports }).replace(/</g, '\\u003c') + '<\/script>';
+}
+
 function withShim(html) {
   var wrapped = wrapClientScripts(html);
-  if (/<head[^>]*>/i.test(wrapped)) return wrapped.replace(/<head[^>]*>/i, function (m) { return m + SHIM; });
-  if (/<html[^>]*>/i.test(wrapped)) return wrapped.replace(/<html[^>]*>/i, function (m) { return m + SHIM; });
-  return SHIM + wrapped;
+  var head = SHIM + importMapFor(wrapped);
+  if (/<head[^>]*>/i.test(wrapped)) return wrapped.replace(/<head[^>]*>/i, function (m) { return m + head; });
+  if (/<html[^>]*>/i.test(wrapped)) return wrapped.replace(/<html[^>]*>/i, function (m) { return m + head; });
+  return head + wrapped;
 }
 
 // Refuse to render anything unless this document really is sandboxed and embedded by its parent.
