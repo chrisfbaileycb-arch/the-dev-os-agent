@@ -255,16 +255,23 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .button.send { border-radius: 999px; padding: 5px 12px; }
 /* The toolbar line above the typing surface, separated from it by one quiet hairline so the
    controls read as their own row rather than floating over the draft. */
-.dock-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 2px 8px; border-bottom: 1px solid var(--line); }
+.dock-bar { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; padding: 2px 2px 10px; border-bottom: 1px solid var(--line); }
 /* One horizontal line of controls. Each is a flat outlined control — no circular wrapper — so the
    mode, agent and model read as peers and a menu opening upward cannot distort a rounded parent. */
-.dock-control { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 3px 8px; font-size: 12px; background: var(--panel); position: relative; max-width: 100%; }
+.dock-control { display: inline-flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 7px; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 5px 10px; min-height: 30px; font-size: 12px; background: var(--panel); position: relative; max-width: 100%; }
 .dock-control:hover:not(:disabled) { border-color: var(--accent); }
 .dock-control.open { border-color: var(--accent); }
 .dock-control-label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .dock-control-value { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dock-control select { appearance: none; border: 0; background: transparent; padding-right: 14px; font-size: 12px; max-width: 160px; }
-.dock-control > svg:last-child { position: absolute; right: 7px; pointer-events: none; }
+.dock-control select { appearance: none; border: 0; background: transparent; padding: 0; font-size: 12px; max-width: 160px; min-width: 0; }
+/* The trailing chevron is a real flex item on buttons, so it takes its own space and can never sit
+   on the text. On a label wrapping a <select>, the arrow is parked in a reserved right gutter and
+   lets clicks fall through to the select underneath. Full-ink colour, so it reads as a dropdown. */
+.dock-control > svg:last-child { flex: none; width: 14px; height: 14px; margin-left: 2px; color: var(--ink); opacity: 0.8; pointer-events: none; }
+label.dock-control:not(.dock-control-toggle) { padding-right: 30px; }
+label.dock-control:not(.dock-control-toggle) > svg:last-child { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); margin: 0; }
+.dock-control:hover:not(:disabled) > svg:last-child { opacity: 1; color: var(--accent); }
+.model-trigger > svg:last-child { margin-left: 4px; }
 .dock-control-toggle { cursor: pointer; }
 .dock-control-toggle input { margin: 0; }
 .dock-counters { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; } .dock-counters em { font-style: normal; color: var(--ink); }
@@ -283,7 +290,7 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 
 /* Model picker — a popover anchored to the dock, opening upward. */
 .model-picker { position: relative; }
-.model-trigger { max-width: 260px; } .model-trigger.open { border-color: var(--accent); }
+.model-trigger { max-width: 320px; } .model-trigger.open { border-color: var(--accent); }
 .model-trigger-label { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pay-badge { font-style: normal; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; border-radius: 4px; padding: 1px 5px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
