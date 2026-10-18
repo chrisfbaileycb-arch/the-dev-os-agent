@@ -9,9 +9,20 @@
 
 const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b|imagine|flux|sora|dream[-_ ]?machine|eleven/i;
 
-/** A catalogue id that can take a chat turn. Embeddings, speech, and image models cannot. */
+/**
+ * OpenRouter's `:batch` variant is a Batch-API SKU, not a chat endpoint. It is listed in the same
+ * `/models` payload as the base slug and reads like an ordinary chat id, but a request to
+ * `/chat/completions` for it is answered with a 404 — a batch is submitted to `POST /api/v1/batches`
+ * and collected asynchronously. Offering it in the picker produces a 404 that reads like an outage
+ * for a model the visitor can plainly see in the catalogue. `:free` is deliberately not matched: it
+ * is a real, callable chat endpoint.
+ */
+export const NON_CHAT_VARIANT = /:batch$/i;
+export const isBatchModelId = id => typeof id === 'string' && NON_CHAT_VARIANT.test(id.trim());
+
+/** A catalogue id that can take a chat turn. Embeddings, speech, image, and batch-only ids cannot. */
 export function isChatModelId(id) {
-  return typeof id === 'string' && id.trim().length > 0 && id.length <= 200 && !NON_CHAT.test(id);
+  return typeof id === 'string' && id.trim().length > 0 && id.length <= 200 && !NON_CHAT.test(id) && !isBatchModelId(id);
 }
 
 const zero = value => value === 0 || value === '0' || value === '0.0' || Number(value) === 0;

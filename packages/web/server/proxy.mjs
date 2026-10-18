@@ -7,7 +7,7 @@ import { planAccess, planHolder, planCredits, planRates, freeOutputTokens } from
 export { planHolder } from './plans.mjs';
 import { isBackendProvider, isExperimentProvider } from './providerRegistry.mjs';
 import { PROVIDER_KEY_VARS, createBurstLimiter, creditsForTokens, freeKeyPool, freeModel, freeModels, freeTierStatus, monthlyPool, paidModel, paidModels, paidTierStatus, rotateFreeKey, routeFreeRequest, setCheaperInferenceCatalog, xkiroBase } from './freetier.mjs';
-import { isChatModelId, isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
+import { isBatchModelId, isChatModelId, isVerifiedOperational, modelsUrl, normalizeModelList } from './models.mjs';
 
 import { cheaperInferenceBase, cheaperInferenceKey, discoverCheaperInference } from './cheaper-inference.mjs';
 import { parseSession } from './auth.mjs';
@@ -175,8 +175,16 @@ export function clientMessage(status, detail) {
   // A text-only model handed a photo answers with a schema complaint; say what it means.
   if (status === 400 && /content must be a string/i.test(String(detail ?? ''))) return 'This model can only read text, and the message includes a photo. Remove the photo, or pick a model that can read images.';
   if (![400, 404, 413, 422].includes(status) || !detail) return base;
-  const safe = String(detail).replace(/\b(?:sk|xai|gsk|hf|pk)[-_][A-Za-z0-9_-]{16,}/gi, '[redacted]').replace(/\s+/g, ' ').trim().slice(0, 300);
+  const safe = redactDetail(detail);
   return safe ? `${base} The provider said: ${safe}` : base;
+}
+/**
+ * A provider's own words, with anything shaped like a credential removed and bounded, for use in
+ * one line of text a person reads. Every path that echoes an upstream message goes through here,
+ * so a key that appears in an error body cannot reach a screen or a log through a second door.
+ */
+export function redactDetail(detail, limit = 300) {
+  return String(detail ?? '').replace(/\b(?:sk|xai|gsk|hf|pk)[-_][A-Za-z0-9_-]{16,}/gi, '[redacted]').replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 // Stream upstream bytes without buffering. Pinned DNS prevents custom-host rebinding.
 export function upstream(url, { method = 'POST', headers, body, signal, address }) {
@@ -425,12 +433,17 @@ function anthropicContent(content) {
   }).filter(part => part.type !== 'text' || part.text !== '');
 }
 
-const windows = new Map();
 /**
  * `discover` is injectable so tests stay hermetic: the real one reaches the gateway over the
  * network, and a unit test asserting how a Groq request is funded has no business doing that.
  */
 export function createProxy({ env: baseEnv = process.env, settings = null, storage = null, transport = upstream, resolve = lookup, db = null, spending = null, log = console.error, discover = ensureCatalog, discoverOpenRouter = ensureOpenRouterCatalog } = {}) {
+  // The per-IP window lives on the instance rather than the module. One proxy serves one
+  // deployment, so the two are identical in production; but a module-level map is shared by every
+  // proxy a process builds, so a caller that creates more than one — as the tests do, one per
+  // case — draws every request from a single budget and eventually 429s a request it never meant
+  // to count.
+  const windows = new Map();
   // The environment as this request should read it: the admin dashboard's stored keys and knobs
   // laid over the process environment (see server/settings.mjs). Resolved per request, so a key
   // entered in the dashboard funds the very next message with no restart.
@@ -510,6 +523,9 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
         throw new HttpError(503, 'Owner-funded requests are disabled until dollar budgets are configured. Use your own provider key.', 'operator_funding_disabled');
       }
       if (path === '/api/chat' && typeof body.model === 'string' && body.model.trim() && !isChatModelId(body.model)) {
+        // A `:batch` id is a Batch-API SKU, not a broken or retired model. Saying so is the
+        // difference between the visitor dropping the suffix and the visitor switching model.
+        if (isBatchModelId(body.model)) throw new HttpError(400, `"${body.model}" is the Batch API variant, which cannot serve a live chat. Use "${body.model.replace(/:batch$/i, '')}" instead.`, 'batch_variant');
         throw new HttpError(400, 'That model is not a text chat model. Image, video, and audio models are not sent through chat.');
       }
       // A keyless request can only be funded from the discovered pool, so the pool has to exist
@@ -716,7 +732,14 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
         if (path === '/api/chat' && (status === 503 || status === 404) && !isVerifiedOperational(provider, body?.model)) {
           const fallbackModel = activeDefaultModel(provider, env);
           logUpstream(provider, upstreamUrl, `extended catalog model "${body?.model}" returned ${status} -> suggesting fallback to active default "${fallbackModel}"`, log);
-          const warningMessage = `Extended catalog model "${body?.model}" is currently unavailable (HTTP ${status}). Switch to active default model "${fallbackModel}"?`;
+          // A 404 on this path is not always a missing model: OpenRouter answers 404 when its data
+          // policy excludes every provider serving the model ("No endpoints found matching your
+          // data policy"). Without the provider's own sentence those two look identical, and the
+          // fix for one — switch model — is the wrong instruction for the other. Carried bounded
+          // and redacted, in the same shape clientMessage already uses for 4xx answers.
+          const reason = redactDetail(detail);
+          const warningMessage = `Extended catalog model "${body?.model}" is currently unavailable (HTTP ${status}). Switch to active default model "${fallbackModel}"?`
+            + (reason ? ` The provider said: ${reason}` : '');
           json(res, status, {
             error: {
               message: warningMessage,

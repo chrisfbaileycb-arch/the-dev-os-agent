@@ -27,8 +27,17 @@ export interface ModelChoice {
  * a working model is a choice the visitor cannot recover from.
  */
 const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b|imagine|flux|sora|dream[-_ ]?machine|eleven/i;
+/**
+ * OpenRouter's `:batch` variant is a Batch-API SKU, not a chat endpoint. It sits in the same
+ * catalogue as the base slug and reads like a chat id, but `/chat/completions` answers it with a
+ * 404 — a batch goes to `POST /api/v1/batches` and comes back asynchronously. Offering it here
+ * gives the visitor a 404 that looks like an outage for a model they can see listed. `:free` is
+ * deliberately not matched: it is a real, callable chat endpoint.
+ */
+export const NON_CHAT_VARIANT = /:batch$/i;
+export const isBatchModel = (id: string): boolean => NON_CHAT_VARIANT.test(id.trim());
 export function isChatModel(id: string): boolean {
-  return id.trim().length > 0 && id.length <= 300 && !NON_CHAT.test(id);
+  return id.trim().length > 0 && id.length <= 300 && !NON_CHAT.test(id) && !isBatchModel(id);
 }
 
 /** Known legacy or conversation-only families have no place in the coding workspace. */

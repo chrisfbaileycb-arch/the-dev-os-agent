@@ -554,6 +554,41 @@ test('model catalog endpoint differentiates ready vs extended models and support
   });
 });
 
+test('OpenRouter :batch SKUs are never offered or sent as live chat', async () => {
+  const { isChatModelId, normalizeModelList } = await import('../server/models.mjs');
+  // The Batch API variant lives in the same catalogue as the base slug and reads like a chat id,
+  // so it has to be excluded by name — the picker otherwise offers an id that 404s on send.
+  assert.equal(isChatModelId('openai/gpt-6.1-sol-pro:batch'), false);
+  assert.equal(isChatModelId('openai/gpt-6.1-sol-pro'), true);
+  // `:free` is a real, callable chat endpoint and must survive the filter.
+  assert.equal(isChatModelId('moonshotai/kimi-k2.5:free'), true);
+  assert.equal(isChatModelId('moonshotai/kimi-k2.5'), true);
+
+  const payload = { data: [
+    { id: 'openai/gpt-6.1-sol-pro', pricing: { prompt: '0.000001', completion: '0.000005' } },
+    { id: 'openai/gpt-6.1-sol-pro:batch', pricing: { prompt: '0.000001', completion: '0.000005' } },
+  ] };
+  assert.deepEqual(normalizeModelList('openrouter', payload, 2000, { differentiate: true }).map(m => m.id), ['openai/gpt-6.1-sol-pro']);
+
+  // Typed directly, the suffix is explained as a batch SKU rather than reported as a 404 outage,
+  // and the suggestion is the same model without the suffix.
+  await withProxy({ env: {}, transport: async () => { throw Error('must not call upstream'); } }, async url => {
+    const res = await post(url, { ...base, provider: 'openrouter', model: 'openai/gpt-6.1-sol-pro:batch' });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.equal(data.error.code, 'batch_variant');
+    assert.match(data.error.message, /Batch API variant/);
+    assert.match(data.error.message, /"openai\/gpt-6\.1-sol-pro" instead/);
+  });
+
+  // A non-chat id keeps the original message: the batch explanation must not swallow it.
+  await withProxy({ env: {}, transport: async () => { throw Error('must not call upstream'); } }, async url => {
+    const res = await post(url, { ...base, provider: 'openrouter', model: 'text-embedding-3-small' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error.message, /not a text chat model/);
+  });
+});
+
 test('completion proxy intercepts 503 and 404 for extended catalog models and prompts fallback', async () => {
   // 503 on extended catalog model triggers structured fallback warning
   await withProxy({ env: {}, transport: async () => stream('Service Unavailable', 503) }, async url => {
@@ -585,6 +620,25 @@ test('completion proxy intercepts 503 and 404 for extended catalog models and pr
     assert.equal(data.error.code, undefined);
     assert.equal(data.error.suggest_fallback, undefined);
     assert.match(data.error.message, /Provider is temporarily unavailable/);
+  });
+
+  // A 404 has two causes that look identical without the provider's own words: the model is gone,
+  // or OpenRouter's data policy excludes every provider serving it. The second is not fixed by
+  // switching model, so its reason is carried through — bounded and with credentials redacted.
+  await withProxy({ env: {}, transport: async () => stream('{"error":{"message":"No endpoints found matching your data policy (Zero data retention). Configure: https://openrouter.ai/settings/privacy"}}', 404) }, async url => {
+    const res = await post(url, { ...base, provider: 'openrouter', model: 'moonshotai/kimi-k2.5' });
+    assert.equal(res.status, 404);
+    const data = await res.json();
+    assert.equal(data.error.code, 'model_unavailable');
+    assert.match(data.error.message, /No endpoints found matching your data policy/);
+  });
+
+  // A key echoed in an error body must not reach the screen through this path.
+  await withProxy({ env: {}, transport: async () => stream('{"error":{"message":"bad key sk-abcdefghijklmnopqrstuvwx rejected"}}', 404) }, async url => {
+    const res = await post(url, { ...base, provider: 'openrouter', model: 'community/unverified-model-xyz' });
+    const data = await res.json();
+    assert.match(data.error.message, /\[redacted\]/);
+    assert.ok(!data.error.message.includes('sk-abcdefghijklmnopqrstuvwx'));
   });
 });
 

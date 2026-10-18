@@ -20,6 +20,14 @@ describe('isChatModel', () => {
   it('errs toward keeping an unknown id rather than hiding a working model', () => {
     expect(isChatModel('some-unknown-model-v2')).toBe(true);
   });
+  it('excludes OpenRouter batch-only SKUs but keeps callable :free variants', () => {
+    // `:batch` is served by the Batch API, not /chat/completions, so offering it 404s on send.
+    expect(isChatModel('openai/gpt-6.1-sol-pro:batch')).toBe(false);
+    expect(isChatModel('moonshotai/kimi-k2.5:batch')).toBe(false);
+    expect(isChatModel('openai/gpt-6.1-sol-pro')).toBe(true);
+    // `:free` is a real chat endpoint with its own rate limits.
+    expect(isChatModel('moonshotai/kimi-k2.5:free')).toBe(true);
+  });
 });
 
 describe('labelFor', () => {
