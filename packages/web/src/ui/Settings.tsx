@@ -93,7 +93,11 @@ export default function Settings(p: SettingsProps) {
     if (!value) return;
     pickProvider(chosen);
     setKey(chosen, value);
-    setKeyDraft(''); setKeyNote('Key saved for this page session. It clears on reload or tab close.');
+    // OpenRouter reports a key it cannot parse as "Missing Authentication header", which reads
+    // like a bug in the app. Every real OpenRouter key starts sk-or-, so say so at save time.
+    setKeyDraft(''); setKeyNote(chosen === 'openrouter' && !value.startsWith('sk-or-')
+      ? 'Saved, but OpenRouter keys start with sk-or-. This one does not, so OpenRouter will probably reject it. Check that you copied it from openrouter.ai/keys and not another provider.'
+      : 'Key saved for this page session. It clears on reload or tab close.');
   }
   function clearSlotKey() {
     setKey(chosen, '');

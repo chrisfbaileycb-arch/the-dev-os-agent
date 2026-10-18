@@ -168,13 +168,16 @@ export function errorMessage(status) {
  * a key that is not scoped to a workspace, an unpaid balance, an unknown model and a malformed
  * request alike, and those are four different fixes. For the statuses that describe the request
  * itself the provider's own sentence is passed along, bounded, and with anything shaped like a
- * credential removed first. Auth, rate-limit and 5xx answers stay generic on purpose.
+ * credential removed first. Rate-limit and 5xx answers stay generic on purpose, and so do auth
+ * answers on the deployment's own keys. When the request carried the visitor's own key
+ * (`byok`), a 401/403 passes the provider's sentence along too: the key is theirs to fix, and
+ * "Missing Authentication header" and "insufficient credits" are very different repairs.
  */
-export function clientMessage(status, detail) {
+export function clientMessage(status, detail, { byok = false } = {}) {
   const base = errorMessage(status);
   // A text-only model handed a photo answers with a schema complaint; say what it means.
   if (status === 400 && /content must be a string/i.test(String(detail ?? ''))) return 'This model can only read text, and the message includes a photo. Remove the photo, or pick a model that can read images.';
-  if (![400, 404, 413, 422].includes(status) || !detail) return base;
+  if (!([400, 404, 413, 422].includes(status) || (byok && (status === 401 || status === 403))) || !detail) return base;
   const safe = String(detail).replace(/\b(?:sk|xai|gsk|hf|pk)[-_][A-Za-z0-9_-]{16,}/gi, '[redacted]').replace(/\s+/g, ' ').trim().slice(0, 300);
   return safe ? `${base} The provider said: ${safe}` : base;
 }
@@ -731,7 +734,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
           return true;
         }
 
-        throw new HttpError(status >= 300 && status < 400 ? 502 : status, clientMessage(status, detail));
+        throw new HttpError(status >= 300 && status < 400 ? 502 : status, clientMessage(status, detail, { byok: funding.mode === 'byok' }));
       }
       if (path === '/api/models') {
         let size = 0; const chunks = [];
