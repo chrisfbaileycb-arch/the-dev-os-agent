@@ -7,6 +7,8 @@ import Connectors from '../src/ui/Connectors';
 import OutputPanel from '../src/ui/OutputPanel';
 import { personaById } from '../src/lib/roster';
 import { defaultSettings } from '../src/lib/connectors';
+// The panel compiles in a Web Worker, which this DOM does not have; the code view needs no build result.
+vi.mock('../src/lib/bundle/client', async importOriginal => ({ ...(await importOriginal<typeof import('../src/lib/bundle/client')>()), buildProject: vi.fn(() => new Promise(() => {})) }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined; let host: HTMLDivElement;
 function mount(element: React.ReactNode) { host = document.createElement('div'); document.body.append(host); root = createRoot(host); act(() => root!.render(element)); }
@@ -34,4 +36,22 @@ it('switches the right pane between the exact requested tabs and supports keyboa
   act(() => tabs[1].click()); expect(host.querySelector('[role=tabpanel]')?.id).toBe('agent-sandbox-panel'); expect(host.querySelector('.agent-sandbox-console')).not.toBeNull();
   act(() => tabs[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
   expect(host.querySelector('[role=tabpanel]')?.id).toBe('app-preview-panel'); expect(tabs[0].getAttribute('aria-selected')).toBe('true');
+});
+it('numbers the lines of the generated code in both the read-only view and the editor', () => {
+  const code = '<h1>hello</h1>\n<p>two</p>\n<p>three</p>';
+  mount(<OutputPanel execution={execution} content={'```html\n' + code + '\n```'} close={vi.fn()} github={defaultSettings().github} openConnectors={vi.fn()} onPreviewFocus={vi.fn()} updateGithub={vi.fn()} secrets={[]} />);
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.includes('View / Edit Code'))!.click());
+  const gutter = () => host.querySelector('[data-testid="code-gutter"]');
+  // The parser wraps a bare fragment in a page, so count what the pane really holds.
+  const lines = host.querySelector('.syntax-code')!.textContent!.split('\n').length;
+  const expected = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
+  expect(lines).toBe(4);
+  expect(gutter()?.textContent).toBe(expected);
+  expect(gutter()?.getAttribute('aria-hidden')).toBe('true');
+  // The numbers are a separate column, so copying the code never picks them up.
+  expect(host.querySelector('.syntax-code')?.textContent).not.toContain('1\n2');
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'Edit')!.click());
+  const editor = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Generated code editor"]');
+  expect(editor?.getAttribute('wrap')).toBe('off');
+  expect(gutter()?.textContent).toBe(expected);
 });
