@@ -62,11 +62,6 @@ const errorText = (e: unknown) => e instanceof Error ? e.message : 'Something we
 const now = () => new Date().toISOString();
 type Recognition = { lang: string; interimResults: boolean; continuous: boolean; start(): void; stop(): void; onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
 const recognitionCtor = () => (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => Recognition }).webkitSpeechRecognition;
-// Openers that show the range of what agents can do — code, analysis, and general questions.
-const starters: { text: string; persona: string; workMode: WorkMode }[] = [
-  { text: 'Write a TypeScript function that retries a fetch with exponential backoff and a hard timeout. Include the types and one usage example.', persona: 'coder', workMode: 'build' },
-  { text: 'Explain the difference between a database index and a materialised view, with one example where the wrong choice hurts.', persona: 'assistant', workMode: 'chat' },
-];
 
 function AssistantReply({ content, working }: { content: string; working: boolean }) {
   if (!content) return working ? <WritingStatus content="" working /> : <pre className="msg-body" />;
@@ -952,7 +947,6 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
                 <h1>Your AI crew. Always in your corner.</h1>
                 <p>Ask a question, paste an error, or ask for code — the Assistant answers directly, with no setup and no connectors to switch on. Drop in a file if it helps, and pick a different agent or write your own whenever you want one. {deployment.free.enabled ? 'No sign-up and no API key: your first message streams on a model this deployment funds.' : 'Add a provider key in Settings for real replies.'}</p>
                 {deployment.free.enabled && inference === 'free' && <p className="starter-badge"><Sparkles size={13} strokeWidth={2} />Running on {label} · {freeBalance.remaining.toLocaleString()} free credits left this month</p>}
-                <div className="starter-grid">{starters.map((s, i) => { const P = personaById(s.persona); const Icon = iconFor(P.icon); return <button key={i} className="starter-card" onClick={() => { if (s.workMode === 'build') chooseWorkMode('build'); else { chooseWorkMode(s.workMode); choosePersona(s.persona); } setDraft(s.text); document.getElementById('draft')?.focus(); }}><Icon size={15} strokeWidth={1.75} /><strong>{P.name}</strong><span>{s.text}</span></button>; })}</div>
               </div>}
               {active?.messages.map(m => {
                 if (m.role === 'user') return <article key={m.id} className="msg user"><div className="msg-meta"><strong>You</strong><time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.attachments?.map(a => <em key={a.name}>{a.name}</em>)}{active && <button type="button" className="text-button" disabled={busy} onClick={() => branchFrom(active, m.id)}><GitBranch size={11} />Branch here</button>}</div>{m.photos && m.photos.length > 0 && <div className="msg-photos">{m.photos.map(ph => <img key={ph.name} src={ph.thumb} alt={ph.name} title={ph.name} />)}</div>}<pre className="msg-body">{m.content}</pre></article>;
