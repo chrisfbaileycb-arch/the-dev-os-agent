@@ -249,6 +249,22 @@ export function logUpstream(provider, url, detail, log = console.error) {
   log(`[proxy] upstream ${provider} ${where} -> ${detail}`);
 }
 
+/**
+ * What a rejected credential looked like, without the credential. "Missing Authentication
+ * header" from OpenRouter means no usable bearer arrived, and from the outside a pasted key that
+ * is truncated, padded, or the wrong kind is indistinguishable from a proxy dropping the header.
+ * Length, shape and whether the header was set separate those cases. Never the key itself, and
+ * no characters of it beyond a yes/no on the one public prefix OpenRouter documents.
+ */
+export function keyShape(provider, key, sentAuthorization) {
+  const value = typeof key === 'string' ? key : '';
+  const parts = [`key length ${value.length}`];
+  if (provider === 'openrouter') parts.push(value.startsWith('sk-or-') ? 'starts sk-or-' : 'does not start sk-or-');
+  if (/\s/.test(value)) parts.push('contains whitespace');
+  parts.push(sentAuthorization ? 'Authorization header sent' : 'NO Authorization header sent');
+  return parts.join(', ');
+}
+
 /** Pinned so a future Anthropic API revision cannot change the wire format under a live deploy. */
 export const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -709,6 +725,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
         // words separate them in one line. Bounded hard, because this is a log, not a mirror.
         const detail = await peek(response);
         logUpstream(provider, upstreamUrl, `HTTP ${status}${detail ? ` — ${detail}` : ''}`, log);
+        if ((status === 401 || status === 403) && funding.mode === 'byok') logUpstream(provider, upstreamUrl, `rejected the visitor's key (${keyShape(provider, apiKey, Boolean(headers.Authorization || headers['x-api-key'] || headers['x-goog-api-key']))})`, log);
         // On a free-tier request the credential is the deployment's, so "invalid API key" would
         // send the visitor hunting for a problem that is not theirs. Report it as a tier that is
         // not answering, and leave the real status for the operator's logs.

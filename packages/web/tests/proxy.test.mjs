@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { createHmac } from 'node:crypto';
-import { FREE_TIER_UNAVAILABLE, freeOutputCapFor, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, freeOutputCapFor, keyShape, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
 import { setXkiroCatalog } from '../server/freetier.mjs';
 import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
 import { createSpendingController } from '../server/controller.mjs';
@@ -428,6 +428,24 @@ test('a rejected request explains itself, without leaking credentials, while aut
   assert.ok(clientMessage(400, 'x'.repeat(2000)).length < 400);
   for (const status of [401, 403, 429, 500, 503]) assert.equal(clientMessage(status, 'secret body'), errorMessage(status));
   assert.equal(clientMessage(400, ''), errorMessage(400));
+});
+
+test('keyShape describes a rejected key without revealing any of it', async () => {
+  const key = 'sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789';
+  const shape = keyShape('openrouter', key, true);
+  assert.match(shape, /key length 45, starts sk-or-, Authorization header sent/);
+  assert.ok(!shape.includes('abcdefgh'));
+  assert.match(keyShape('openrouter', 'sk-abc', true), /does not start sk-or-/);
+  assert.match(keyShape('openrouter', 'sk-or-v1-a b', true), /contains whitespace/);
+  assert.match(keyShape('groq', 'gsk_x', false), /NO Authorization header sent/);
+  assert.doesNotMatch(keyShape('groq', 'gsk_x', true), /sk-or-/);
+  const lines = [];
+  await withProxy({ env: {}, log: line => lines.push(line), transport: async () => stream('{"error":{"message":"Missing Authentication header"}}', 401) }, async url => {
+    await post(url, { ...base, provider: 'openrouter', apiKey: key });
+  });
+  const logged = lines.join('\n');
+  assert.match(logged, /rejected the visitor's key \(key length 45, starts sk-or-, Authorization header sent\)/);
+  assert.ok(!logged.includes('abcdefghijklmnop'), 'the key never reaches the log');
 });
 
 test('a visitor\'s own key gets the provider\'s auth sentence, redacted; the deployment\'s keys never do', () => {
