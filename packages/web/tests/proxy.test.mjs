@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { createHmac } from 'node:crypto';
-import { FREE_TIER_UNAVAILABLE, freeOutputCapFor, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
+import { FREE_TIER_UNAVAILABLE, freeOutputCapFor, keyShape, clientMessage, errorMessage, HEADER_SAFE, cleanKey, createProxy, malformed, peek, resolveTarget, normalizeModel, keyFor, fundingFor, publicAddress, validContent, usageReportable } from '../server/proxy.mjs';
 import { setXkiroCatalog } from '../server/freetier.mjs';
 import { setBackendLaneEnforcedForTests } from '../server/providerRegistry.mjs';
 import { createSpendingController } from '../server/controller.mjs';
@@ -67,7 +67,10 @@ test('funding resolution prefers the visitor key, then the access token, then th
   for (const model of ['groq/llama-3.1-8b-instant-plus', 'evil/groq/llama-3.1-8b-instant', 'groq/llama-3.1-8b-instant/../gpt-4o'])
     assert.deepEqual(fundingFor({ provider: 'groq', model }, env).mode, 'none', model);
 });
-test('401 and 429 are sanitized and propagated without secret response bodies', async () => { for (const status of [401,429]) await withProxy({env:{},transport:async()=>stream('secret body',status)},async url=>{const r=await post(url,base);assert.equal(r.status,status);const text=await r.text();assert.ok(!text.includes('secret body'));assert.match(text,status===401?/Invalid API key/:/rate limit/);}); });
+test('a 429 is sanitized, and a 401 on the visitor\'s own key carries the provider\'s sentence, redacted', async () => {
+  await withProxy({env:{},transport:async()=>stream('secret body',429)},async url=>{const r=await post(url,base);assert.equal(r.status,429);const text=await r.text();assert.ok(!text.includes('secret body'));assert.match(text,/rate limit/);});
+  await withProxy({env:{},transport:async()=>stream('{"error":{"message":"Missing Authentication header"}}',401)},async url=>{const r=await post(url,base);assert.equal(r.status,401);assert.match(await r.text(),/Invalid API key.*The provider said: Missing Authentication header/);});
+});
 test('model discovery uses GET upstream and normalizes catalog', async () => { await withProxy({env:{},transport:async(url,options)=>{assert.equal(url,'https://api.groq.com/openai/v1/models');assert.equal(options.method,'GET');return stream('{"data":[{"id":"model-one"}]}',200,'application/json');}},async url=>{const r=await post(url,base,'/api/models');assert.deepEqual(await r.json(),{data:[{id:'model-one'}]});}); });
 test('validates messages and denies cross-origin browser requests', async () => { await withProxy({env:{},transport:async()=>{throw Error('must not call');}},async url=>{assert.equal((await post(url,{...base,messages:[{role:'admin',content:'x'}]})).status,400);assert.equal((await post(url,base,'/api/chat',{Origin:'https://evil.example'})).status,403);assert.equal((await post(url,{...base,max_tokens:99999})).status,400);}); });
 test('does not follow upstream redirects', async()=>{await withProxy({env:{},transport:async()=>stream('',302)},async url=>{assert.equal((await post(url,base)).status,502);});});
@@ -425,6 +428,32 @@ test('a rejected request explains itself, without leaking credentials, while aut
   assert.ok(clientMessage(400, 'x'.repeat(2000)).length < 400);
   for (const status of [401, 403, 429, 500, 503]) assert.equal(clientMessage(status, 'secret body'), errorMessage(status));
   assert.equal(clientMessage(400, ''), errorMessage(400));
+});
+
+test('keyShape describes a rejected key without revealing any of it', async () => {
+  const key = 'sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789';
+  const shape = keyShape('openrouter', key, true);
+  assert.match(shape, /key length 45, starts sk-or-, Authorization header sent/);
+  assert.ok(!shape.includes('abcdefgh'));
+  assert.match(keyShape('openrouter', 'sk-abc', true), /does not start sk-or-/);
+  assert.match(keyShape('openrouter', 'sk-or-v1-a b', true), /contains whitespace/);
+  assert.match(keyShape('groq', 'gsk_x', false), /NO Authorization header sent/);
+  assert.doesNotMatch(keyShape('groq', 'gsk_x', true), /sk-or-/);
+  const lines = [];
+  await withProxy({ env: {}, log: line => lines.push(line), transport: async () => stream('{"error":{"message":"Missing Authentication header"}}', 401) }, async url => {
+    await post(url, { ...base, provider: 'openrouter', apiKey: key });
+  });
+  const logged = lines.join('\n');
+  assert.match(logged, /rejected the visitor's key \(key length 45, starts sk-or-, Authorization header sent\)/);
+  assert.ok(!logged.includes('abcdefghijklmnop'), 'the key never reaches the log');
+});
+
+test('a visitor\'s own key gets the provider\'s auth sentence, redacted; the deployment\'s keys never do', () => {
+  assert.match(clientMessage(401, 'Missing Authentication header', { byok: true }), /Invalid API key.*The provider said: Missing Authentication header/);
+  assert.match(clientMessage(403, 'key sk-or-v1-abcdefghijklmnopqrstuvwx disabled', { byok: true }), /\[redacted\]/);
+  assert.ok(!clientMessage(403, 'key sk-or-v1-abcdefghijklmnopqrstuvwx disabled', { byok: true }).includes('abcdefghijklmnop'));
+  assert.equal(clientMessage(401, 'Missing Authentication header', { byok: false }), errorMessage(401));
+  assert.equal(clientMessage(429, 'slow down', { byok: true }), errorMessage(429));
 });
 
 test('plan tokens: per-subscriber tokens unlock, revoked or unknown ones do not, and no plan list means no plan access', async () => {

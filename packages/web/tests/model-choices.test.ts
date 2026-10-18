@@ -17,6 +17,10 @@ describe('isChatModel', () => {
     expect(isChatModel('grok-imagine-image')).toBe(false);
     expect(isChatModel('imagen-3')).toBe(false);
   });
+  it('filters OpenRouter :batch variants, which 404 on chat/completions', () => {
+    expect(isChatModel('openai/gpt-6.1-sol-pro:batch')).toBe(false);
+    expect(isChatModel('openai/gpt-6.1-sol-pro')).toBe(true);
+  });
   it('errs toward keeping an unknown id rather than hiding a working model', () => {
     expect(isChatModel('some-unknown-model-v2')).toBe(true);
   });

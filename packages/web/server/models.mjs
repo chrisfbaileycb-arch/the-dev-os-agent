@@ -7,9 +7,12 @@
 // provider itself calls the model free — so that is what this module reduces each payload to.
 // Fields that are not known are omitted rather than guessed, so `{ id }` stays `{ id }`.
 
-const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b|imagine|flux|sora|dream[-_ ]?machine|eleven/i;
+const NON_CHAT = /embed|rerank|whisper|tts|orpheus|playai|moderation|guard|clip\b|dall[-_]?e|image[-_ ]?gen|stable[-_ ]?diffusion|sdxl|imagen|lyria|veo|aqa\b|imagine|flux|sora|dream[-_ ]?machine|eleven|:batch\b/i;
 
-/** A catalogue id that can take a chat turn. Embeddings, speech, and image models cannot. */
+/**
+ * A catalogue id that can take a chat turn. Embeddings, speech, and image models cannot, and
+ * neither can an OpenRouter `:batch` variant, which answers 404 on chat/completions.
+ */
 export function isChatModelId(id) {
   return typeof id === 'string' && id.trim().length > 0 && id.length <= 200 && !NON_CHAT.test(id);
 }

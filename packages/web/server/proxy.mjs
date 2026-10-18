@@ -168,13 +168,16 @@ export function errorMessage(status) {
  * a key that is not scoped to a workspace, an unpaid balance, an unknown model and a malformed
  * request alike, and those are four different fixes. For the statuses that describe the request
  * itself the provider's own sentence is passed along, bounded, and with anything shaped like a
- * credential removed first. Auth, rate-limit and 5xx answers stay generic on purpose.
+ * credential removed first. Rate-limit and 5xx answers stay generic on purpose, and so do auth
+ * answers on the deployment's own keys. When the request carried the visitor's own key
+ * (`byok`), a 401/403 passes the provider's sentence along too: the key is theirs to fix, and
+ * "Missing Authentication header" and "insufficient credits" are very different repairs.
  */
-export function clientMessage(status, detail) {
+export function clientMessage(status, detail, { byok = false } = {}) {
   const base = errorMessage(status);
   // A text-only model handed a photo answers with a schema complaint; say what it means.
   if (status === 400 && /content must be a string/i.test(String(detail ?? ''))) return 'This model can only read text, and the message includes a photo. Remove the photo, or pick a model that can read images.';
-  if (![400, 404, 413, 422].includes(status) || !detail) return base;
+  if (!([400, 404, 413, 422].includes(status) || (byok && (status === 401 || status === 403))) || !detail) return base;
   const safe = String(detail).replace(/\b(?:sk|xai|gsk|hf|pk)[-_][A-Za-z0-9_-]{16,}/gi, '[redacted]').replace(/\s+/g, ' ').trim().slice(0, 300);
   return safe ? `${base} The provider said: ${safe}` : base;
 }
@@ -244,6 +247,22 @@ export function logUpstream(provider, url, detail, log = console.error) {
   let where = url;
   try { const u = new URL(url); where = u.host + u.pathname; } catch { /* keep it as given */ }
   log(`[proxy] upstream ${provider} ${where} -> ${detail}`);
+}
+
+/**
+ * What a rejected credential looked like, without the credential. "Missing Authentication
+ * header" from OpenRouter means no usable bearer arrived, and from the outside a pasted key that
+ * is truncated, padded, or the wrong kind is indistinguishable from a proxy dropping the header.
+ * Length, shape and whether the header was set separate those cases. Never the key itself, and
+ * no characters of it beyond a yes/no on the one public prefix OpenRouter documents.
+ */
+export function keyShape(provider, key, sentAuthorization) {
+  const value = typeof key === 'string' ? key : '';
+  const parts = [`key length ${value.length}`];
+  if (provider === 'openrouter') parts.push(value.startsWith('sk-or-') ? 'starts sk-or-' : 'does not start sk-or-');
+  if (/\s/.test(value)) parts.push('contains whitespace');
+  parts.push(sentAuthorization ? 'Authorization header sent' : 'NO Authorization header sent');
+  return parts.join(', ');
 }
 
 /** Pinned so a future Anthropic API revision cannot change the wire format under a live deploy. */
@@ -706,6 +725,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
         // words separate them in one line. Bounded hard, because this is a log, not a mirror.
         const detail = await peek(response);
         logUpstream(provider, upstreamUrl, `HTTP ${status}${detail ? ` — ${detail}` : ''}`, log);
+        if ((status === 401 || status === 403) && funding.mode === 'byok') logUpstream(provider, upstreamUrl, `rejected the visitor's key (${keyShape(provider, apiKey, Boolean(headers.Authorization || headers['x-api-key'] || headers['x-goog-api-key']))})`, log);
         // On a free-tier request the credential is the deployment's, so "invalid API key" would
         // send the visitor hunting for a problem that is not theirs. Report it as a tier that is
         // not answering, and leave the real status for the operator's logs.
@@ -731,7 +751,7 @@ export function createProxy({ env: baseEnv = process.env, settings = null, stora
           return true;
         }
 
-        throw new HttpError(status >= 300 && status < 400 ? 502 : status, clientMessage(status, detail));
+        throw new HttpError(status >= 300 && status < 400 ? 502 : status, clientMessage(status, detail, { byok: funding.mode === 'byok' }));
       }
       if (path === '/api/models') {
         let size = 0; const chunks = [];
