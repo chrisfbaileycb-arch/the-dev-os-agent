@@ -187,6 +187,13 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 .build-errors { padding: 14px 16px; }
 .build-errors pre { font: 12px/1.5 var(--font-mono, monospace); color: var(--danger); white-space: pre-wrap; word-break: break-word; background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
 .output-code { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+/* Line numbers: the frame owns the border, and the number column is a sibling that follows the code's scroll. */
+.code-frame { display: flex; flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); overflow: hidden; }
+.code-frame:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.code-gutter { flex: none; overflow: hidden; border-right: 1px solid var(--line); color: var(--muted); user-select: none; }
+.code-gutter pre { margin: 0; padding: 12px 8px 28px 10px; text-align: right; font: 12px/1.6 var(--mono); font-variant-numeric: tabular-nums; }
+.code-frame .syntax-code, .code-frame .code-editor { flex: 1; width: auto; min-width: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+.code-frame .code-editor { background: transparent; white-space: pre; overflow: auto; }
 .output-code .chip { cursor: pointer; } .output-code .chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); }
 .push-drawer .chip-row { max-height: 90px; overflow: auto; }
 

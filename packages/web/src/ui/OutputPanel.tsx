@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { Check, ChevronDown, CircleAlert, CircleCheck, Code2, Columns2, Copy, Eye, FileArchive, FileDown, LoaderCircle, Maximize2, Minimize2, Monitor, MonitorPlay, PanelRightClose, Pencil, RotateCw, Server, Smartphone, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import { parseProject, preparePreviewProject, type Project, type ProjectFile } from '../lib/project';
@@ -149,6 +149,7 @@ export default function OutputPanel(p: OutputPanelProps) {
   const parsedRef = useRef('');
   const editTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exportRef = useRef<HTMLDivElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
 
   const selected = useMemo(() => project?.files.find(file => file.path === selectedFile) ?? null, [project, selectedFile]);
 
@@ -306,6 +307,11 @@ export default function OutputPanel(p: OutputPanelProps) {
   // the quiet replacement for a bright red header: a neutral title, one small indicator.
   const previewLive = devStatus.running;
   const codeMarkup = highlightCode(activeCode);
+  // A trailing newline is not a line in the read-only view, but the editor does show the empty one.
+  const lineCount = (editing ? activeCode : activeCode.replace(/\n$/, '')).split('\n').length;
+  const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
+  /** The gutter does not scroll on its own; it follows whichever pane holds the code. */
+  const syncGutter = (event: UIEvent<HTMLElement>) => { if (gutterRef.current) gutterRef.current.scrollTop = event.currentTarget.scrollTop; };
   /** Every route back to the running app: re-mount the frame and restore the canonical split. */
   const showPreview = () => { setView('preview'); setEditing(false); p.onPreviewFocus(); setRefresh(n => n + 1); };
   const sourceOnly = project?.entry === 'styles.css';
@@ -327,9 +333,13 @@ export default function OutputPanel(p: OutputPanelProps) {
           : <button className="toolbar-button" onClick={() => void copyCode()}><Copy size={12} />{copied ? 'Copied' : 'Copy'}</button>}
       </span>
     </div>
-    {editing
-      ? <textarea aria-label="Generated code editor" className="code-editor" spellCheck={false} value={activeCode} onChange={event => edit(event.target.value)} />
-      : <pre className="syntax-code" dangerouslySetInnerHTML={{ __html: codeMarkup }} />}
+    <div className="code-frame">
+      <div className="code-gutter" ref={gutterRef} aria-hidden="true" data-testid="code-gutter" style={{ minWidth: `${String(lineCount).length + 3}ch` }}><pre>{lineNumbers}</pre></div>
+      {editing
+        // wrap="off" keeps one source line on one screen line, which is what lets the numbers line up.
+        ? <textarea aria-label="Generated code editor" className="code-editor" wrap="off" spellCheck={false} value={activeCode} onChange={event => edit(event.target.value)} onScroll={syncGutter} />
+        : <pre className="syntax-code" onScroll={syncGutter} dangerouslySetInnerHTML={{ __html: codeMarkup }} />}
+    </div>
   </div>;
 
   const previewPane = project && <div className="output-preview">
