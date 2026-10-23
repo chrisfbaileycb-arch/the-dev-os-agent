@@ -133,6 +133,34 @@ describe('parseProject', () => {
       expect(out).not.toContain('src="missing.js"');
     });
 
+    it('leaves CDN scripts and stylesheets alone, so the libraries the page uses still load', () => {
+      // These were deleted before: the inline code kept calling Chart and tailwind, which no longer existed.
+      const doc = '<!doctype html><html><head><script src="https://cdn.tailwindcss.com"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></head><body><canvas id="c"></canvas><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><script>new Chart(document.getElementById("c"), {});</script></body></html>';
+      // Nothing local to claim, so nothing changes and the caller keeps the document verbatim.
+      expect(stitchFragments(doc, [])).toBeNull();
+      expect(parseProject(fence('html', doc))?.files[0]?.content).toBe(doc);
+    });
+
+    it('treats protocol-relative and data: references as off-project too', () => {
+      const doc = '<!doctype html><html><head><link rel="stylesheet" href="//fonts.example/inter.css"><script src="data:text/javascript,1"></script></head><body></body></html>';
+      expect(stitchFragments(doc, [])).toBeNull();
+    });
+
+    it('claims only the local reference when a document mixes local and CDN ones', () => {
+      const doc = '<!doctype html><html><head><script src="https://cdn.example/lib.js"></script></head><body><script src="app.js"></script></body></html>';
+      const out = stitchFragments(doc, ['console.log("app");']);
+      expect(out).toContain('<script src="https://cdn.example/lib.js"></script>');
+      expect(out).toContain('console.log("app");');
+      expect(out).not.toContain('src="app.js"');
+    });
+
+    it('still adds an unclaimed sibling script to a document whose only scripts are external libraries', () => {
+      const doc = '<!doctype html><html><head><script src="https://cdn.example/lib.js"></script></head><body><div id="x"></div></body></html>';
+      const out = stitchFragments(doc, ['console.log("app");']);
+      expect(out).toContain('<script src="https://cdn.example/lib.js"></script>');
+      expect(out).toMatch(/<script>\nconsole\.log\("app"\);\n<\/script>\n<\/body>/);
+    });
+
     it('leaves a self-contained document untouched', () => {
       const doc = '<!doctype html><html><body><script>console.log(1)</script></body></html>';
       expect(stitchFragments(doc, [])).toBeNull();

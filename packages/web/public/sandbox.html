@@ -75,9 +75,23 @@ function wrapClientScripts(html) {
     if (trimmed.indexOf('document.readyState') !== -1 && trimmed.indexOf('DOMContentLoaded') !== -1) {
       return match;
     }
+    // Tailwind's Play CDN documents this exact snippet straight after its own <script>, and reads the
+    // config as it starts up. It touches no DOM, so there is nothing to wait for.
+    if (/^tailwind\.config\s*=/.test(trimmed)) return match;
+    // The code is deferred until the DOM is ready, but it must still run as a real classic script.
+    // It used to sit inside a function, which made every top-level function and const local to it, so
+    // any `onclick="scrollToSection('x')"` in the page's markup threw "scrollToSection is not
+    // defined". Handing the same text to a script element at that point runs it in the global scope
+    // exactly as if the browser had met it there. The closing-tag and comment-opener sequences are
+    // escaped because this text sits inside another script element, where either can end it early.
+    // (Never write them out literally anywhere in this file's own script: the parser would stop here.)
+    var literal = JSON.stringify(code).replace(/<\/(script)/gi, '<\\/$1').replace(/<!-{2}/g, '<\\!--');
     var wrapped = '\n(function(){\n' +
       '  function __runScript(){\n' +
-      code + '\n' +
+      '    var s = document.createElement("script");\n' +
+      '    s.textContent = ' + literal + ';\n' +
+      '    (document.head || document.documentElement).appendChild(s);\n' +
+      '    if (s.parentNode) s.parentNode.removeChild(s);\n' +
       '  }\n' +
       '  if (document.readyState !== "loading") {\n' +
       '    __runScript();\n' +
