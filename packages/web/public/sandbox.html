@@ -75,9 +75,12 @@ function wrapClientScripts(html) {
     if (trimmed.indexOf('document.readyState') !== -1 && trimmed.indexOf('DOMContentLoaded') !== -1) {
       return match;
     }
-    // Tailwind's Play CDN documents this exact snippet straight after its own <script>, and reads the
-    // config as it starts up. It touches no DOM, so there is nothing to wait for.
-    if (/^tailwind\.config\s*=/.test(trimmed)) return match;
+    // Tailwind's Play CDN documents this snippet straight after its own <script> and reads the config as
+    // it starts up, so when the library is already there the config runs now, in place. When it is not
+    // (a page that writes the config above the CDN tag) it waits for the DOM like any other script, by
+    // which time the library has loaded. Running it in place unconditionally threw "tailwind is not
+    // defined" for that ordering, which the deferral used to forgive.
+    var configNow = /^tailwind\.config\s*=/.test(trimmed) ? 'typeof tailwind !== "undefined" || ' : '';
     // The code is deferred until the DOM is ready, but it must still run as a real classic script.
     // It used to sit inside a function, which made every top-level function and const local to it, so
     // any `onclick="scrollToSection('x')"` in the page's markup threw "scrollToSection is not
@@ -93,7 +96,7 @@ function wrapClientScripts(html) {
       '    (document.head || document.documentElement).appendChild(s);\n' +
       '    if (s.parentNode) s.parentNode.removeChild(s);\n' +
       '  }\n' +
-      '  if (document.readyState !== "loading") {\n' +
+      '  if (' + configNow + 'document.readyState !== "loading") {\n' +
       '    __runScript();\n' +
       '  } else {\n' +
       '    window.addEventListener("DOMContentLoaded", __runScript);\n' +
