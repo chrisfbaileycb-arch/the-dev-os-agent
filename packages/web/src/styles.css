@@ -24,6 +24,10 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 18px; font-weight: 650; letter-spac
 pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; } code { font-family: var(--mono); font-size: 11.5px; } svg { flex-shrink: 0; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* The generic input rule further down (0,1,1) outranks .sr-only (0,1,0), so a hidden file input kept
+   width: 100% plus padding. It was invisible but still laid out, and on a phone it pushed the page 59px
+   sideways. [type] lifts this above that rule without touching how visible inputs are styled. */
+input.sr-only[type] { width: 1px; padding: 0; border: 0; }
 .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 .help { color: var(--muted); font-size: 12px; line-height: 1.5; } .row { display: flex; align-items: center; } .gap { gap: 6px; } .end { justify-content: flex-end; } .grow { flex: 1; min-width: 0; } .mono { font-family: var(--mono); font-size: 11.5px; } .num { text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -460,7 +464,9 @@ a.button.primary.plan-cta, a.button.primary.plan-cta:hover { color: #fff; }
   .plan-grid { grid-template-columns: minmax(0, 1fr); }
   .page { padding: 12px 12px 24px; }
   .mode-picker, .mode-picker.three { grid-template-columns: minmax(0, 1fr); }
-  .status-metrics span:nth-child(2) { display: none; }
+  /* Throughput and the output ceiling drop first; latency, credits and the sync state are what a phone needs.
+     With all five the row ran past the screen and the last label was cut off. */
+  .status-metrics span:nth-child(2), .status-metrics span:nth-child(3) { display: none; }
   .workflow-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   /* iOS zooms a focused input under 16px; the draft field is the one that matters. */
   .dock textarea { font-size: 16px; }
