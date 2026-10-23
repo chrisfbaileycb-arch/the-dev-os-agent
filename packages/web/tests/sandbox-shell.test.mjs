@@ -52,6 +52,10 @@ test('deferred code is handed to a script element, so its top-level names stay g
   assert.doesNotMatch(out, /function __runScript\(\)\{\n\s*function go/);
 });
 
+test('a duplicate top-level declaration falls back to running that script in its own scope', () => {
+  assert.match(wrapClientScripts('<script>const a = 1;</script>'), /has already been declared/);
+});
+
 test('a classic script without module syntax is still deferred until the DOM is ready', () => {
   const out = wrapClientScripts('<script>document.title = "x";</script>');
   assert.match(out, /__runScript/);
@@ -196,4 +200,67 @@ test('tailwind.config written above the CDN tag still works, because it waits fo
   const { errors, title } = await inChromium(withShim(html), () => {}, tailwindStub);
   assert.deepEqual(errors, []);
   assert.equal(title, 'configured');
+});
+
+// A second script that re-declares a top-level const or let cannot run as a real classic script: the
+// browser refuses the whole script. Long generated pages do this often, and the old function wrapper
+// hid it, so the shell runs such a script in its own scope instead of losing it.
+const twoScripts = (second, extra = '') => `<html><head></head><body>${extra}<script>const META = { n: 1 }; document.title = 'first';</script><script>${second}</script></body></html>`;
+const bannerText = page => page.evaluate(() => { const b = document.querySelector('[data-preview-error]'); return b ? b.textContent : null; });
+
+test('a script that re-declares a const from an earlier script still runs, once', chromiumOnly, async () => {
+  const html = twoScripts("const META = { n: 2 }; window.runs = (window.runs || 0) + 1; document.title = 'second-ran';");
+  let runs; let banner;
+  const { title } = await inChromium(realShell.withShim(html), async page => {
+    await page.waitForFunction(() => document.title === 'second-ran');
+    runs = await page.evaluate(() => window.runs); banner = await bannerText(page);
+  });
+  assert.equal(title, 'second-ran');
+  assert.equal(runs, 1);
+  assert.equal(banner, null);
+});
+
+test('functions declared in a script that fell back are still reachable from inline handlers', chromiumOnly, async () => {
+  const html = twoScripts("const META = { n: 2 }; function pick() { document.title = 'picked-' + META.n; }", '<button id="b" onclick="pick()">go</button>');
+  const { title } = await inChromium(realShell.withShim(html), page => page.click('#b'));
+  assert.equal(title, 'picked-2');
+});
+
+test('a const declared in a script that fell back is visible to a later script', chromiumOnly, async () => {
+  // Without this, a page's data array (BOOKS, here) vanished with the script that declared it.
+  const html = twoScripts("const META = { n: 2 }; const BOOKS = ['a', 'b'];").replace('</body>', "<script>document.title = 'books-' + BOOKS.length;</script></body>");
+  const { title } = await inChromium(realShell.withShim(html), page => page.waitForFunction(() => document.title.startsWith('books-')));
+  assert.equal(title, 'books-2');
+});
+
+test('an arrow-function const from a script that fell back works from an inline handler', chromiumOnly, async () => {
+  const html = twoScripts("const META = { n: 2 }; const pick = () => { document.title = 'picked-' + META.n; };", '<button id="b" onclick="pick()">go</button>');
+  const { title } = await inChromium(realShell.withShim(html), page => page.click('#b'));
+  assert.equal(title, 'picked-2');
+});
+
+test('the fallback never replaces a real global such as window.name', chromiumOnly, async () => {
+  // `name` is declared inside a nested function here, so it is not the script's own: exporting it
+  // would redefine window.name as a getter that returns itself.
+  const html = twoScripts("const META = { n: 2 }; function helper() { let name = 'inner'; return name; } document.title = 'name-is-' + typeof window.name;");
+  const { title } = await inChromium(realShell.withShim(html), page => page.waitForFunction(() => document.title.startsWith('name-is-')));
+  assert.equal(title, 'name-is-string');
+});
+
+test('a declaration repeated inside one script is still reported, not hidden', chromiumOnly, async () => {
+  const html = '<html><head></head><body><script>const META = 1; const META = 2;</script></body></html>';
+  let banner = '';
+  await inChromium(realShell.withShim(html), async page => { banner = await (await page.waitForSelector('[data-preview-error]')).textContent(); });
+  assert.match(banner, /has already been declared/);
+});
+
+test('an unrelated error in a script is reported, and the script is not run a second time', chromiumOnly, async () => {
+  const html = '<html><head></head><body><script>window.runs = (window.runs || 0) + 1; missingFunction();</script></body></html>';
+  let banner = ''; let runs;
+  await inChromium(realShell.withShim(html), async page => {
+    banner = await (await page.waitForSelector('[data-preview-error]')).textContent();
+    runs = await page.evaluate(() => window.runs);
+  });
+  assert.match(banner, /missingFunction is not defined/);
+  assert.equal(runs, 1);
 });

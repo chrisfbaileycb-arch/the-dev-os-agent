@@ -38,7 +38,7 @@ var SHIM = '<script>(function(){' +
   'document.addEventListener=function(t,l,o){if(t==="DOMContentLoaded"&&document.readyState!=="loading"){try{setTimeout(function(){typeof l==="function"?l.call(document,new Event("DOMContentLoaded")):l&&l.handleEvent&&l.handleEvent(new Event("DOMContentLoaded"))},0)}catch(e){}return}return origDocAEL.apply(this,arguments)};' +
   'var failed=false;window.addEventListener("load",function(){setTimeout(function(){if(failed)return;var b=document.body;var seen=b&&((b.innerText||"").trim().length>0||b.querySelector("canvas,svg,img,video,iframe,input,button,select,textarea"));tell(seen?"ready":"blank")},1200)});' +
   'window.addEventListener("unhandledrejection",function(e){failed=true;tell("error",(e.reason&&e.reason.message)||e.reason)});' +
-  'var shown=false;window.addEventListener("error",function(e){failed=true;tell("error",e.message);if(shown)return;shown=true;var b=document.createElement("pre");b.setAttribute("data-preview-error","");b.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;margin:0;padding:8px 10px;background:#fff3f2;color:#b8362b;border:1px solid #f0b8b2;border-radius:6px;font:12px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.15)";b.textContent="Runtime error: "+(e.message||"unknown")+(e.filename?"\\n"+e.filename.replace(/^.*\\//,"")+":"+e.lineno:"");(document.body||document.documentElement).appendChild(b)});' +
+  'var shown=false;window.addEventListener("error",function(e){if(window.__sfTrying&&/has already been declared|redeclaration of|duplicate variable/i.test(e.message||"")){return}failed=true;tell("error",e.message);if(shown)return;shown=true;var b=document.createElement("pre");b.setAttribute("data-preview-error","");b.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;margin:0;padding:8px 10px;background:#fff3f2;color:#b8362b;border:1px solid #f0b8b2;border-radius:6px;font:12px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.15)";b.textContent="Runtime error: "+(e.message||"unknown")+(e.filename?"\\n"+e.filename.replace(/^.*\\//,"")+":"+e.lineno:"");(document.body||document.documentElement).appendChild(b)});' +
   '})()<\/script>';
 
 // Generated pages routinely write `import * as THREE from 'three'` inside a plain <script>, or in a
@@ -60,6 +60,52 @@ function isJsType(attrs) {
   if (t === 'text/javascript' || t === 'application/javascript' || t === 'javascript') return 'classic';
   return null;
 }
+
+// Runs one page script after the DOM is ready, as a real classic script, so its top-level names are
+// global and the page's inline handlers can reach them. A script that re-declares a top-level const,
+// let or class from an earlier script is refused by the browser as a whole, before any of it runs, and
+// long generated pages do this often; the old function wrapper hid it. So that case, and only that
+// case, runs the same code inside a function instead, with the names it declares copied onto the
+// window so the page's other scripts and inline handlers still find them. The browser refuses before
+// running anything, so nothing runs twice, and every other error is reported as it always was. This is a real function
+// handed to each page as source text (RUN_DEFERRED below), so it must not refer to anything outside
+// itself.
+function runDeferredScript(code) {
+  var REDECLARED = /has already been declared|redeclaration of|duplicate variable/i;
+  var redeclared = false;
+  function onError(e) {
+    if (!REDECLARED.test(String(e && e.message))) return;
+    redeclared = true; e.preventDefault(); e.stopImmediatePropagation();
+  }
+  // The shell's own error banner listens first, so it is told (through this flag) to leave a duplicate
+  // declaration alone while this attempt is in flight; the fallback below handles it.
+  window.__sfTrying = true;
+  window.addEventListener("error", onError, true);
+  try {
+    var s = document.createElement("script");
+    s.textContent = code;
+    (document.head || document.documentElement).appendChild(s);
+    if (s.parentNode) s.parentNode.removeChild(s);
+  } catch (e) {
+    if (REDECLARED.test(String(e && e.message))) redeclared = true; else throw e;
+  } finally {
+    window.removeEventListener("error", onError, true);
+    window.__sfTrying = false;
+  }
+  if (!redeclared) return;
+  // Every name the script declares is copied onto the window as a live binding, so the page's other
+  // scripts and its inline handlers still reach them. A name the window already has is left alone: it
+  // is a real global, and replacing it could recurse. Names that turn out not to be in scope (a nested
+  // declaration the pattern also matched) fail the typeof test and are skipped.
+  var names = []; var found;
+  var declaration = /\b(?:function\s*\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/g;
+  while ((found = declaration.exec(code))) if (names.indexOf(found[1]) === -1) names.push(found[1]);
+  var exported = names.map(function (n) {
+    return ";try{if(typeof " + n + "!==\"undefined\"&&!(\"" + n + "\" in window))Object.defineProperty(window,\"" + n + "\",{configurable:true,get:function(){return " + n + "},set:function(v){try{" + n + "=v}catch(_){}}})}catch(_){}";
+  }).join("");
+  (new Function(code + "\n" + exported))();
+}
+var RUN_DEFERRED = String(runDeferredScript);
 
 function wrapClientScripts(html) {
   return html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, function (match, attrs, code) {
@@ -91,10 +137,7 @@ function wrapClientScripts(html) {
     var literal = JSON.stringify(code).replace(/<\/(script)/gi, '<\\/$1').replace(/<!-{2}/g, '<\\!--');
     var wrapped = '\n(function(){\n' +
       '  function __runScript(){\n' +
-      '    var s = document.createElement("script");\n' +
-      '    s.textContent = ' + literal + ';\n' +
-      '    (document.head || document.documentElement).appendChild(s);\n' +
-      '    if (s.parentNode) s.parentNode.removeChild(s);\n' +
+      '    (' + RUN_DEFERRED + ')(' + literal + ');\n' +
       '  }\n' +
       '  if (' + configNow + 'document.readyState !== "loading") {\n' +
       '    __runScript();\n' +
