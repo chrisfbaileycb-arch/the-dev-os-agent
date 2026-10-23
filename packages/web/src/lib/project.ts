@@ -26,6 +26,9 @@ const BARE_LANGUAGES = new Set(['html', 'htm', 'js', 'javascript', 'jsx', 'ts', 
 /** A safe, relative project path: no leading slash, no drive letter, no `..` segment, no NUL. */
 const SAFE_PATH = /^(?!\/)(?!.*\.\.(?:\/|$))(?!.*\\)[A-Za-z0-9._][A-Za-z0-9._\-\/]{0,199}$/;
 
+/** A URL that points off the project: any scheme (https:, data:, blob:) or a protocol-relative CDN. */
+const OFF_PROJECT = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
+
 export function isSafeProjectPath(path: string): boolean {
   return SAFE_PATH.test(path) && !path.includes('\0');
 }
@@ -109,19 +112,27 @@ export function stitchFragments(doc: string, blocks: string[]): string | null {
   let out = doc.trim();
   let changed = false;
 
-  out = out.replace(/<script\b[^>]*\bsrc\s*=\s*["'][^"']*["'][^>]*>\s*<\/script>/gi, () => {
+  // Only references to the project's own files are claimed. A CDN script or stylesheet is a library
+  // the page wants, not a file a sibling block stands in for: claiming it used to delete Tailwind,
+  // Chart.js and the icon fonts from every single-file reply, and the inline code that used them
+  // then threw "tailwind is not defined" / "Chart is not defined" in the preview.
+  out = out.replace(/<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi, (tag, src: string) => {
+    if (OFF_PROJECT.test(src.trim())) return tag;
     changed = true;
     const next = scriptQueue.shift();
     return next === undefined ? '' : `<script>\n${next}\n</script>`;
   });
-  out = out.replace(/<link\b[^>]*rel\s*=\s*["']?stylesheet["']?[^>]*>/gi, () => {
+  out = out.replace(/<link\b[^>]*rel\s*=\s*["']?stylesheet["']?[^>]*>/gi, tag => {
+    if (OFF_PROJECT.test((/\bhref\s*=\s*["']?([^"'\s>]*)/i.exec(tag)?.[1] ?? '').trim())) return tag;
     changed = true;
     const next = styleQueue.shift();
     return next === undefined ? '' : `<style>\n${next}\n</style>`;
   });
 
+  // "Already carries a script" means an inline one: a CDN <script src> runs nothing of the page's own.
+  const hasInlineScript = /<script\b(?![^>]*\bsrc\s*=)/i.test(out);
   const leftovers = [
-    scriptQueue.length && !/<script\b/i.test(out) ? `<script>\n${scriptQueue.join('\n')}\n</script>` : '',
+    scriptQueue.length && !hasInlineScript ? `<script>\n${scriptQueue.join('\n')}\n</script>` : '',
     styleQueue.length && !/<style\b/i.test(out) ? `<style>\n${styleQueue.join('\n')}\n</style>` : '',
   ].filter(Boolean);
   if (leftovers.length && /<\/body>/i.test(out)) {
@@ -295,7 +306,7 @@ export function latestPreviewReply(messages: { role: string; content: string; ru
  */
 export function resolveLocalRef(ref: string, files: Record<string, string>, entry: string): string | null {
   const raw = ref.trim().replace(/[?#].*$/, '');
-  if (!raw || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(raw)) return null;
+  if (!raw || OFF_PROJECT.test(raw)) return null;
   const clean = raw.replace(/^\.?\//, '');
   const dir = entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/')) : '';
   const candidates = [dir ? `${dir}/${clean}` : clean, clean];

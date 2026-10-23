@@ -30,6 +30,26 @@ test('module scripts are never wrapped, with or without imports', () => {
   assert.equal(wrapClientScripts(plain), plain);
 });
 
+test("the shell's own script is one element: no literal closing tag or comment opener inside it", () => {
+  // The helper tests above slice functions out of this file as text, so they cannot see this: a
+  // closing-tag sequence anywhere in the shell's script, even in a comment, ends the element there and
+  // the message listener below it is never registered, so every preview is blank.
+  assert.equal((shell.match(/<\/script/gi) ?? []).length, 1, 'exactly one closing tag: the real end of the script');
+  assert.equal((shell.match(/<!--/g) ?? []).length, 0);
+});
+
+test('a script that sets tailwind.config is left in place, not deferred', () => {
+  const html = '<script>tailwind.config = { theme: {} }</script>';
+  assert.equal(wrapClientScripts(html), html);
+});
+
+test('deferred code is handed to a script element, so its top-level names stay global', () => {
+  const out = wrapClientScripts('<script>function go(){}</script>');
+  assert.match(out, /createElement\("script"\)/);
+  // The page's own code is data to the wrapper, never the body of a function that would scope it.
+  assert.doesNotMatch(out, /function __runScript\(\)\{\n\s*function go/);
+});
+
 test('a classic script without module syntax is still deferred until the DOM is ready', () => {
   const out = wrapClientScripts('<script>document.title = "x";</script>');
   assert.match(out, /__runScript/);
@@ -82,4 +102,74 @@ test('in Chromium a promoted inline script resolves a bare specifier through the
     assert.equal(await page.title(), 'ok-42');
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
+});
+
+// What the page actually does once the shell has rewritten it. These run in Chromium rather than
+// reading the output as text, because whether a handler can reach a function is a matter of how the
+// browser scopes the code, not of how the string looks.
+const chromiumOnly = { skip: hasChromium ? false : 'Chromium unavailable in this environment' };
+// The real shim, not the placeholder above: it carries the DOMContentLoaded rescue and the error banner.
+const realShell = new Function(`${shell.slice(shell.indexOf('var SHIM'), end)}; return { withShim };`)();
+
+async function inChromium(prepared, act) {
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  try {
+    const page = await browser.newPage(); const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.setContent(prepared);
+    await act(page);
+    return { errors, title: await page.title() };
+  } finally { await browser.close(); }
+}
+
+for (const [name, declaration] of [
+  ['a function declaration', "function scrollToSection(id) { document.title = 'clicked-' + id; }"],
+  ['a const arrow function', "const scrollToSection = (id) => { document.title = 'clicked-' + id; };"],
+  ['a var function expression', "var scrollToSection = function (id) { document.title = 'clicked-' + id; };"],
+]) {
+  test(`an inline onclick can call ${name} declared in the page's script`, chromiumOnly, async () => {
+    // The nav buttons generated pages ship (`onclick="scrollToSection('x')"`) threw "is not defined"
+    // while the script was wrapped in a function.
+    const html = `<html><head></head><body><button id="b" onclick="scrollToSection('x')">go</button><script>${declaration}</script></body></html>`;
+    const { errors, title } = await inChromium(withShim(html), page => page.click('#b'));
+    assert.deepEqual(errors, []);
+    assert.equal(title, 'clicked-x');
+  });
+}
+
+test('a body onload attribute can call a function the page script declares', chromiumOnly, async () => {
+  // `<body onload="initializeApp()">` sits near the top of the document and fires after load, so the
+  // deferred script has to have run, in the global scope, by then.
+  const html = "<html><head></head><body onload=\"initializeApp()\"><script>function initializeApp() { document.title = 'initialized'; }</script></body></html>";
+  const { errors, title } = await inChromium(withShim(html), page => page.waitForFunction(() => document.title === 'initialized'));
+  assert.deepEqual(errors, []);
+  assert.equal(title, 'initialized');
+});
+
+test('page script still waits for the DOM, so a script in the head can find elements below it', chromiumOnly, async () => {
+  const html = "<html><head><script>document.title = document.getElementById('late') ? 'saw-late' : 'missing';</script></head><body><p id='late'>x</p></body></html>";
+  const { errors, title } = await inChromium(withShim(html), () => {});
+  assert.deepEqual(errors, []);
+  assert.equal(title, 'saw-late');
+});
+
+test('a DOMContentLoaded listener registered from deferred page code still runs', chromiumOnly, async () => {
+  const html = "<html><head></head><body><script>document.addEventListener('DOMContentLoaded', function () { document.title = 'listener-ran'; });</script></body></html>";
+  const { title } = await inChromium(realShell.withShim(html), page => page.waitForFunction(() => document.title === 'listener-ran'));
+  assert.equal(title, 'listener-ran');
+});
+
+test('text in the page script that looks like a comment opener or a tag cannot break the wrapper', chromiumOnly, async () => {
+  // `<!--` followed by `<script` puts an HTML parser into a state where the wrapper's own </script> is ignored.
+  const html = '<html><head></head><body><script>document.title = "a<!--<script>b";</script></body></html>';
+  const { errors, title } = await inChromium(withShim(html), () => {});
+  assert.deepEqual(errors, []);
+  assert.equal(title, 'a<!--<script>b');
+});
+
+test('an error thrown by deferred page code is still reported in the error banner', chromiumOnly, async () => {
+  const html = '<html><head></head><body><script>missingFunction();</script></body></html>';
+  let banner = '';
+  await inChromium(realShell.withShim(html), async page => { banner = await (await page.waitForSelector('[data-preview-error]')).textContent(); });
+  assert.match(banner, /missingFunction is not defined/);
 });
