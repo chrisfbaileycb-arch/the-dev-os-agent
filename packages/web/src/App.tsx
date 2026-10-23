@@ -42,8 +42,9 @@ import { clearDiscovered, isFresh, keyFingerprint, loadDiscovered, saveDiscovere
 import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Persona, type WorkMode } from './lib/roster';
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
 import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, workspaceId, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type PlanReading, type Session } from './lib/store';
-import { FREE_TIER_WARMING, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
+import { FREE_TIER_WARMING, deploymentNotice, freeLaneBlock, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
 import { useInstallAvailable, useOnline, useUpdateReady, applyUpdate, isInstalled, promptInstall } from './pwa';
+import { isNarrowViewport } from './lib/viewport';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
 import { activeCount, activeTools, clearSettings, loadSettings, saveSettings, type ConnectorSettings, type GithubSettings } from './lib/connectors';
@@ -150,7 +151,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [githubPullOpen, setGithubPullOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false); const [connectorTab, setConnectorTab] = useState<ConnectorTab>('github');
-  const [previewOpen, setPreviewOpen] = useState(true);
+  // The output panel starts open beside the chat, but not on a phone, where the two stack and the
+  // empty panel would take half the screen. Build mode and a new build session still open it.
+  const [previewOpen, setPreviewOpen] = useState(() => !isNarrowViewport());
   /**
    * Share of the workspace the conversation takes; the preview gets the rest. Half each by
    * default, restored on every visit to the preview, and persisted only within the drag bounds —
@@ -286,9 +289,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
           });
         });
       }
-      if (!d.free.enabled && d.reachable) setNotice(FREE_TIER_WARMING);
-      else if (!d.reachable) setNotice('Could not reach this deployment, so no model is selected yet. Reload to try again, or add your own key in Settings.');
-      else setNotice('');
+      setNotice(deploymentNotice(d));
     });
     // Whether a Render background worker is deployed alongside this web service. Workflows run
     // in the browser either way; this only reports that the heavier path exists.
@@ -529,7 +530,7 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
     if (connection.provider === 'ollama' && !pipes.ollamaEnabled) return 'Enable the local model connection in Settings first.';
     if (!online && connection.provider !== 'ollama') return 'You are offline. Hosted models need a connection.';
     if (inference === 'free') {
-      if (!deployment.free.enabled) return FREE_TIER_WARMING;
+      const blocked = freeLaneBlock(deployment); if (blocked) return blocked;
       if (!deployment.free.models.includes(connection.model)) return `${connection.model || 'No model'} is not on this deployment's free list. Pick a free model from the dropdown.`;
       if (freeBalance.remaining <= 0) return `The free allowance for ${freeBalance.month} is used up. Add your own key in Settings — Groq, OpenRouter and xKiro all offer free accounts — or wait for the monthly reset.`;
       return null;

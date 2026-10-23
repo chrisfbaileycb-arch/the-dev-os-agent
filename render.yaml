@@ -84,7 +84,8 @@ services:
       # --- Zero-config free tier -------------------------------------------------------
       # Set one or both and visitors get a live streaming reply with no API key and no account:
       # the server funds an allowlisted set of free models from its own keys. Leave them unset
-      # and the app still runs — it shows "Public free tier warming up" and asks for a key.
+      # and the app still runs: the empty chat points at Settings, and a send with no key is told
+      # that no free models are available and to bring a key or a plan access token.
       # Enter the real values in the dashboard; `sync: false` keeps them out of this file.
       - key: GROQ_API_KEY
         sync: false

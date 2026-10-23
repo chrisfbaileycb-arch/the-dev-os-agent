@@ -58,6 +58,37 @@ export const FREE_TIER_WARMING = 'Public free tier warming up — enter your own
 const WARMING_CODES = new Set(['free_tier_unavailable', 'free_tier_busy']);
 export const isFreeTierWarming = (code?: string): boolean => Boolean(code && WARMING_CODES.has(code));
 
+/**
+ * What a keyless visitor is told when the deployment answered but funds no free models.
+ *
+ * That state is the operator's setting, not a wait: the tier is switched off (FREE_TIER_DISABLED
+ * or a zero pool), no provider key stands behind it, or the gateway catalogue has not loaded. None
+ * of those clears because the visitor retries, so it is not called "warming up". The visitor's
+ * two ways forward are the same in every case.
+ */
+export const FREE_TIER_NOT_OFFERED = 'No free models are available on this deployment right now. Add your own key in Settings, or enter a plan access token.';
+
+/**
+ * The notice to show once /api/providers has answered, or '' for none.
+ *
+ * A reachable deployment with no funded free models gets no notice here. It used to announce
+ * "free tier warming up" on every load, which a paid deployment that simply does not offer a free
+ * tier showed to every visitor for something only the operator can change. The empty chat already
+ * points at Settings, and a keyless send is told why it cannot go out (see freeLaneBlock).
+ */
+export function deploymentNotice(d: Deployment): string {
+  return d.reachable ? '' : 'Could not reach this deployment, so no model is selected yet. Reload to try again, or add your own key in Settings.';
+}
+
+/**
+ * Why a send on the free lane cannot go out, or null when the deployment funds it. An unreachable
+ * deployment really is waking up; a reachable one that funds nothing is not, and says so.
+ */
+export function freeLaneBlock(d: Deployment): string | null {
+  if (d.free.enabled) return null;
+  return d.reachable ? FREE_TIER_NOT_OFFERED : FREE_TIER_WARMING;
+}
+
 export const emptyGatewayCatalog: GatewayCatalog = { url: null, models: [], discovered: false, count: 0, free: 0, at: null, error: null };
 
 export const offlineDeployment: Deployment = {
