@@ -38,9 +38,11 @@ test("the shell's own script is one element: no literal closing tag or comment o
   assert.equal((shell.match(/<!--/g) ?? []).length, 0);
 });
 
-test('a script that sets tailwind.config is left in place, not deferred', () => {
-  const html = '<script>tailwind.config = { theme: {} }</script>';
-  assert.equal(wrapClientScripts(html), html);
+test('a script that sets tailwind.config runs at once when tailwind is loaded, and otherwise waits for the DOM', () => {
+  const out = wrapClientScripts('<script>tailwind.config = { theme: {} }</script>');
+  assert.match(out, /typeof tailwind !== "undefined" \|\| document\.readyState/);
+  // No other script gets that shortcut.
+  assert.doesNotMatch(wrapClientScripts('<script>document.title = "x";</script>'), /typeof tailwind/);
 });
 
 test('deferred code is handed to a script element, so its top-level names stay global', () => {
@@ -111,11 +113,12 @@ const chromiumOnly = { skip: hasChromium ? false : 'Chromium unavailable in this
 // The real shim, not the placeholder above: it carries the DOMContentLoaded rescue and the error banner.
 const realShell = new Function(`${shell.slice(shell.indexOf('var SHIM'), end)}; return { withShim };`)();
 
-async function inChromium(prepared, act) {
+async function inChromium(prepared, act, setup = async () => {}) {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   try {
     const page = await browser.newPage(); const errors = [];
     page.on('pageerror', e => errors.push(e.message));
+    await setup(page);
     await page.setContent(prepared);
     await act(page);
     return { errors, title: await page.title() };
@@ -172,4 +175,25 @@ test('an error thrown by deferred page code is still reported in the error banne
   let banner = '';
   await inChromium(realShell.withShim(html), async page => { banner = await (await page.waitForSelector('[data-preview-error]')).textContent(); });
   assert.match(banner, /missingFunction is not defined/);
+});
+
+// The Play CDN is stubbed at the network layer: these check ordering, which is the shell's business, not the library's.
+const tailwindStub = page => page.route('https://cdn.tailwindcss.com/**', route => route.fulfill({ contentType: 'text/javascript', body: 'window.tailwind = {};' }));
+
+test('tailwind.config runs in place when the library is already loaded, as the Play CDN documents', chromiumOnly, async () => {
+  // The probe names both readyState and DOMContentLoaded, so the shell leaves it unwrapped and it runs
+  // at parse time: it sees the config only if the config ran in place rather than waiting for the DOM.
+  const html = '<html><head><script src="https://cdn.tailwindcss.com"></script><script>tailwind.config = { theme: {} };</script><script>/* DOMContentLoaded */ window.seen = typeof tailwind.config + "|" + document.readyState;</script></head><body></body></html>';
+  let seen = '';
+  const { errors } = await inChromium(withShim(html), async page => { seen = await page.evaluate(() => window.seen); }, tailwindStub);
+  assert.deepEqual(errors, []);
+  assert.equal(seen, 'object|loading');
+});
+
+test('tailwind.config written above the CDN tag still works, because it waits for the library', chromiumOnly, async () => {
+  // Models write this order too. Left to run in place it throws "tailwind is not defined".
+  const html = '<html><head><script>tailwind.config = { theme: {} }; document.title = "configured";</script><script src="https://cdn.tailwindcss.com"></script></head><body></body></html>';
+  const { errors, title } = await inChromium(withShim(html), () => {}, tailwindStub);
+  assert.deepEqual(errors, []);
+  assert.equal(title, 'configured');
 });
