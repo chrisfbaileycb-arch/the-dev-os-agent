@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, CircleAlert, Download, Eye, ExternalLink, FileCode2, GitCompareArrows, LoaderCircle, X } from 'lucide-react';
 import { GithubMark } from './GithubMark';
 import {
-  DEFAULT_COMMIT_MESSAGE, GithubApiError, parseRepoTarget, pullFile, pushFile, saveSyncSettings,
+  DEFAULT_COMMIT_MESSAGE, GithubApiError, parseRepoTarget, pullFile, pushFile, rememberSyncToken, saveSyncSettings,
   syncReady, type GithubSyncState,
 } from '../lib/githubSync';
 import type { ProjectFile } from '../lib/project';
@@ -124,7 +124,7 @@ export default function GithubSyncDrawer(p: GithubSyncDrawerProps) {
           <input
             type={revealToken ? 'text' : 'password'} value={state.token} spellCheck={false} autoComplete="off"
             placeholder="ghp_… or github_pat_…, with the repo scope"
-            onChange={e => patch({ token: e.target.value })}
+            onChange={e => { patch({ token: e.target.value }); rememberSyncToken(e.target.value); }}
           />
           <button className="icon-button" aria-label={revealToken ? 'Hide token' : 'Show token'} title={revealToken ? 'Hide token' : 'Show token'} onClick={() => setRevealToken(v => !v)}>{revealToken ? <Eye size={13} /> : <FileCode2 size={13} />}</button>
         </span>

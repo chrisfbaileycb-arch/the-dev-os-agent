@@ -221,4 +221,13 @@ export function saveSyncSettings(settings: GithubSyncSettings): void {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(preferences)); } catch { /* Restricted storage. */ }
 }
 
+/**
+ * Keep the personal token in page memory as it is typed, ahead of any Save or push.
+ *
+ * The drawer's own state belongs to the Output panel, which is unmounted whenever the visitor leaves
+ * the Workspace page, so a token held only there was lost on every page change. This writes to the
+ * same in-memory slot saveSyncSettings does and nowhere else: nothing reaches browser storage.
+ */
+export function rememberSyncToken(token: string): void { setSessionSecret('github-sync', token); }
+
 export function clearSyncSettings(): void { setSessionSecret('github-sync', ''); try { localStorage.removeItem(SETTINGS_KEY); } catch { /* storage unavailable */ } }
