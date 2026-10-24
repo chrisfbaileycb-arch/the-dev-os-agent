@@ -43,7 +43,7 @@ import { BUILDER_PERSONA_ID, defaultPersonaId, personaById, workflows, type Pers
 import { clearCustomAgents, customAgents, removeCustomAgent } from './lib/customAgents';
 import { authConfig, authMe, clearWorkspaceData, computeBalance, exportSession, persistRun, persistSession, recordUsage, removeSessionEverywhere, serverBalance, setWorkspaceId, storage, sync, loadWorkspace, workspaceId, type AuthUser, type Balance, type ChatMessage, type LedgerEntry, type PlanReading, type Session } from './lib/store';
 import { FREE_TIER_WARMING, deploymentNotice, freeLaneBlock, isFreeTierWarming, labelsFrom, loadDeployment, loadWorkerStatus, offlineDeployment, type Deployment } from './lib/deployment';
-import { useInstallAvailable, useOnline, useUpdateReady, applyUpdate, isInstalled, promptInstall } from './pwa';
+import { availableServiceWorker, useInstallAvailable, useOnline, useUpdateReady, applyUpdate, isInstalled, promptInstall } from './pwa';
 import { isNarrowViewport } from './lib/viewport';
 import { isImageFile, photoTokens, readPhoto, type Photo } from './lib/photos';
 import { clearConnections, loadConnections, saveConnections, type McpConnection } from './lib/mcp';
@@ -853,8 +853,9 @@ export default function App({ onLock }: { onLock?: () => void } = {}) {
       setPage('workspace');
       setNotice(data.title ? `Shared “${data.title.slice(0, 80)}” is in the message box.` : 'Shared text is in the message box.');
     };
-    navigator.serviceWorker?.addEventListener('message', onShare);
-    return () => navigator.serviceWorker?.removeEventListener('message', onShare);
+    const serviceWorker = availableServiceWorker();
+    serviceWorker?.addEventListener('message', onShare);
+    return () => serviceWorker?.removeEventListener('message', onShare);
   }, []);
   // Non-secret preferences persist. Every personal credential stays in page memory.
   function saveSettingsForm() {

@@ -174,7 +174,7 @@ export function wrapScriptDocument(script: string, css = ''): string {
     // map for bare names such as "three".
     return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script type="module">\n${script.replace(/<\/script/gi, '<\\/script')}\n</script></body></html>`;
   }
-  const wrapped =`(function() {\n  function __runScript() {\n${script}\n  }\n  if (document.readyState !== 'loading') {\n    __runScript();\n  } else {\n    window.addEventListener('DOMContentLoaded', __runScript);\n  }\n})();`;
+  const wrapped =`(function() {\n  function __runScript() {\nconst code = ${JSON.stringify(script).replace(/</g, '\\u003c')};\n    const element = document.createElement('script');\n    element.textContent = code;\n    document.head.appendChild(element);\n    element.remove();\n  }\n  if (document.readyState !== 'loading') {\n    __runScript();\n  } else {\n    document.addEventListener('DOMContentLoaded', __runScript);\n  }\n})();`;
   return `<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html, body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }${css}</style></head><body><script>\n${wrapped}\n</script></body></html>`;
 }
 
