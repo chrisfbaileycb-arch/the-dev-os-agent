@@ -7,6 +7,7 @@
 <body>
 <div id="root"></div>
 <script>
+/* __PREVIEW_SCRIPT_PARSER__ */
 // The generated-app sandbox shell.
 //
 // A `srcdoc` iframe inherits its embedding document's Content-Security-Policy and intersects it
@@ -31,14 +32,20 @@ var SHIM = '<script>(function(){' +
   'function mem(){var m=new Map();return{get length(){return m.size},key:function(i){return Array.from(m.keys())[i]||null},getItem:function(k){return m.has(String(k))?m.get(String(k)):null},setItem:function(k,v){m.set(String(k),String(v))},removeItem:function(k){m.delete(String(k))},clear:function(){m.clear()}}}' +
   'function blocked(n){try{var s=window[n];s.getItem;return false}catch(e){return true}}' +
   '["localStorage","sessionStorage"].forEach(function(n){if(blocked(n)){try{Object.defineProperty(window,n,{value:mem(),configurable:true})}catch(e){}}});' +
+  // Opaque previews have no service-worker capability. Remove a throwing feature getter so
+  // standard feature detection is truthful instead of crashing before register().catch().
+  'if(self.origin==="null"){var np=navigator;while(np){if(Object.prototype.hasOwnProperty.call(np,"serviceWorker")){try{delete np.serviceWorker}catch(e){}break}np=Object.getPrototypeOf(np)}}' +
   'function tell(state,msg){try{window.parent.postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){try{parent.postMessage({type:"sf-preview",state:state,message:String(msg||"").slice(0,300)},"*")}catch(e){}}}' +
   'var origAEL=window.addEventListener;' +
   'window.addEventListener=function(t,l,o){if(t==="DOMContentLoaded"&&document.readyState!=="loading"){try{setTimeout(function(){typeof l==="function"?l.call(window,new Event("DOMContentLoaded")):l&&l.handleEvent&&l.handleEvent(new Event("DOMContentLoaded"))},0)}catch(e){}return}return origAEL.apply(this,arguments)};' +
   'var origDocAEL=document.addEventListener;' +
   'document.addEventListener=function(t,l,o){if(t==="DOMContentLoaded"&&document.readyState!=="loading"){try{setTimeout(function(){typeof l==="function"?l.call(document,new Event("DOMContentLoaded")):l&&l.handleEvent&&l.handleEvent(new Event("DOMContentLoaded"))},0)}catch(e){}return}return origDocAEL.apply(this,arguments)};' +
   'var failed=false;window.addEventListener("load",function(){setTimeout(function(){if(failed)return;var b=document.body;var seen=b&&((b.innerText||"").trim().length>0||b.querySelector("canvas,svg,img,video,iframe,input,button,select,textarea"));tell(seen?"ready":"blank")},1200)});' +
-  'window.addEventListener("unhandledrejection",function(e){failed=true;tell("error",(e.reason&&e.reason.message)||e.reason)});' +
-  'var shown=false;window.addEventListener("error",function(e){if(window.__sfTrying&&/has already been declared|redeclaration of|duplicate variable/i.test(e.message||"")){return}failed=true;tell("error",e.message);if(shown)return;shown=true;var b=document.createElement("pre");b.setAttribute("data-preview-error","");b.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;margin:0;padding:8px 10px;background:#fff3f2;color:#b8362b;border:1px solid #f0b8b2;border-radius:6px;font:12px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.15)";b.textContent="Runtime error: "+(e.message||"unknown")+(e.filename?"\\n"+e.filename.replace(/^.*\\//,"")+":"+e.lineno:"");(document.body||document.documentElement).appendChild(b)});' +
+  'var shown=false;function report(e){if(window.__sfTrying&&/has already been declared|redeclaration of|duplicate variable/i.test(e.message||"")){return}failed=true;tell("error",e.message);if(shown)return;shown=true;var b=document.createElement("pre");b.setAttribute("data-preview-error","");b.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;margin:0;padding:8px 10px;background:#fff3f2;color:#b8362b;border:1px solid #f0b8b2;border-radius:6px;font:12px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.15)";b.textContent="Runtime error: "+(e.message||"unknown")+(e.filename?"\\n"+e.filename.replace(/^.*\\//,"")+":"+e.lineno:"");(document.body||document.documentElement).appendChild(b)}' +
+  'window.addEventListener("error",report);' +
+  'window.addEventListener("error",function(e){var t=e.target;if(t&&t.tagName==="SCRIPT"&&t.src){t.__sfFailed=true;report({message:"Script failed to load: "+t.src})}},true);' +
+  'window.addEventListener("unhandledrejection",function(e){report({message:"Async initialization error: "+String(e.reason&&e.reason.message||e.reason||"unknown")})});' +
+  'document.addEventListener("webglcontextlost",function(){report({message:"WebGL context lost. Reload the preview to initialize the scene again."})},true);' +
   '})()<\/script>';
 
 // Generated pages routinely write `import * as THREE from 'three'` inside a plain <script>, or in a
@@ -70,7 +77,7 @@ function isJsType(attrs) {
 // running anything, so nothing runs twice, and every other error is reported as it always was. This is a real function
 // handed to each page as source text (RUN_DEFERRED below), so it must not refer to anything outside
 // itself.
-function runDeferredScript(code) {
+function runDeferredScript(code, names) {
   var REDECLARED = /has already been declared|redeclaration of|duplicate variable/i;
   var redeclared = false;
   function onError(e) {
@@ -93,28 +100,63 @@ function runDeferredScript(code) {
     window.__sfTrying = false;
   }
   if (!redeclared) return;
-  // Every name the script declares is copied onto the window as a live binding, so the page's other
-  // scripts and its inline handlers still reach them. A name the window already has is left alone: it
-  // is a real global, and replacing it could recurse. Names that turn out not to be in scope (a nested
-  // declaration the pattern also matched) fail the typeof test and are skipped.
-  var names = []; var found;
-  var declaration = /\b(?:function\s*\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/g;
-  while ((found = declaration.exec(code))) if (names.indexOf(found[1]) === -1) names.push(found[1]);
+  // Parser-selected script bindings only: nested locals, comments and strings never become globals.
+  // Install closures before execution so initialized data survives a later rendering exception.
   var exported = names.map(function (n) {
-    return ";try{if(typeof " + n + "!==\"undefined\"&&!(\"" + n + "\" in window))Object.defineProperty(window,\"" + n + "\",{configurable:true,get:function(){return " + n + "},set:function(v){try{" + n + "=v}catch(_){}}})}catch(_){}";
+    return ";if(!(\"" + n + "\" in window))Object.defineProperty(window,\"" + n + "\",{configurable:true,get:function(){return " + n + "},set:function(v){try{" + n + "=v}catch(_){}}});";
   }).join("");
-  (new Function(code + "\n" + exported))();
+  (new Function(exported + "\n" + code))();
 }
 var RUN_DEFERRED = String(runDeferredScript);
 
+// Inline HTML handlers execute in the global scope even when their implementation is in a
+// module. Bridge only direct function calls named by those attributes; keep module-private
+// state private and never overwrite browser globals or explicit window bindings.
+function inlineHandlerBridge(html) {
+  var names = [];
+  html.replace(/<[^>]+>/g, function (tag) {
+    tag.replace(/\s+on[\w]+\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi, function (_, double, single, bare) {
+      (double || single || bare || '').replace(/(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*\(/g, function (_, name) {
+        if (!/^(?:if|for|while|switch|catch|with|function|super|import|return|throw|new|delete|void|typeof|instanceof|in|yield|await|class|const|let|var|export|default|do|else|try|finally|case|break|continue|debugger|this|true|false|null)$/.test(name) && names.indexOf(name) === -1) names.push(name);
+        return _;
+      });
+      return _;
+    });
+    return tag;
+  });
+  return names.map(function (name) {
+    return '\n;try { if (typeof ' + name + ' === "function" && !("' + name + '" in window)) window["' + name + '"] = ' + name + '; } catch (_) {}';
+  }).join('');
+}
+
+function scriptBindings(code) {
+  var names = [];
+  function binding(pattern) {
+    if (!pattern) return;
+    if (pattern.type === 'Identifier') { if (names.indexOf(pattern.name) === -1) names.push(pattern.name); }
+    else if (pattern.type === 'RestElement') binding(pattern.argument);
+    else if (pattern.type === 'AssignmentPattern') binding(pattern.left);
+    else if (pattern.type === 'ArrayPattern') pattern.elements.forEach(binding);
+    else if (pattern.type === 'ObjectPattern') pattern.properties.forEach(function (p) { binding(p.type === 'RestElement' ? p.argument : p.value); });
+  }
+  try {
+    acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'script' }).body.forEach(function (node) {
+      if (node.type === 'VariableDeclaration') node.declarations.forEach(function (d) { binding(d.id); });
+      else if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') binding(node.id);
+    });
+  } catch (_) { /* Invalid source is still executed once to report its original syntax error. */ }
+  return names;
+}
+
 function wrapClientScripts(html) {
+  var bridge = inlineHandlerBridge(html);
   return html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, function (match, attrs, code) {
     if (/\bsrc\s*=/i.test(attrs)) return match;
     var kind = isJsType(attrs);
     if (!kind) return match;
-    if (kind === 'module') return match;
+    if (kind === 'module') return bridge ? '<script' + attrs + '>' + code + bridge + '<\/script>' : match;
     if (MODULE_SYNTAX.test(code)) {
-      return '<script' + attrs.replace(/\btype\s*=\s*["']?[^"'\s>]+["']?/i, '') + ' type="module">' + code + '<\/script>';
+      return '<script' + attrs.replace(/\btype\s*=\s*["']?[^"'\s>]+["']?/i, '') + ' type="module">' + code + bridge + '<\/script>';
     }
     var trimmed = code.trim();
     if (!trimmed) return match;
@@ -126,7 +168,10 @@ function wrapClientScripts(html) {
     // (a page that writes the config above the CDN tag) it waits for the DOM like any other script, by
     // which time the library has loaded. Running it in place unconditionally threw "tailwind is not
     // defined" for that ordering, which the deferral used to forgive.
-    var configNow = /^tailwind\.config\s*=/.test(trimmed) ? 'typeof tailwind !== "undefined" || ' : '';
+    var needsTailwind = /^tailwind\.config\s*=/.test(trimmed);
+    var configNow = needsTailwind ? 'typeof tailwind !== "undefined" || ' : '';
+    // Listen on document, before later document DOM-ready initializers: window receives the event
+    // only after document listeners have already run. Keep declaration and initialization order.
     // The code is deferred until the DOM is ready, but it must still run as a real classic script.
     // It used to sit inside a function, which made every top-level function and const local to it, so
     // any `onclick="scrollToSection('x')"` in the page's markup threw "scrollToSection is not
@@ -134,15 +179,19 @@ function wrapClientScripts(html) {
     // exactly as if the browser had met it there. The closing-tag and comment-opener sequences are
     // escaped because this text sits inside another script element, where either can end it early.
     // (Never write them out literally anywhere in this file's own script: the parser would stop here.)
-    var literal = JSON.stringify(code).replace(/<\/(script)/gi, '<\\/$1').replace(/<!-{2}/g, '<\\!--');
+    var literal = JSON.stringify(code).replace(/</g, '\\u003c');
     var wrapped = '\n(function(){\n' +
+      '  var __ran = false, __waiting = false;\n' +
       '  function __runScript(){\n' +
-      '    (' + RUN_DEFERRED + ')(' + literal + ');\n' +
+      '    if (__ran) return;\n' +
+      (needsTailwind ? '    if(typeof tailwind === "undefined") { var dep = Array.from(document.scripts).find(function(s){try{return new URL(s.src).hostname === "cdn.tailwindcss.com"}catch(_){return false}}); if(dep && !dep.__sfFailed){if(!__waiting){__waiting=true;dep.addEventListener("load",function(){if(typeof tailwind === "undefined")throw new Error("Tailwind CDN loaded without its configuration API");__runScript()},{once:true});}return;} }\n' : '') +
+      '    __ran = true;\n' +
+      '    (' + RUN_DEFERRED + ')(' + literal + ',' + JSON.stringify(scriptBindings(code)) + ');\n' +
       '  }\n' +
       '  if (' + configNow + 'document.readyState !== "loading") {\n' +
       '    __runScript();\n' +
       '  } else {\n' +
-      '    window.addEventListener("DOMContentLoaded", __runScript);\n' +
+      '    document.addEventListener("DOMContentLoaded", __runScript);\n' +
       '  }\n' +
       '})();\n';
     return '<script' + attrs + '>' + wrapped + '<\/script>';

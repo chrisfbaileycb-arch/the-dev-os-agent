@@ -3,6 +3,8 @@ import { defineConfig, type Plugin } from 'vitest/config';
 import { loadEnv } from 'vite';
 // @ts-expect-error Build-only Node module; these sources execute only in the generated iframe.
 import { previewRuntimePlugin } from './server/previewRuntime.mjs';
+// @ts-expect-error Build helper is JavaScript.
+import { sandboxDocumentPlugin } from './server/sandboxDocument.mjs';
 // @ts-expect-error Server module is JavaScript.
 import { createCustomConnectors } from './server/customConnectors.mjs';
 // @ts-expect-error Server module is JavaScript.
@@ -114,7 +116,7 @@ export default defineConfig(async ({ mode, command }) => {
   return {
   define: { __BETA_ACCESS_HASH__: JSON.stringify(hash), __BETA_DEV_FALLBACK__: JSON.stringify(!(nodeProcess?.env?.VITE_BETA_ACCESS_KEY ?? env.VITE_BETA_ACCESS_KEY ?? '').trim()) },
   base: './',
-  plugins: [api, shellWorker, previewRuntimePlugin()],
+  plugins: [sandboxDocumentPlugin(), api, shellWorker, previewRuntimePlugin()],
   server: { ...devHosts, ...devPort },
   preview: { ...devHosts, ...devPort },
   test: { include: ['tests/**/*.test.{ts,tsx}'] },

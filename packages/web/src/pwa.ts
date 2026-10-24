@@ -14,6 +14,11 @@ let updateWaiting = false;
 const updateListeners = new Set<() => void>();
 const notifyUpdate = () => updateListeners.forEach(fn => fn());
 
+/** Property access itself can throw inside an opaque sandbox, before optional chaining. */
+export function availableServiceWorker(): ServiceWorkerContainer | undefined {
+  try { return navigator.serviceWorker; } catch { return undefined; }
+}
+
 /** Ask the browser to keep this origin's storage. Best-effort; a refusal changes nothing. */
 export function requestPersistentStorage(): void {
   const persist = navigator.storage?.persist;
@@ -24,10 +29,10 @@ function watchUpdates(reg: ServiceWorkerRegistration): void {
   const track = (worker: ServiceWorker | null) => {
     if (!worker) return;
     worker.addEventListener('statechange', () => {
-      if (worker.state === 'installed' && navigator.serviceWorker.controller) { updateWaiting = true; notifyUpdate(); }
+      if (worker.state === 'installed' && availableServiceWorker()?.controller) { updateWaiting = true; notifyUpdate(); }
     });
   };
-  if (reg.waiting && navigator.serviceWorker.controller) { updateWaiting = true; notifyUpdate(); }
+  if (reg.waiting && availableServiceWorker()?.controller) { updateWaiting = true; notifyUpdate(); }
   reg.addEventListener('updatefound', () => track(reg.installing));
 }
 
@@ -37,8 +42,9 @@ export function setupPwa(): void {
   window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferredPrompt = event as InstallPromptEvent; notify(); });
   window.addEventListener('appinstalled', () => { deferredPrompt = null; notify(); requestPersistentStorage(); });
   if (isInstalled()) requestPersistentStorage();
-  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-    window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').then(watchUpdates).catch(() => { /* The app works without the offline shell. */ }); });
+  const serviceWorker = availableServiceWorker();
+  if (import.meta.env.PROD && serviceWorker) {
+    window.addEventListener('load', () => { try { void serviceWorker.register('./sw.js').then(watchUpdates).catch(() => { /* Offline support is optional. */ }); } catch { /* Sandboxed browsers may throw synchronously. */ } });
   }
 }
 
@@ -60,8 +66,8 @@ export function useUpdateReady(): boolean { return useSyncExternalStore(fn => { 
 /** Activate the waiting worker and reload once. Further checks do not nag. */
 export function applyUpdate(): void {
   let reloaded = false;
-  navigator.serviceWorker?.addEventListener('controllerchange', () => { if (reloaded) return; reloaded = true; location.reload(); });
-  void navigator.serviceWorker?.getRegistration().then(reg => reg?.waiting?.postMessage('skip-waiting'));
+  availableServiceWorker()?.addEventListener('controllerchange', () => { if (reloaded) return; reloaded = true; location.reload(); });
+  void availableServiceWorker()?.getRegistration().then(reg => reg?.waiting?.postMessage('skip-waiting'));
   updateWaiting = false;
   notifyUpdate();
 }

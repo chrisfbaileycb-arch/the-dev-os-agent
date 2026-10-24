@@ -191,7 +191,7 @@ describe('parseProject', () => {
       expect(project?.files[0]?.content).toContain('<!DOCTYPE html>');
       expect(project?.files[0]?.content).toContain('<meta name="viewport"');
       expect(project?.files[0]?.content).toContain('background: #111');
-      expect(project?.files[0]?.content).toContain(script);
+      expect(project?.files[0]?.content).toContain(JSON.stringify(script).slice(1, -1));
     });
 
     it('exports the wrapper with a complete document and inline styles', () => {
@@ -203,7 +203,7 @@ describe('parseProject', () => {
     it('wraps script execution with a DOMContentLoaded and readyState check', () => {
       const result = wrapScriptDocument('document.getElementById("btn").addEventListener("click", () => {});');
       expect(result).toContain("document.readyState !== 'loading'");
-      expect(result).toContain("window.addEventListener('DOMContentLoaded'");
+      expect(result).toContain("document.addEventListener('DOMContentLoaded'");
     });
 
     it('runs a script that imports as an unwrapped module, never inside a function', () => {
@@ -386,5 +386,19 @@ describe('truncated multi-file replies', () => {
   it('does not declare success while a sibling file is still inside an open fence', () => {
     const mixed = `${truncated}\n\`\`\`html\n<!doctype html><html><body>ok</body></html>\n\`\`\``;
     expect(parseProject(mixed)).toBeNull();
+  });
+});
+
+describe('raw preview source serialization', () => {
+  it('preserves closing tags, template strings, JSON and HTML comment text through execution', async () => {
+    const { Window } = await import('happy-dom');
+    const page = new Window({ settings: { enableJavaScriptEvaluation: true } });
+    const source = 'window.payload = `</script><!--<script>${JSON.stringify({ books: ["a", "b"] })}`;';
+    try {
+      page.document.write(wrapScriptDocument(source));
+      await page.happyDOM.whenAsyncComplete();
+      expect(page.eval('window.payload')).toBe('</script><!--<script>{"books":["a","b"]}');
+      expect(page.document.querySelectorAll('script')).toHaveLength(1);
+    } finally { await page.happyDOM.close(); }
   });
 });

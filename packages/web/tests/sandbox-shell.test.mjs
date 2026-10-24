@@ -2,15 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { chromium } from 'playwright';
+import * as acorn from 'acorn';
+import { sandboxDocument } from '../server/sandboxDocument.mjs';
 
 // The sandbox shell's own functions, lifted out of public/sandbox.html so the test exercises the
 // shipped code rather than a copy of it.
-const shell = readFileSync(new URL('../public/sandbox.html', import.meta.url), 'utf8');
+const shell = sandboxDocument();
 const start = shell.indexOf('var MODULE_SYNTAX');
 const end = shell.indexOf('// Refuse to render anything unless');
 assert.ok(start > 0 && end > start, 'sandbox.html should define the script helpers before the origin check');
 const SHIM = '<!--shim-->';
-const { wrapClientScripts, importMapFor, withShim } = new Function('SHIM', `${shell.slice(start, end)}; return { wrapClientScripts, importMapFor, withShim };`)(SHIM);
+const { wrapClientScripts, importMapFor, withShim } = new Function('SHIM', 'acorn', `${shell.slice(start, end)}; return { wrapClientScripts, importMapFor, withShim };`)(SHIM, acorn);
 
 test('an inline classic script that imports becomes an unwrapped module', () => {
   const out = wrapClientScripts("<script>\nimport * as THREE from 'three';\nconsole.log(THREE);\n</script>");
@@ -115,7 +117,7 @@ test('in Chromium a promoted inline script resolves a bare specifier through the
 // browser scopes the code, not of how the string looks.
 const chromiumOnly = { skip: hasChromium ? false : 'Chromium unavailable in this environment' };
 // The real shim, not the placeholder above: it carries the DOMContentLoaded rescue and the error banner.
-const realShell = new Function(`${shell.slice(shell.indexOf('var SHIM'), end)}; return { withShim };`)();
+const realShell = new Function('acorn', `${shell.slice(shell.indexOf('var SHIM'), end)}; return { withShim };`)(acorn);
 
 async function inChromium(prepared, act, setup = async () => {}) {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
@@ -263,4 +265,136 @@ test('an unrelated error in a script is reported, and the script is not run a se
   });
   assert.match(banner, /missingFunction is not defined/);
   assert.equal(runs, 1);
+});
+
+test('module initializers used by body onload remain callable after import resolution', chromiumOnly, async () => {
+  const html = `<html><head></head><body onload="initCosmosEngine()"><canvas id="scene"></canvas><script type="module">
+    import { color } from 'scene-fixture';
+    function initCosmosEngine() { const ctx = document.getElementById('scene').getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1); document.title = 'canvas-ready'; }
+  </script></body></html>`;
+  const prepared = realShell.withShim(html).replace('https://esm.sh/scene-fixture', 'https://fixture.test/scene.js');
+  let pixel;
+  const { errors, title } = await inChromium(prepared, async page => {
+    await page.waitForFunction(() => document.title === 'canvas-ready', null, { timeout: 1500 });
+    pixel = await page.evaluate(() => Array.from(document.querySelector('canvas').getContext('2d').getImageData(0, 0, 1, 1).data));
+  }, page => page.route('https://fixture.test/scene.js', route => route.fulfill({ contentType: 'text/javascript', body: 'export const color = "rgb(255, 0, 0)";' })));
+  assert.deepEqual(errors, []); assert.equal(title, 'canvas-ready'); assert.deepEqual(pixel, [255, 0, 0, 255]);
+});
+
+test('a promoted module exposes only functions requested by inline handlers', chromiumOnly, async () => {
+  const html = `<html><head></head><body><button id="b" onclick="startScene()">start</button><script>
+    export function startScene() { document.title = 'started'; }
+    function privateHelper() {}
+  </script></body></html>`;
+  const { errors, title } = await inChromium(realShell.withShim(html), async page => {
+    await page.click('#b'); assert.equal(await page.evaluate(() => typeof window.privateHelper), 'undefined');
+  });
+  assert.deepEqual(errors, []); assert.equal(title, 'started');
+});
+
+test('async initialization failures are visible in the preview error banner', chromiumOnly, async () => {
+  const html = '<html><head></head><body><script>Promise.reject(new Error("WebGL initialization failed"));</script></body></html>';
+  await inChromium(realShell.withShim(html), async page => {
+    const banner = await page.waitForSelector('[data-preview-error]', { timeout: 1500 });
+    assert.match(await banner.textContent(), /WebGL initialization failed/);
+  });
+});
+
+test('document DOM-ready initialization sees engine declarations from earlier scripts', chromiumOnly, async () => {
+  const html = `<html><head><script>function initScene() { document.title = document.getElementById('scene') ? 'initialized' : 'missing-canvas'; }</script>
+  <script>if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => initScene()); else initScene();</script>
+  </head><body><canvas id="scene"></canvas></body></html>`;
+  const { errors, title } = await inChromium(realShell.withShim(html), () => {});
+  assert.deepEqual(errors, []); assert.equal(title, 'initialized');
+});
+
+test('WebGL context loss is reported without blocking unrelated controls', chromiumOnly, async () => {
+  const html = '<html><head></head><body><canvas id="scene"></canvas><button id="b" onclick="document.title=\'still-working\'">click</button></body></html>';
+  await inChromium(realShell.withShim(html), async page => {
+    await page.evaluate(() => document.querySelector('canvas').dispatchEvent(new Event('webglcontextlost')));
+    assert.match(await bannerText(page), /WebGL context lost/);
+    await page.click('#b'); assert.equal(await page.title(), 'still-working');
+  });
+});
+
+test('module handler bridging preserves explicit globals and ignores control-flow keywords', chromiumOnly, async () => {
+  const html = `<html><head></head><body><button id="b" onclick="if (true) startScene()">start</button><script>window.startScene = () => { document.title = 'explicit'; };</script><script type="module">
+    function startScene() { document.title = 'module'; }
+  </script></body></html>`;
+  const { errors, title } = await inChromium(realShell.withShim(html), page => page.click('#b'));
+  assert.deepEqual(errors, []); assert.equal(title, 'explicit');
+});
+
+test('module canvas initialization works through the served opaque sandbox and CSP', chromiumOnly, async () => {
+  const { createServer } = await import('node:http');
+  const { SANDBOX_CSP } = await import('../server/csp.mjs');
+  const server = createServer((req, res) => {
+    if (req.url === '/sandbox.html') { res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': SANDBOX_CSP }); res.end(shell); }
+    else { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<iframe sandbox="allow-scripts" src="/sandbox.html"></iframe>'); }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  try {
+    const page = await browser.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.evaluate(() => document.querySelector('iframe').contentWindow.postMessage({ html: '<html><head></head><body onload="initCosmosEngine()"><canvas id="scene"></canvas><script>if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js");</script><script type="module">function initCosmosEngine(){const ctx=document.querySelector("canvas").getContext("2d");ctx.fillStyle="red";ctx.fillRect(0,0,1,1);document.title="ready"}</script></body></html>' }, '*'));
+    const preview = page.frameLocator('iframe').frameLocator('#preview-frame');
+    await preview.locator('canvas').waitFor();
+    const frame = page.frames().find(frame => frame.url() === 'about:srcdoc');
+    await frame.waitForFunction(() => document.title === 'ready');
+    assert.equal(await frame.evaluate(() => self.origin), 'null');
+    assert.equal(await frame.evaluate(() => 'serviceWorker' in navigator), false);
+    assert.deepEqual(await frame.evaluate(() => Array.from(document.querySelector('canvas').getContext('2d').getImageData(0,0,1,1).data)), [255,0,0,255]);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('duplicate data script publishes comma-separated tables before later initialization', chromiumOnly, async () => {
+  const html = `<html><head></head><body><script>const TRADITION_META = { version: 1 };</script><script>
+    const TRADITION_META = { version: 2 }, TRADITIONS = ['a'], BOOKS = ['b', 'c'];
+  </script><script>document.title = TRADITIONS.length + ':' + BOOKS.length;</script></body></html>`;
+  const { errors, title } = await inChromium(realShell.withShim(html), () => {});
+  assert.deepEqual(errors, []); assert.equal(title, '1:2');
+});
+
+test('a failed duplicate script does not hide tables needed to render the remaining UI', chromiumOnly, async () => {
+  const html = `<html><head></head><body><script>const TRADITION_META = {};</script><script>
+    const TRADITION_META = {}, BOOKS = ['a'];
+    throw new Error('scene initialization failed');
+  </script><script>document.title = 'books-' + BOOKS.length;</script></body></html>`;
+  let banner;
+  const { title } = await inChromium(realShell.withShim(html), async page => { banner = await bannerText(page); });
+  assert.equal(title, 'books-1'); assert.match(banner, /scene initialization failed/);
+});
+
+test('duplicate fallback preserves destructured bindings without exporting nested locals or comment text', chromiumOnly, async () => {
+  const html = `<html><head></head><body><script>const META = {};</script><script>
+    const META = {}; const { books: BOOKS, traditions: TRADITIONS } = { books: ['a'], traditions: ['b'] };
+    // const PHANTOM = 1;
+    function helper() { const HIDDEN = 1; return HIDDEN; }
+  </script><script>document.title = BOOKS.length + ':' + TRADITIONS.length + ':' + typeof window.HIDDEN + ':' + typeof window.PHANTOM;</script></body></html>`;
+  const { errors, title } = await inChromium(realShell.withShim(html), () => {});
+  assert.deepEqual(errors, []); assert.equal(title, '1:1:undefined:undefined');
+});
+
+test('a large JSON registry stays intact and is parsed before scene initialization', chromiumOnly, async () => {
+  const data = { books: Array.from({ length: 5000 }, (_, id) => ({ id, title: 'book </script> <!-- <script> ` ${title}' })), traditions: ['a'] };
+  const json = JSON.stringify(data).replace(/</g, '\\u003c');
+  const html = `<html><head><script type="application/json" id="cosmos-data">${json}</script><script>
+    const registry = JSON.parse(document.getElementById('cosmos-data').textContent);
+    document.title = registry.books.length + ':' + registry.traditions.length;
+  </script></head><body><canvas></canvas></body></html>`;
+  const { errors, title } = await inChromium(realShell.withShim(html), async page => {
+    assert.equal(await page.evaluate(() => JSON.parse(document.querySelector('#cosmos-data').textContent).books[4999].title), data.books[4999].title);
+  });
+  assert.deepEqual(errors, []); assert.equal(title, '5000:1');
+});
+
+test('Tailwind configuration waits for an explicitly asynchronous CDN script', chromiumOnly, async () => {
+  const html = '<html><head><script async src="https://cdn.tailwindcss.com"></script><script>tailwind.config = { theme: {} }; document.title = "async-configured";</script></head><body></body></html>';
+  const { errors, title } = await inChromium(realShell.withShim(html), () => {}, page => page.route('https://cdn.tailwindcss.com/**', async route => {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await route.fulfill({ contentType: 'text/javascript', body: 'window.tailwind = {};' });
+  }));
+  assert.deepEqual(errors, []); assert.equal(title, 'async-configured');
 });
